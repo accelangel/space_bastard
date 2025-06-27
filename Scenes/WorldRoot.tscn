@@ -1,0 +1,28 @@
+[gd_scene load_steps=3 format=3 uid="uid://iolvmgmbu42d"]
+
+[ext_resource type="Script" path="res://Scripts/GameCamera.gd" id="1_at0gn"]
+[ext_resource type="Texture2D" uid="uid://bood0jc7ucevh" path="res://Art/60.JPG" id="2_g0h23"]
+
+[node name="WorldRoot" type="Node2D"]
+
+[node name="ColorRect" type="ColorRect" parent="."]
+z_index = -2
+custom_minimum_size = Vector2(131072, 131072)
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -65536.0
+offset_top = -65536.0
+offset_right = 65536.0
+offset_bottom = 65536.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 1)
+
+[node name="GameCamera" type="Camera2D" parent="."]
+script = ExtResource("1_at0gn")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("2_g0h23")
