@@ -17,7 +17,7 @@ var dragStartCameraPos = Vector2.ZERO
 var isDragging: bool = false
 
 func _ready():
-	zoom_min = calculate_min_zoom()
+	zoom_min = calculate_working_min_zoom()
 	
 	# Set initial zoom to 95% zoomed out (5% larger than minimum)
 	var initial_zoom = zoom_min * 1.05
@@ -26,14 +26,59 @@ func _ready():
 	
 	print("Map size: ", map_size)
 	print("Viewport size: ", get_viewport_rect().size)
-	print("Calculated min zoom: ", zoom_min)
+	print("Working min zoom: ", zoom_min)
 	print("Starting zoom (95% zoomed out): ", zoom)
-	print("Zoom target: ", zoomTarget)
 
 func _process(delta):
 	Zoom(delta)
 	Pan(delta)
 	ClickAndDrag()
+	
+	# Simple position clamping to prevent going outside map
+	clamp_position_to_map()
+
+func calculate_working_min_zoom() -> Vector2:
+	var viewport_size = get_viewport_rect().size
+	
+	# Calculate theoretical minimum
+	var zoom_for_width = viewport_size.x / map_size.x
+	var zoom_for_height = viewport_size.y / map_size.y
+	var theoretical_min = min(zoom_for_width, zoom_for_height)
+	
+	print("Theoretical min zoom: ", theoretical_min)
+	
+	# Your original working value was 0.01397, which is about 95.3% of theoretical
+	# Let's use a similar ratio but calculate it dynamically
+	var working_zoom = theoretical_min * 0.953
+	
+	# Alternative: use a slightly cleaner version of your hardcoded value
+	# For 1920x1080 viewport, this should be very close to 0.01397
+	var alternative_zoom = theoretical_min * 0.95
+	
+	print("Calculated working zoom (95.3%): ", working_zoom)
+	print("Alternative working zoom (95%): ", alternative_zoom)
+	
+	# Use the 95% version as it's cleaner
+	return Vector2(alternative_zoom, alternative_zoom)
+
+func clamp_position_to_map():
+	# Calculate how much of the map we can see at current zoom
+	var viewport_size = get_viewport_rect().size
+	var visible_world_size = viewport_size / zoom
+	
+	# Calculate the maximum distance the camera can be from center
+	var max_offset = (map_size - visible_world_size) / 2.0
+	
+	# Only clamp if we're more zoomed in than the minimum
+	if max_offset.x > 0:
+		position.x = clamp(position.x, -max_offset.x, max_offset.x)
+	else:
+		position.x = 0  # Center if fully zoomed out
+		
+	if max_offset.y > 0:
+		position.y = clamp(position.y, -max_offset.y, max_offset.y)
+	else:
+		position.y = 0  # Center if fully zoomed out
 
 func Zoom(delta):
 	var scroll = 0
@@ -49,7 +94,10 @@ func Zoom(delta):
 		
 		var old_target = zoomTarget
 		zoomTarget *= zoom_factor
-		zoomTarget = clamp(zoomTarget, zoom_min, zoom_max)
+		zoomTarget = Vector2(
+			clamp(zoomTarget.x, zoom_min.x, zoom_max.x),
+			clamp(zoomTarget.y, zoom_min.y, zoom_max.y)
+		)
 		
 		# Debug: check if zoom is being clamped
 		if old_target != zoomTarget:
@@ -92,21 +140,25 @@ func ClickAndDrag():
 		var moveVector = get_viewport().get_mouse_position() - dragStartMousePos
 		position = dragStartCameraPos - moveVector * (1 / zoom.x)
 
-func calculate_min_zoom():
+# Debug function you can call
+func debug_current_state():
 	var viewport_size = get_viewport_rect().size
+	var visible_world_size = viewport_size / zoom
+	var coverage_x = visible_world_size.x / map_size.x
+	var coverage_y = visible_world_size.y / map_size.y
 	
-	# Calculate zoom needed to fit width and height
-	var zoom_for_width = viewport_size.x / map_size.x
-	var zoom_for_height = viewport_size.y / map_size.y
-	
-	# Use the smaller zoom value to ensure the entire map fits
-	var required_zoom = min(zoom_for_width, zoom_for_height)
-	
-	# Instead of a random buffer, use a slightly smaller "clean" float
-	# 0.0146484375 is 3/512, let's use something slightly smaller but cleaner
-	var clean_zoom = 0.01397  # Nice round number, slightly less than calculated
-	
-	print("Calculated zoom: ", required_zoom)
-	print("Using clean zoom: ", clean_zoom)
-	
-	return Vector2(clean_zoom, clean_zoom)
+	print("=== CAMERA DEBUG ===")
+	print("Current zoom: ", zoom)
+	print("Visible world size: ", visible_world_size)
+	print("Map coverage X: ", coverage_x * 100, "%")
+	print("Map coverage Y: ", coverage_y * 100, "%")
+	print("Position: ", position)
+	print("====================")
+
+# If you want to go back to your exact hardcoded value
+func use_hardcoded_zoom():
+	zoom_min = Vector2(0.01397, 0.01397)
+	if zoom.x < zoom_min.x:
+		zoom = zoom_min * 1.05
+		zoomTarget = zoom
+	print("Reverted to hardcoded zoom: ", zoom_min)
