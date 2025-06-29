@@ -17,12 +17,17 @@ var dragStartCameraPos = Vector2.ZERO
 var isDragging: bool = false
 
 func _ready():
-	zoomTarget = zoom
 	zoom_min = calculate_min_zoom()
+	
+	# Set initial zoom to 95% zoomed out (5% larger than minimum)
+	var initial_zoom = zoom_min * 1.05
+	zoom = initial_zoom
+	zoomTarget = initial_zoom
+	
 	print("Map size: ", map_size)
 	print("Viewport size: ", get_viewport_rect().size)
 	print("Calculated min zoom: ", zoom_min)
-	print("Current zoom: ", zoom)
+	print("Starting zoom (95% zoomed out): ", zoom)
 	print("Zoom target: ", zoomTarget)
 
 func _process(delta):
