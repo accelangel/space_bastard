@@ -37,5 +37,6 @@ shape = SubResource("RectangleShape2D_q5qps")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
 rotation = 1.5708
+scale = Vector2(0.1, 0.1)
 sprite_frames = SubResource("SpriteFrames_bwbx5")
-frame_progress = 0.826154
+frame_progress = 0.344413
