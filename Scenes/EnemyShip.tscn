@@ -1,0 +1,20 @@
+[gd_scene load_steps=3 format=3 uid="uid://ihisk0qiusis"]
+
+[ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
+radius = 94.1811
+height = 581.28
+
+[node name="EnemyShip" type="Node2D" groups=["enemy_ships"]]
+
+[node name="Area2D" type="Area2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D"]
+z_index = 1
+position = Vector2(-3, -26)
+rotation = 0.191986
+shape = SubResource("CapsuleShape2D_hb6w0")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_pf77x")

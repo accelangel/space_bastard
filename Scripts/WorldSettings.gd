@@ -1,5 +1,5 @@
 extends Node
 
-var meters_per_pixel := 0.25
-var map_size_pixels := 131072
+var meters_per_pixel := 20
+var map_size_pixels := Vector2(131072, 73728)  # If you have this
 var map_size_meters := meters_per_pixel * map_size_pixels
