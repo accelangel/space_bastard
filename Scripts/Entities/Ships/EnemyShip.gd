@@ -1,5 +1,5 @@
 # Scripts/Entities/Ships/EnemyShip.gd
-extends BaseShip  # Changed from Node2D to BaseShip
+extends BaseShip
 class_name EnemyShip
 
 # EnemyShip-specific behavior

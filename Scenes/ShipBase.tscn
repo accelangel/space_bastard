@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=3 uid="uid://caeufsiepjyek"]
 
-[ext_resource type="Script" path="res://Scripts/Entities/Ships/BaseShip.gd" id="1_dhcs4"]
+[ext_resource type="Script" path="res://Scripts/Entities/Ships/PlayerShip.gd" id="1_jqy2v"]
 [ext_resource type="Texture2D" uid="uid://bctq41y8vay8u" path="res://Art/PlayerShip.png" id="1_k28x5"]
 [ext_resource type="Script" path="res://Scripts/Entities/Weapons/TorpedoLauncher.gd" id="2_lovhs"]
 [ext_resource type="PackedScene" uid="uid://8pxodvf5qpvg" path="res://Scenes/Torpedo.tscn" id="3_7tlgh"]
@@ -10,7 +10,7 @@ radius = 93.3436
 height = 598.855
 
 [node name="ShipBase" type="Node2D"]
-script = ExtResource("1_dhcs4")
+script = ExtResource("1_jqy2v")
 
 [node name="Area2D" type="Area2D" parent="."]
 
