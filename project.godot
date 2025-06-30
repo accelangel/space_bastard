@@ -13,11 +13,11 @@ config_version=5
 config/name="Space Bastard"
 run/main_scene="res://Scenes/WorldRoot.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
-config/icon="res://icon.svg"
 
 [autoload]
 
-WorldSettings="*res://Scripts/WorldSettings.gd"
+WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
+ShipManager="*res://Scripts/Systems/ShipManager.gd"
 
 [display]
 

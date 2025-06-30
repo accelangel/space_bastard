@@ -1,6 +1,6 @@
 [gd_scene load_steps=7 format=3 uid="uid://8pxodvf5qpvg"]
 
-[ext_resource type="Script" path="res://Scripts/Torpedo.gd" id="1_6te71"]
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/Torpedo.gd" id="1_6te71"]
 [ext_resource type="Texture2D" uid="uid://cy7ccql58dstn" path="res://Art/AnimatedTorpedo.png" id="2_dmlvw"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_q5qps"]

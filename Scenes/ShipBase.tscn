@@ -1,7 +1,7 @@
 [gd_scene load_steps=5 format=3 uid="uid://caeufsiepjyek"]
 
 [ext_resource type="Texture2D" uid="uid://bctq41y8vay8u" path="res://Art/PlayerShip.png" id="1_k28x5"]
-[ext_resource type="Script" path="res://Scripts/TorpedoLauncher.gd" id="2_dc2b1"]
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/TorpedoLauncher.gd" id="2_lovhs"]
 [ext_resource type="PackedScene" uid="uid://8pxodvf5qpvg" path="res://Scenes/Torpedo.tscn" id="3_7tlgh"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_j8x4e"]
@@ -22,5 +22,5 @@ shape = SubResource("CapsuleShape2D_j8x4e")
 texture = ExtResource("1_k28x5")
 
 [node name="TorpedoLauncher" type="Node2D" parent="."]
-script = ExtResource("2_dc2b1")
+script = ExtResource("2_lovhs")
 torpedo_scene = ExtResource("3_7tlgh")

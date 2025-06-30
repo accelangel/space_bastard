@@ -1,6 +1,6 @@
 [gd_scene load_steps=4 format=3 uid="uid://ihisk0qiusis"]
 
-[ext_resource type="Script" path="res://Scripts/EnemyShip.gd" id="1_l7pq4"]
+[ext_resource type="Script" path="res://Scripts/Entities/Ships/EnemyShip.gd" id="1_l7pq4"]
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
