@@ -83,7 +83,10 @@ func _ready():
 	
 	print("  Applied launch kick: ", velocity_mps, " m/s")
 	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
-	print("  Target confidence: ", target_data.confidence if target_data else "N/A")
+	var confidence_text = "N/A"
+	if target_data:
+		confidence_text = str(target_data.confidence)
+	print("  Target confidence: ", confidence_text)
 
 func _physics_process(delta):
 	# Validate target data
@@ -315,7 +318,12 @@ func debug_output(distance_meters: float, distance_pixels: float):
 	print("  Position: ", global_position)
 	print("  Velocity: ", velocity_mps.length(), " m/s")
 	print("  Distance to target: ", distance_meters, " meters (", distance_pixels, " pixels)")
-	print("  Target confidence: ", target_data.confidence if target_data else "N/A")
+	var confidence_text = "N/A"
+	if target_data:
+		confidence_text = str(target_data.confidence)
+	print("  Target confidence: ", confidence_text)
+	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
+	print("=====================")
 	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
 	print("=====================")
 
