@@ -9,6 +9,7 @@ height = 581.28
 
 [node name="EnemyShip" type="Node2D" groups=["enemy_ships"]]
 script = ExtResource("1_l7pq4")
+acceleration_gs = null
 
 [node name="Area2D" type="Area2D" parent="."]
 

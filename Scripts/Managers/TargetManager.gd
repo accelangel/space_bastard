@@ -25,6 +25,9 @@ func _ready():
 func _process(delta):
 	cleanup_timer += delta
 	
+	# Update all target positions every frame
+	update_all_targets()
+	
 	# Update all target data age and confidence
 	for target_data in targets.values():
 		target_data.update_age_and_confidence()
@@ -244,3 +247,25 @@ func get_statistics() -> Dictionary:
 		"created": total_targets_created,
 		"cleaned": total_targets_cleaned
 	}
+
+# Update all targets with current node positions (call this every frame)
+func update_all_targets():
+	for target_id in targets.keys():
+		var target_data = targets[target_id]
+		
+		# Skip if node is invalid
+		if not target_data.validate_target_node():
+			continue
+		
+		# Get current position and calculate velocity
+		var current_pos = target_data.target_node.global_position
+		var current_vel = Vector2.ZERO
+		
+		# Try to get velocity from the ship if it has one
+		if target_data.target_node.has_method("get_velocity_mps"):
+			current_vel = target_data.target_node.get_velocity_mps()
+		elif "velocity_mps" in target_data.target_node:
+			current_vel = target_data.target_node.velocity_mps
+		
+		# Update the target data with fresh information
+		target_data.update_data(current_pos, current_vel, TargetData.DataSource.DIRECT_VISUAL)
