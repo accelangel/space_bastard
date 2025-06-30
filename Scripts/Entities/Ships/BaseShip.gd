@@ -3,7 +3,8 @@ extends Node2D
 class_name BaseShip
 
 # Common ship properties
-@export var acceleration_gs: float = 10.0
+@export var acceleration_gs: float = 0.35
+
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var ship_id: String

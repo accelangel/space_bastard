@@ -52,7 +52,9 @@ func _ready():
 	
 	# If we have target_id but no target_data, try to get it from TargetManager
 	if target_id and not target_data:
-		target_data = TargetManager.get_target_data(target_id)
+		var target_manager = get_node_or_null("/root/TargetManager")
+		if target_manager and target_manager.has_method("get_target_data"):
+			target_data = target_manager.get_target_data(target_id)
 		if not target_data:
 			print("Could not find target data for ID: ", target_id)
 			queue_free()
@@ -70,7 +72,9 @@ func _ready():
 	# Small perpendicular kick + forward velocity
 	var perpendicular = Vector2(-to_target.y, to_target.x)
 	# Fix the ternary operator compatibility issue
-	var kick_direction = 1.0 if randf() > 0.5 else -1.0
+	var kick_direction: float = 1.0
+	if randf() <= 0.5:
+		kick_direction = -1.0
 	var side_kick = perpendicular * launch_kick_velocity * kick_direction
 	var forward_kick = to_target * 100.0
 	
@@ -238,9 +242,7 @@ func calculate_direct_intercept(delta: float) -> Vector2:
 	if error_magnitude < 1.0:  # Close enough
 		return Vector2.ZERO
 	
-	var error_unit = error / error_magnitude
-	
-	# PID calculations
+	# PID calculations (removed unused error_unit variable)
 	var proportional = error * kp
 	
 	# Integral with decay to prevent windup
@@ -288,7 +290,12 @@ func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, targe
 	var t1 = (-b + sqrt(discriminant)) / (2.0 * a)
 	var t2 = (-b - sqrt(discriminant)) / (2.0 * a)
 	
-	var intercept_time = t1 if t1 > 0 else t2
+	var intercept_time: float = 0.0
+	if t1 > 0:
+		intercept_time = t1
+	else:
+		intercept_time = t2
+	
 	if intercept_time <= 0:
 		return target_pos
 	
@@ -317,8 +324,9 @@ func set_target(target: Node2D):
 	if target:
 		target_id = target.name + "_" + str(target.get_instance_id())
 		# Try to get or create target data
-		if has_node("/root/TargetManager"):
-			target_data = get_node("/root/TargetManager").register_target(target)
+		var target_manager = get_node_or_null("/root/TargetManager")
+		if target_manager and target_manager.has_method("register_target"):
+			target_data = target_manager.register_target(target)
 		else:
 			# Fallback: create basic target data
 			target_data = TargetData.new(target_id, target, target.global_position)

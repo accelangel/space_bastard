@@ -50,10 +50,18 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	torpedo.set_target(target)
 	torpedo.set_meters_per_pixel(meters_per_pixel)  # Pass current WorldSettings value
 	
+	var parent_name: String = "None"
+	if parent_ship != null:
+		parent_name = parent_ship.name
+	
+	var target_name: String = "None"
+	if target != null:
+		target_name = target.name
+	
 	print("=== LAUNCHING TORPEDO ===")
 	print("  Launcher position: ", global_position)
-	print("  Parent ship: ", parent_ship.name if parent_ship != null else "None")
-	print("  Target: ", target.name if target != null else "None")
+	print("  Parent ship: ", parent_name)
+	print("  Target: ", target_name)
 	print("  World scale: ", meters_per_pixel, " m/pixel")
 	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
 	print("========================")

@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
 ShipManager="*res://Scripts/Managers/ShipManager.gd"
+TargetManager="*res://Scripts/Managers/TargetManager.gd"
 
 [display]
 
