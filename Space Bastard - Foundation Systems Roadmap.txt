@@ -1,0 +1,85 @@
+🚀 Space Bastard - Foundation Systems Roadmap
+1. Target Data System (Immediate - Week 1)
+The Critical Foundation
+This system replaces direct node references with data-driven targeting. Instead of torpedoes holding a pointer to an enemy ship, they work with a TargetData object that contains position, velocity, confidence level, and freshness timestamp.
+Key Changes:
+
+Refactor torpedo guidance to use TargetData instead of Node2D references
+Create a TargetManager that maintains and updates target data for all entities
+Implement target data aging and confidence decay over time
+Add target validation and "lost contact" scenarios
+
+Why This Matters: Every future combat system assumes weapons work with uncertain, time-delayed information rather than perfect knowledge. This change makes sensors, ECM, and multi-target scenarios possible without major rewrites.
+Success Criteria: Torpedoes behave identically to now, but internally use target data that can be manipulated by external systems.
+
+2. Entity Management System (High Priority - Week 2)
+Unified Entity Tracking
+Currently, ships register themselves with ShipManager but there's no centralized system for tracking all game entities, their relationships, or their spatial positions.
+Core Components:
+
+Expand ShipManager into a comprehensive EntityManager
+Implement spatial indexing for fast proximity queries (crucial for sensors)
+Add entity lifecycle management (spawn, active, damaged, destroyed)
+Create entity relationship tracking (which torpedo belongs to which ship)
+Add entity filtering and querying capabilities
+
+Why This Matters: Sensors need to efficiently find nearby targets. Weapons need to avoid hitting friendly entities. UI systems need to track what's happening without polling every frame. This system provides the infrastructure for all entity interactions.
+Success Criteria: Any system can quickly query "what entities are within X range of Y position" or "give me all active enemy ships" without performance issues.
+
+3. Time Management & Simulation Control (High Priority - Week 3)
+Master Clock System
+Right now everything runs in real-time with no central coordination. This creates problems for debugging, tactical gameplay, and synchronized events.
+Core Features:
+
+Implement a TimeManager singleton that controls global simulation speed
+Add pause/resume functionality across all systems
+Create time scaling (slow-motion, fast-forward) with proper delta time distribution
+Add frame-perfect synchronization for critical events like impacts
+Implement time-sensitive data expiration (old target data, sensor contacts)
+
+Why This Matters: Players will want to slow down time during complex engagements. Debugging requires pause capability. Sensors work on time-based data freshness. Combat replays need time control.
+Success Criteria: Can pause mid-torpedo-flight and resume with perfect continuity. Can run combat at 0.1x speed or 5x speed smoothly.
+
+4. Input System Architecture (Medium Priority - Week 4)
+Flexible Command Interface
+Even if the game is largely automated, you need a clean way to issue commands, select targets, and control the camera. This system should work whether the game is fully manual or mostly automated.
+Key Components:
+
+Create a CommandManager that handles player input translation
+Implement target selection and designation systems
+Add context-sensitive command modes (camera control, target selection, weapon control)
+Design the system to work with both manual control and automated execution
+Add input queuing for complex command sequences
+
+Why This Matters: Whether players directly control weapons or just designate targets, you need clean input handling. The system should be flexible enough to support both Gratuitous Space Battles-style automation and manual control.
+Success Criteria: Can cleanly switch between camera control and target designation. Input system can handle both immediate commands and queued orders.
+
+5. Event System (Medium Priority - Week 5)
+Decoupled Communication
+Currently, systems communicate through direct method calls or shared references. This creates tight coupling and makes it hard to add new systems that need to react to game events.
+Core Architecture:
+
+Implement a global event bus for system communication
+Create standardized event types (combat events, sensor detections, system status changes)
+Add event filtering and subscription systems
+Implement event priority and ordering for critical sequences
+Add event logging for debugging and replay systems
+
+Why This Matters: UI needs to react to combat events. Sound systems need to know about explosions. AI systems need to respond to sensor contacts. Future systems like damage control or tactical AI will need to react to multiple event types.
+Success Criteria: Adding a new system that reacts to combat events requires no changes to existing code - just event subscription.
+
+Cross-System Integration Notes
+Weeks 6-7: Integration & Polish
+After implementing these foundation systems, spend time ensuring they work well together:
+
+Target data flows properly from entity management through to weapons
+Time management affects all systems consistently
+Events fire at appropriate times and carry useful data
+Input commands properly affect the underlying systems
+Performance remains acceptable with all systems running
+
+Testing Strategy:
+Build stress tests that spawn many entities, fire many weapons, and verify all systems remain responsive and accurate. The goal is to prove these foundations can handle the complex scenarios you'll build later.
+Future Readiness:
+With these foundations in place, you'll be ready to add sensors (which update target data), ECM systems (which manipulate target data), advanced AI (which uses entity management and events), and complex weapons (which use the time and targeting systems).
+The key insight is that each system builds on the previous ones, so getting the order right prevents major rewrites later. The target data system is particularly critical because it touches every weapon system you'll ever build.
