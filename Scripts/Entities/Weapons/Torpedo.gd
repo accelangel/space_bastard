@@ -16,13 +16,10 @@ class_name Torpedo
 @export var ki: float = 50.0         # Integral gain
 @export var kd: float = 150.0        # Derivative gain
 
-# Target tracking
-var target: Node2D
-var target_last_known_pos: Vector2
-var target_last_known_velocity: Vector2 = Vector2.ZERO
-var previous_target_pos: Vector2 = Vector2.ZERO
-var target_tracking_initialized: bool = false
-var tracking_timer: float = 0.0
+# TARGET DATA SYSTEM - New approach
+var target_data: TargetData          # Our target information
+var target_id: String               # ID of our target
+var use_uncertain_data: bool = true # Whether to use confidence-based positioning
 
 # Physics state
 var velocity_mps: Vector2 = Vector2.ZERO
@@ -48,10 +45,18 @@ func _ready():
 	print("  Initial position: ", global_position)
 	print("  Using meters_per_pixel: ", meters_per_pixel)
 	
-	if not target:
-		print("No target set - destroying torpedo")
+	if not target_data and target_id.is_empty():
+		print("No target data or ID set - destroying torpedo")
 		queue_free()
 		return
+	
+	# If we have target_id but no target_data, try to get it from TargetManager
+	if target_id and not target_data:
+		target_data = TargetManager.get_target_data(target_id)
+		if not target_data:
+			print("Could not find target data for ID: ", target_id)
+			queue_free()
+			return
 	
 	if meters_per_pixel <= 0:
 		print("ERROR: Invalid meters_per_pixel value: ", meters_per_pixel)
@@ -59,7 +64,8 @@ func _ready():
 		print("  Using fallback from WorldSettings: ", meters_per_pixel)
 	
 	# Calculate initial direction toward target
-	var to_target = (target.global_position - global_position).normalized()
+	var target_pos = _get_target_position()
+	var to_target = (target_pos - global_position).normalized()
 	
 	# Small perpendicular kick + forward velocity
 	var perpendicular = Vector2(-to_target.y, to_target.x)
@@ -70,18 +76,21 @@ func _ready():
 	previous_los = to_target
 	
 	print("  Applied launch kick: ", velocity_mps, " m/s")
-	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
+	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
+	print("  Target confidence: ", target_data.confidence if target_data else "N/A")
 
 func _physics_process(delta):
-	if not target or not is_instance_valid(target):
-		print("Target lost - destroying torpedo")
+	# Validate target data
+	if not _validate_target():
+		print("Target lost or invalid - destroying torpedo")
 		queue_free()
 		return
 	
-	update_target_tracking(delta)
+	# Get current target position (may include uncertainty)
+	var target_pos = _get_target_position()
 	
 	# Check proximity for detonation
-	var distance_to_target_pixels = global_position.distance_to(target.global_position)
+	var distance_to_target_pixels = global_position.distance_to(target_pos)
 	var distance_to_target_meters = distance_to_target_pixels * meters_per_pixel
 	
 	if distance_to_target_meters < proximity_meters:
@@ -92,7 +101,7 @@ func _physics_process(delta):
 	var speed_mps = velocity_mps.length()
 	total_distance_traveled += speed_mps * delta
 	
-	# Calculate intercept trajectory
+	# Calculate intercept trajectory using target data
 	var commanded_acceleration = calculate_intercept_guidance(delta)
 	
 	# Apply acceleration
@@ -110,20 +119,50 @@ func _physics_process(delta):
 	if Engine.get_process_frames() % 60 == 0:
 		debug_output(distance_to_target_meters, distance_to_target_pixels)
 
+# Validate that we still have a valid target
+func _validate_target() -> bool:
+	if not target_data:
+		return false
+	
+	# Check if target data is still valid
+	if not target_data.is_valid():
+		print("Target data became invalid (age: ", target_data.data_age, "s, confidence: ", target_data.confidence, ")")
+		return false
+	
+	return true
+
+# Get target position, potentially with uncertainty
+func _get_target_position() -> Vector2:
+	if not target_data:
+		return global_position  # Fallback to avoid crashes
+	
+	if use_uncertain_data:
+		return target_data.get_uncertain_position()
+	else:
+		return target_data.predicted_position
+
+# Get target velocity for prediction
+func _get_target_velocity() -> Vector2:
+	if not target_data:
+		return Vector2.ZERO
+	
+	return target_data.velocity
+
 func calculate_intercept_guidance(delta: float) -> Vector2:
 	# Calculate proportional navigation component
 	var pn_command = calculate_proportional_navigation(delta)
 	
-	# Calculate direct intercept component
+	# Calculate direct intercept component  
 	var direct_command = calculate_direct_intercept(delta)
 	
-	# Calculate dynamic mixing based on flight conditions
+	# Calculate dynamic mixing based on flight conditions and target data quality
 	var current_speed = velocity_mps.length()
-	var distance_to_target = global_position.distance_to(target.global_position) * meters_per_pixel
+	var distance_to_target = global_position.distance_to(_get_target_position()) * meters_per_pixel
 	
 	# Use more direct guidance when:
 	# 1. Moving slowly (startup phase)
 	# 2. Very close to target (terminal phase)
+	# 3. Target data confidence is low (less reliable proportional navigation)
 	
 	var effective_direct_weight = direct_weight
 	
@@ -135,134 +174,5 @@ func calculate_intercept_guidance(delta: float) -> Vector2:
 	if distance_to_target < 200.0:  # Within 200 meters
 		effective_direct_weight = min(1.0, direct_weight + 0.3)
 	
-	# Blend the two approaches
-	var pn_weight = 1.0 - effective_direct_weight
-	var blended_command = pn_command * pn_weight + direct_command * effective_direct_weight
-	
-	# Ensure we don't exceed max acceleration
-	if blended_command.length() > max_acceleration:
-		blended_command = blended_command.normalized() * max_acceleration
-	
-	return blended_command
-
-func calculate_proportional_navigation(delta: float) -> Vector2:
-	var current_los = (target.global_position - global_position).normalized()
-	
-	if previous_los == Vector2.ZERO:
-		previous_los = current_los
-		return current_los * max_acceleration * 0.5
-	
-	# Calculate line of sight rate
-	var cross_product = previous_los.x * current_los.y - previous_los.y * current_los.x
-	var los_angular_rate = cross_product / delta if delta > 0 else 0.0
-	
-	# Proportional navigation command
-	var velocity_normalized = velocity_mps.normalized()
-	var lateral_direction = Vector2(-velocity_normalized.y, velocity_normalized.x)
-	
-	var commanded_lateral_accel = velocity_mps.length() * navigation_constant * los_angular_rate
-	var lateral_acceleration = lateral_direction * commanded_lateral_accel
-	
-	# Add forward thrust
-	var forward_thrust = velocity_normalized * max_acceleration * 0.3
-	
-	var total_acceleration = lateral_acceleration + forward_thrust
-	
-	# Limit acceleration
-	if total_acceleration.length() > max_acceleration:
-		total_acceleration = total_acceleration.normalized() * max_acceleration
-	
-	previous_los = current_los
-	return total_acceleration
-
-func calculate_direct_intercept(delta: float) -> Vector2:
-	# Direct PID control toward target position
-	var target_pos = target.global_position
-	var current_pos = global_position
-	
-	# Error in pixel space, convert to meters
-	var error_pixels = target_pos - current_pos
-	var error_meters = error_pixels * meters_per_pixel
-	
-	# Direct intercept PID calculations
-	integral_error = integral_error * integral_decay + error_meters * delta
-	var derivative_error = (error_meters - previous_error) / delta if delta > 0 else Vector2.ZERO
-	
-	# PID output for direct intercept
-	var direct_output = (kp * error_meters + 
-						 ki * integral_error + 
-						 kd * derivative_error)
-	
-	# Limit to maximum acceleration
-	if direct_output.length() > max_acceleration:
-		direct_output = direct_output.normalized() * max_acceleration
-	
-	previous_error = error_meters
-	return direct_output
-
-func update_target_tracking(delta):
-	if not target:
-		return
-	
-	tracking_timer += delta
-	var current_target_pos = target.global_position
-	
-	if target_tracking_initialized and tracking_timer > 0:
-		var target_vel_pixels_per_sec = (current_target_pos - target_last_known_pos) / tracking_timer
-		target_last_known_velocity = target_vel_pixels_per_sec * meters_per_pixel
-	else:
-		target_last_known_velocity = Vector2.ZERO
-		target_tracking_initialized = true
-	
-	previous_target_pos = target_last_known_pos
-	target_last_known_pos = current_target_pos
-	tracking_timer = 0.0
-
-func set_target(new_target: Node2D):
-	target = new_target
-	if target:
-		target_last_known_pos = target.global_position
-		previous_target_pos = target.global_position
-		target_last_known_velocity = Vector2.ZERO
-		target_tracking_initialized = false
-		tracking_timer = 0.0
-
-func set_launcher(ship: Node2D):
-	launcher_ship = ship
-
-func set_meters_per_pixel(pixel_scale: float):
-	meters_per_pixel = pixel_scale
-	print("Torpedo scale set to: ", meters_per_pixel, " m/px")
-
-func debug_output(distance_meters: float, _distance_pixels: float):
-	var current_time = Time.get_ticks_msec() / 1000.0
-	var flight_time = current_time - launch_time
-	
-	print("=== TORPEDO DEBUG ===")
-	print("  Flight time: ", flight_time, " seconds")
-	print("  Position: ", global_position)
-	print("  Velocity: ", velocity_mps.length(), " m/s")
-	print("  Distance to target: ", distance_meters, " meters")
-	print("  Total distance traveled: ", total_distance_traveled, " meters")
-	print("  Scale: ", meters_per_pixel, " m/px")
-	print("===================")
-
-func _on_area_entered(area):
-	if launcher_ship and (area == launcher_ship or area.get_parent() == launcher_ship):
-		return
-	_impact()
-
-func _on_body_entered(body):
-	if body == launcher_ship:
-		return
-	_impact()
-
-func _impact():
-	var current_time = Time.get_ticks_msec() / 1000.0
-	var flight_time = current_time - launch_time
-	print("=== TORPEDO IMPACT ===")
-	print("  Flight time: ", flight_time, " seconds")
-	print("  Total distance: ", total_distance_traveled, " meters")
-	print("  Average speed: ", total_distance_traveled / flight_time if flight_time > 0.0 else 0.0, " m/s")
-	print("======================")
-	queue_free()
+	# Increase direct guidance when target data confidence is low
+	if target_data and target_data.
