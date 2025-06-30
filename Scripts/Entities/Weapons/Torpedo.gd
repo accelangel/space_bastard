@@ -27,7 +27,9 @@ var tracking_timer: float = 0.0
 # Physics state
 var velocity_mps: Vector2 = Vector2.ZERO
 var launcher_ship: Node2D
-var meters_per_pixel: float = 0.25
+
+# IMPORTANT: No default value! Must be set by launcher
+var meters_per_pixel: float
 
 # Intercept guidance state
 var previous_los: Vector2 = Vector2.ZERO
@@ -44,11 +46,17 @@ func _ready():
 	launch_time = Time.get_ticks_msec() / 1000.0
 	print("TORPEDO _ready() called at time: ", launch_time)
 	print("  Initial position: ", global_position)
+	print("  Using meters_per_pixel: ", meters_per_pixel)
 	
 	if not target:
 		print("No target set - destroying torpedo")
 		queue_free()
 		return
+	
+	if meters_per_pixel <= 0:
+		print("ERROR: Invalid meters_per_pixel value: ", meters_per_pixel)
+		meters_per_pixel = WorldSettings.meters_per_pixel  # Fallback
+		print("  Using fallback from WorldSettings: ", meters_per_pixel)
 	
 	# Calculate initial direction toward target
 	var to_target = (target.global_position - global_position).normalized()
@@ -224,6 +232,7 @@ func set_launcher(ship: Node2D):
 
 func set_meters_per_pixel(pixel_scale: float):
 	meters_per_pixel = pixel_scale
+	print("Torpedo scale set to: ", meters_per_pixel, " m/px")
 
 func debug_output(distance_meters: float, _distance_pixels: float):
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -235,6 +244,7 @@ func debug_output(distance_meters: float, _distance_pixels: float):
 	print("  Velocity: ", velocity_mps.length(), " m/s")
 	print("  Distance to target: ", distance_meters, " meters")
 	print("  Total distance traveled: ", total_distance_traveled, " meters")
+	print("  Scale: ", meters_per_pixel, " m/px")
 	print("===================")
 
 func _on_area_entered(area):

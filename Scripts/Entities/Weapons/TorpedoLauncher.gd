@@ -9,33 +9,16 @@ var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0
 var parent_ship: Node2D
 
-# Reference to world settings for scale
-var world_settings: Node
-var current_meters_per_pixel: float = 0.25  # Default fallback
+# Get meters_per_pixel directly from WorldSettings singleton
+var meters_per_pixel: float:
+	get:
+		return WorldSettings.meters_per_pixel
 
 func _ready():
 	parent_ship = get_parent()
-	
-	# Try to find WorldSettings node (adjust path as needed)
-	world_settings = get_node("/root/WorldSettings") if has_node("/root/WorldSettings") else null
-	if not world_settings:
-		# Try to find it as an autoload
-		if has_node("/root/World"):
-			world_settings = get_node("/root/World")
-		elif Engine.has_singleton("WorldSettings"):
-			world_settings = Engine.get_singleton("WorldSettings")
-	
-	if world_settings and world_settings.has_method("get") and "meters_per_pixel" in world_settings:
-		current_meters_per_pixel = world_settings.meters_per_pixel
-		print("TorpedoLauncher found world scale: ", current_meters_per_pixel, " m/px")
-	else:
-		print("TorpedoLauncher using default scale: ", current_meters_per_pixel, " m/px")
+	print("TorpedoLauncher initialized with scale: ", meters_per_pixel, " m/px from WorldSettings")
 
 func _process(delta):
-	# Update world scale if available
-	if world_settings and world_settings.has_method("get") and "meters_per_pixel" in world_settings:
-		current_meters_per_pixel = world_settings.meters_per_pixel
-	
 	# Clean up destroyed torpedoes
 	active_torpedoes = active_torpedoes.filter(func(torpedo): return is_instance_valid(torpedo))
 	
@@ -65,15 +48,15 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	torpedo.global_position = global_position
 	torpedo.set_launcher(parent_ship)
 	torpedo.set_target(target)
-	torpedo.set_meters_per_pixel(current_meters_per_pixel)  # Use current world scale
+	torpedo.set_meters_per_pixel(meters_per_pixel)  # Pass current WorldSettings value
 	
-	#print("=== LAUNCHING TORPEDO ===")
-	#print("  Launcher position: ", global_position)
-	#print("  Parent ship: ", parent_ship.name if parent_ship else "None")
-	#print("  Target: ", target.name if target else "None")
-	#print("  World scale: ", current_meters_per_pixel, " m/pixel")
-	#print("  Distance to target: ", global_position.distance_to(target.global_position) * current_meters_per_pixel, " meters")
-	#print("========================")
+	print("=== LAUNCHING TORPEDO ===")
+	print("  Launcher position: ", global_position)
+	print("  Parent ship: ", parent_ship.name if parent_ship else "None")
+	print("  Target: ", target.name if target else "None")
+	print("  World scale: ", meters_per_pixel, " m/pixel")
+	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
+	print("========================")
 	
 	# NOW add to scene tree (this triggers _ready())
 	get_tree().root.add_child(torpedo)
@@ -97,8 +80,3 @@ func get_active_torpedo_count() -> int:
 
 func get_current_time() -> float:
 	return Time.get_ticks_msec() / 1000.0
-
-# Method to manually set scale if WorldSettings isn't available
-func set_world_scale(meters_per_pixel: float):
-	current_meters_per_pixel = meters_per_pixel
-	print("TorpedoLauncher scale manually set to: ", current_meters_per_pixel, " m/px")

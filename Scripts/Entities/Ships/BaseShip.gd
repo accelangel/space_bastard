@@ -6,20 +6,19 @@ class_name BaseShip
 @export var acceleration_gs: float = 10.0
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
-var meters_per_pixel: float = 0.25
 var ship_id: String
 
 # Movement direction (can be overridden by subclasses)
 var movement_direction: Vector2 = Vector2(0, 1)
 
+# Get meters_per_pixel from WorldSettings singleton
+var meters_per_pixel: float:
+	get:
+		return WorldSettings.meters_per_pixel
+
 func _ready():
 	# Generate unique ship ID
 	ship_id = name + "_" + str(get_instance_id())
-	
-	# Get the world scale from WorldSettings
-	var world_settings = get_node("/root/WorldSettings") if has_node("/root/WorldSettings") else null
-	if world_settings and "meters_per_pixel" in world_settings:
-		meters_per_pixel = world_settings.meters_per_pixel
 	
 	# Convert Gs to m/s²
 	acceleration_mps2 = acceleration_gs * 9.81
@@ -29,6 +28,7 @@ func _ready():
 		get_node("/root/ShipManager").register_ship(self)
 	
 	print("BaseShip initialized: ", ship_id)
+	print("  Using meters_per_pixel from WorldSettings: ", meters_per_pixel)
 
 # Override in subclasses for specific ship behavior
 func get_ship_type() -> String:
