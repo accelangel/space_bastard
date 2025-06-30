@@ -18,7 +18,7 @@ func _ready():
 	parent_ship = get_parent()
 	print("TorpedoLauncher initialized with scale: ", meters_per_pixel, " m/px from WorldSettings")
 
-func _process(delta):
+func _process(_delta):
 	# Clean up destroyed torpedoes
 	active_torpedoes = active_torpedoes.filter(func(torpedo): return is_instance_valid(torpedo))
 	
@@ -52,8 +52,8 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	
 	print("=== LAUNCHING TORPEDO ===")
 	print("  Launcher position: ", global_position)
-	print("  Parent ship: ", parent_ship.name if parent_ship else "None")
-	print("  Target: ", target.name if target else "None")
+	print("  Parent ship: ", parent_ship.name if parent_ship != null else "None")
+	print("  Target: ", target.name if target != null else "None")
 	print("  World scale: ", meters_per_pixel, " m/pixel")
 	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
 	print("========================")

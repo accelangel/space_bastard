@@ -69,7 +69,9 @@ func _ready():
 	
 	# Small perpendicular kick + forward velocity
 	var perpendicular = Vector2(-to_target.y, to_target.x)
-	var side_kick = perpendicular * launch_kick_velocity * (1.0 if randf() > 0.5 else -1.0)
+	# Fix the ternary operator compatibility issue
+	var kick_direction = 1.0 if randf() > 0.5 else -1.0
+	var side_kick = perpendicular * launch_kick_velocity * kick_direction
 	var forward_kick = to_target * 100.0
 	
 	velocity_mps = side_kick + forward_kick
@@ -175,4 +177,154 @@ func calculate_intercept_guidance(delta: float) -> Vector2:
 		effective_direct_weight = min(1.0, direct_weight + 0.3)
 	
 	# Increase direct guidance when target data confidence is low
-	if target_data and target_data.
+	if target_data and target_data.confidence < 0.5:
+		effective_direct_weight = min(1.0, direct_weight + 0.25)
+	
+	# Combine commands with dynamic weighting
+	var pn_weight = 1.0 - effective_direct_weight
+	var final_command = pn_command * pn_weight + direct_command * effective_direct_weight
+	
+	# Limit maximum acceleration
+	if final_command.length() > max_acceleration:
+		final_command = final_command.normalized() * max_acceleration
+	
+	return final_command
+
+func calculate_proportional_navigation(delta: float) -> Vector2:
+	var target_pos = _get_target_position()
+	var target_vel = _get_target_velocity()
+	
+	# Calculate line of sight vector and range
+	var los_vector = target_pos - global_position
+	var range_to_target = los_vector.length()
+	
+	if range_to_target < 1.0:  # Avoid division by zero
+		return Vector2.ZERO
+	
+	var los_unit = los_vector / range_to_target
+	
+	# Calculate line of sight rate (angular velocity of LOS)
+	var los_rate = 0.0
+	if previous_los.length() > 0.1:
+		var los_change = los_unit - previous_los
+		los_rate = los_change.length() / delta
+	
+	previous_los = los_unit
+	
+	# Calculate closing velocity
+	var relative_velocity = target_vel - velocity_mps
+	var closing_velocity = -relative_velocity.dot(los_unit)
+	
+	if closing_velocity <= 0:  # Not closing on target
+		return Vector2.ZERO
+	
+	# Calculate lateral acceleration command
+	var los_perpendicular = Vector2(-los_unit.y, los_unit.x)
+	var lateral_command = navigation_constant * closing_velocity * los_rate
+	
+	return los_perpendicular * lateral_command
+
+func calculate_direct_intercept(delta: float) -> Vector2:
+	var target_pos = _get_target_position()
+	var target_vel = _get_target_velocity()
+	
+	# Calculate intercept point
+	var intercept_point = calculate_intercept_point(global_position, velocity_mps, target_pos, target_vel)
+	
+	# PID control toward intercept point
+	var error = intercept_point - global_position
+	var error_magnitude = error.length()
+	
+	if error_magnitude < 1.0:  # Close enough
+		return Vector2.ZERO
+	
+	var error_unit = error / error_magnitude
+	
+	# PID calculations
+	var proportional = error * kp
+	
+	# Integral with decay to prevent windup
+	integral_error = integral_error * integral_decay + error * delta
+	var integral = integral_error * ki
+	
+	# Derivative
+	var derivative = (error - previous_error) / delta * kd
+	previous_error = error
+	
+	var pid_command = proportional + integral + derivative
+	
+	# Limit the command
+	if pid_command.length() > max_acceleration:
+		pid_command = pid_command.normalized() * max_acceleration
+	
+	return pid_command
+
+func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, target_pos: Vector2, target_vel: Vector2) -> Vector2:
+	# Simple intercept calculation - assumes torpedo can reach any speed
+	var relative_pos = target_pos - shooter_pos
+	var relative_vel = target_vel - shooter_vel
+	
+	# If target isn't moving relative to us, aim directly at it
+	if relative_vel.length() < 1.0:
+		return target_pos
+	
+	# Calculate time to intercept (assuming we can instantly match any required velocity)
+	var torpedo_max_speed = sqrt(2.0 * max_acceleration * relative_pos.length())  # Rough estimate
+	
+	if torpedo_max_speed < 1.0:
+		return target_pos
+	
+	# Solve for intercept time
+	var a = relative_vel.dot(relative_vel) - torpedo_max_speed * torpedo_max_speed
+	var b = 2.0 * relative_pos.dot(relative_vel)
+	var c = relative_pos.dot(relative_pos)
+	
+	var discriminant = b * b - 4.0 * a * c
+	
+	if discriminant < 0.0 or abs(a) < 0.01:
+		# No intercept possible or target not moving much
+		return target_pos
+	
+	var t1 = (-b + sqrt(discriminant)) / (2.0 * a)
+	var t2 = (-b - sqrt(discriminant)) / (2.0 * a)
+	
+	var intercept_time = t1 if t1 > 0 else t2
+	if intercept_time <= 0:
+		return target_pos
+	
+	return target_pos + target_vel * intercept_time
+
+func _impact():
+	print("TORPEDO IMPACT!")
+	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
+	print("  Distance traveled: ", total_distance_traveled, " meters")
+	
+	# Add explosion effects here
+	
+	queue_free()
+
+func debug_output(distance_meters: float, distance_pixels: float):
+	print("=== TORPEDO STATUS ===")
+	print("  Position: ", global_position)
+	print("  Velocity: ", velocity_mps.length(), " m/s")
+	print("  Distance to target: ", distance_meters, " meters (", distance_pixels, " pixels)")
+	print("  Target confidence: ", target_data.confidence if target_data else "N/A")
+	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
+	print("=====================")
+
+# Methods called by launcher
+func set_target(target: Node2D):
+	if target:
+		target_id = target.name + "_" + str(target.get_instance_id())
+		# Try to get or create target data
+		if has_node("/root/TargetManager"):
+			target_data = get_node("/root/TargetManager").register_target(target)
+		else:
+			# Fallback: create basic target data
+			target_data = TargetData.new(target_id, target, target.global_position)
+
+func set_launcher(ship: Node2D):
+	launcher_ship = ship
+
+func set_meters_per_pixel(value: float):
+	meters_per_pixel = value
