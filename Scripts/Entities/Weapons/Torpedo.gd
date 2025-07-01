@@ -16,10 +16,9 @@ class_name Torpedo
 @export var ki: float = 50.0         # Integral gain
 @export var kd: float = 150.0        # Derivative gain
 
-# TARGET DATA SYSTEM - New approach
+# TARGET DATA SYSTEM - Hybrid approach
 var target_data: TargetData          # Our target information
 var target_id: String               # ID of our target
-var use_uncertain_data: bool = true # Whether to use confidence-based positioning
 
 # Physics state
 var velocity_mps: Vector2 = Vector2.ZERO
@@ -71,7 +70,6 @@ func _ready():
 	
 	# Small perpendicular kick + forward velocity
 	var perpendicular = Vector2(-to_target.y, to_target.x)
-	# Fix the ternary operator compatibility issue
 	var kick_direction: float = 1.0
 	if randf() <= 0.5:
 		kick_direction = -1.0
@@ -95,7 +93,7 @@ func _physics_process(delta):
 		queue_free()
 		return
 	
-	# Get current target position (may include uncertainty)
+	# Get current target position using hybrid approach
 	var target_pos = _get_target_position()
 	
 	# Check proximity for detonation
@@ -133,28 +131,48 @@ func _validate_target() -> bool:
 	if not target_data:
 		return false
 	
-	# Check if target data is still valid
+	# For direct visual contacts, check if the node is still valid
+	if target_data.data_source == TargetData.DataSource.DIRECT_VISUAL:
+		return target_data.validate_target_node()
+	
+	# For sensor contacts, check if target data is still valid
 	if not target_data.is_valid():
 		print("Target data became invalid (age: ", target_data.data_age, "s, confidence: ", target_data.confidence, ")")
 		return false
 	
 	return true
 
-# Get target position, potentially with uncertainty
+# HYBRID TARGET POSITION - This is the key fix!
 func _get_target_position() -> Vector2:
 	if not target_data:
 		return global_position  # Fallback to avoid crashes
 	
-	if use_uncertain_data:
-		return target_data.get_uncertain_position()
-	else:
+	# STEP 1: Check for direct visual contact first
+	if target_data.target_node and is_instance_valid(target_data.target_node):
+		# Perfect tracking for visual contacts
+		return target_data.target_node.global_position
+	
+	# STEP 2: Fall back to sensor-based tracking with uncertainty
+	if target_data.confidence >= 1.0:
+		# Even sensor data can be perfect sometimes
 		return target_data.predicted_position
+	else:
+		# Apply uncertainty only for imperfect sensor data
+		return target_data.get_uncertain_position()
 
-# Get target velocity for prediction
+# Get target velocity using hybrid approach
 func _get_target_velocity() -> Vector2:
 	if not target_data:
 		return Vector2.ZERO
 	
+	# For direct visual contacts, try to get real-time velocity
+	if target_data.target_node and is_instance_valid(target_data.target_node):
+		if target_data.target_node.has_method("get_velocity_mps"):
+			return target_data.target_node.get_velocity_mps()
+		elif "velocity_mps" in target_data.target_node:
+			return target_data.target_node.velocity_mps
+	
+	# Fall back to predicted velocity from target data
 	return target_data.velocity
 
 func calculate_intercept_guidance(delta: float) -> Vector2:
@@ -184,8 +202,10 @@ func calculate_intercept_guidance(delta: float) -> Vector2:
 		effective_direct_weight = min(1.0, direct_weight + 0.3)
 	
 	# Increase direct guidance when target data confidence is low
+	# BUT NOT if we have direct visual contact
 	if target_data and target_data.confidence < 0.5:
-		effective_direct_weight = min(1.0, direct_weight + 0.25)
+		if not (target_data.target_node and is_instance_valid(target_data.target_node)):
+			effective_direct_weight = min(1.0, direct_weight + 0.25)
 	
 	# Combine commands with dynamic weighting
 	var pn_weight = 1.0 - effective_direct_weight
@@ -245,7 +265,7 @@ func calculate_direct_intercept(delta: float) -> Vector2:
 	if error_magnitude < 1.0:  # Close enough
 		return Vector2.ZERO
 	
-	# PID calculations (removed unused error_unit variable)
+	# PID calculations
 	var proportional = error * kp
 	
 	# Integral with decay to prevent windup
@@ -314,16 +334,19 @@ func _impact():
 	queue_free()
 
 func debug_output(distance_meters: float, distance_pixels: float):
+	var tracking_mode = "SENSOR"
+	if target_data.target_node and is_instance_valid(target_data.target_node):
+		tracking_mode = "VISUAL"
+	
 	print("=== TORPEDO STATUS ===")
 	print("  Position: ", global_position)
 	print("  Velocity: ", velocity_mps.length(), " m/s")
 	print("  Distance to target: ", distance_meters, " meters (", distance_pixels, " pixels)")
+	print("  Tracking mode: ", tracking_mode)
 	var confidence_text = "N/A"
 	if target_data:
 		confidence_text = str(target_data.confidence)
 	print("  Target confidence: ", confidence_text)
-	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
-	print("=====================")
 	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
 	print("=====================")
 

@@ -21,7 +21,7 @@ var max_history_size: int = 5
 
 # Data source and quality
 enum DataSource {
-	DIRECT_VISUAL,    # Perfect information (for debugging)
+	DIRECT_VISUAL,    # Perfect information - no decay, no uncertainty
 	RADAR_CONTACT,    # Good but delayed
 	LIDAR_CONTACT,    # Excellent but short range
 	ESTIMATED,        # Extrapolated from old data
@@ -31,7 +31,7 @@ enum DataSource {
 var data_source: DataSource = DataSource.DIRECT_VISUAL
 var detection_range: float = 0.0  # How far the detecting sensor can see
 
-# Confidence decay parameters
+# Confidence decay parameters (only for sensor-based contacts)
 var base_confidence_decay: float = 0.1  # Confidence lost per second
 var max_data_age: float = 10.0  # After this many seconds, data is considered stale
 
@@ -61,8 +61,12 @@ func update_data(new_pos: Vector2, new_vel: Vector2 = Vector2.ZERO, source: Data
 	last_update_time = current_time
 	data_age = 0.0
 	
-	# Boost confidence on update (but don't exceed 1.0)
-	confidence = min(1.0, confidence + 0.3)
+	# For direct visual contacts, confidence stays at 1.0
+	if source == DataSource.DIRECT_VISUAL:
+		confidence = 1.0
+	else:
+		# Boost confidence on update for sensor contacts (but don't exceed 1.0)
+		confidence = min(1.0, confidence + 0.3)
 	
 	# Update tracking history
 	tracking_history.append(new_pos)
@@ -71,13 +75,13 @@ func update_data(new_pos: Vector2, new_vel: Vector2 = Vector2.ZERO, source: Data
 	
 	# Recalculate velocity from history if we have enough data
 	if tracking_history.size() >= 3:
-		_calculate_velocity_from_history()
+		_calculate_velocity_from_history(delta_time)
 	
 	# Update predicted position
 	update_prediction()
 
 # Calculate velocity from position history (more accurate than single-frame)
-func _calculate_velocity_from_history():
+func _calculate_velocity_from_history(actual_delta_time: float):
 	if tracking_history.size() < 2:
 		return
 	
@@ -86,8 +90,10 @@ func _calculate_velocity_from_history():
 	
 	for i in range(1, tracking_history.size()):
 		var pos_delta = tracking_history[i] - tracking_history[i-1]
-		# Assuming roughly 60 FPS, each sample is ~0.016 seconds apart
-		var estimated_delta_time = 0.016
+		# Use the actual delta time instead of hardcoded 60 FPS
+		var estimated_delta_time = actual_delta_time
+		if estimated_delta_time <= 0:
+			estimated_delta_time = 1.0 / 60.0  # fallback
 		total_velocity += pos_delta / estimated_delta_time
 		samples += 1
 	
@@ -99,22 +105,34 @@ func update_age_and_confidence():
 	var current_time = Time.get_ticks_msec() / 1000.0
 	data_age = current_time - last_update_time
 	
-	# Decay confidence over time
-	var decay_rate = base_confidence_decay
+	# CRITICAL FIX: Do NOT decay confidence for direct visual contacts
+	if data_source == DataSource.DIRECT_VISUAL:
+		# Keep confidence at 1.0 for direct visual
+		confidence = 1.0
+	else:
+		# Only decay confidence for sensor-based contacts
+		var decay_rate = base_confidence_decay
+		
+		# Faster decay for older data
+		if data_age > 5.0:
+			decay_rate *= 2.0
+		if data_age > max_data_age:
+			decay_rate *= 3.0
+		
+		# Get actual delta time instead of assuming 60 FPS
+		var fps = Engine.get_frames_per_second()
+		if fps <= 0:
+			fps = 60  # fallback
+		var frame_delta = 1.0 / fps
+		
+		confidence = max(0.0, confidence - decay_rate * frame_delta)
 	
-	# Faster decay for older data
-	if data_age > 5.0:
-		decay_rate *= 2.0
-	if data_age > max_data_age:
-		decay_rate *= 3.0
-	
-	confidence = max(0.0, confidence - decay_rate * (1.0/60.0))  # Assuming 60 FPS
-	
-	# Update data source based on age
-	if data_age > max_data_age:
-		data_source = DataSource.LOST_CONTACT
-	elif data_age > 3.0:
-		data_source = DataSource.ESTIMATED
+	# Update data source based on age (but not for direct visual)
+	if data_source != DataSource.DIRECT_VISUAL:
+		if data_age > max_data_age:
+			data_source = DataSource.LOST_CONTACT
+		elif data_age > 3.0:
+			data_source = DataSource.ESTIMATED
 	
 	# Update prediction
 	update_prediction()
@@ -131,18 +149,33 @@ func update_prediction():
 
 # Check if this target data is still valid/useful
 func is_valid() -> bool:
+	# Direct visual contacts are always valid if node exists
+	if data_source == DataSource.DIRECT_VISUAL:
+		return validate_target_node()
+	
+	# For sensor contacts, check confidence and age
 	return confidence > 0.1 and data_age < max_data_age * 2.0
 
 # Check if we have recent, reliable data
 func is_reliable() -> bool:
+	# Direct visual is always reliable if node exists
+	if data_source == DataSource.DIRECT_VISUAL:
+		return validate_target_node()
+	
+	# For sensor contacts, check confidence and age
 	return confidence > 0.7 and data_age < 2.0
 
-# Get position with confidence-based error
+# CRITICAL FIX: Only add uncertainty for non-visual sensor contacts
 func get_uncertain_position() -> Vector2:
+	# Direct visual contacts get PERFECT position
+	if data_source == DataSource.DIRECT_VISUAL:
+		return predicted_position
+	
+	# Perfect confidence sensor data also gets no uncertainty
 	if confidence >= 1.0:
 		return predicted_position
 	
-	# Add uncertainty based on confidence
+	# Add uncertainty based on confidence for imperfect sensor data
 	var uncertainty_radius = (1.0 - confidence) * 100.0  # Max 100 pixels of error
 	var random_offset = Vector2(
 		randf_range(-uncertainty_radius, uncertainty_radius),

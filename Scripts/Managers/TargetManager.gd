@@ -22,10 +22,11 @@ func _ready():
 	if get_tree():
 		get_tree().node_removed.connect(_on_node_removed)
 
-func _process(delta):
+# CRITICAL FIX: Move to _physics_process to match torpedo timing
+func _physics_process(delta):
 	cleanup_timer += delta
 	
-	# Update all target positions every frame
+	# Update all target positions every physics frame
 	update_all_targets()
 	
 	# Update all target data age and confidence
@@ -130,142 +131,4 @@ func get_targets_in_range(center_pos: Vector2, range_pixels: float,
 # Get the closest target to a position
 func get_closest_target(center_pos: Vector2, max_range: float = INF, 
 					   min_confidence: float = 0.0) -> TargetData:
-	var closest_target: TargetData = null
-	var closest_distance: float = INF
-	
-	for target_data in targets.values():
-		if target_data.confidence < min_confidence:
-			continue
-		
-		var distance = center_pos.distance_to(target_data.predicted_position)
-		if distance < closest_distance and distance <= max_range:
-			closest_distance = distance
-			closest_target = target_data
-	
-	return closest_target
-
-# Remove a target by ID
-func remove_target(target_id: String) -> bool:
-	if not targets.has(target_id):
-		return false
-	
-	var target_data = targets[target_id]
-	
-	# Remove from entity lookup if node exists
-	if target_data.target_node and entity_to_target_id.has(target_data.target_node):
-		entity_to_target_id.erase(target_data.target_node)
-	
-	targets.erase(target_id)
-	print("Removed target: ", target_id)
-	return true
-
-# Remove target by node reference
-func remove_target_for_node(node: Node2D) -> bool:
-	if not entity_to_target_id.has(node):
-		return false
-	
-	var target_id = entity_to_target_id[node]
-	return remove_target(target_id)
-
-# Handle when a node is removed from the scene
-func _on_node_removed(node: Node):
-	if entity_to_target_id.has(node):
-		var target_id = entity_to_target_id[node]
-		print("Node removed from scene, cleaning up target: ", target_id)
-		remove_target(target_id)
-
-# Clean up stale and invalid targets
-func cleanup_stale_targets():
-	var targets_to_remove: Array[String] = []
-	
-	for target_id in targets.keys():
-		var target_data = targets[target_id]
-		
-		# Check if target node is still valid
-		if not target_data.validate_target_node():
-			targets_to_remove.append(target_id)
-			continue
-		
-		# Check if data is too old or confidence too low
-		if not target_data.is_valid():
-			targets_to_remove.append(target_id)
-			continue
-	
-	# Remove stale targets
-	for target_id in targets_to_remove:
-		remove_target(target_id)
-		total_targets_cleaned += 1
-	
-	if targets_to_remove.size() > 0:
-		print("Cleaned up ", targets_to_remove.size(), " stale targets")
-
-# Auto-register all ships in specified groups
-func auto_register_group(group_name: String, data_source: TargetData.DataSource = TargetData.DataSource.DIRECT_VISUAL):
-	var nodes = get_tree().get_nodes_in_group(group_name)
-	var registered_count = 0
-	
-	for node in nodes:
-		if node is Node2D:
-			register_target(node, data_source)
-			registered_count += 1
-	
-	print("Auto-registered ", registered_count, " targets from group: ", group_name)
-
-# Debug functions
-func get_target_count() -> int:
-	return targets.size()
-
-func print_all_targets():
-	print("=== TARGET MANAGER STATUS ===")
-	print("Active targets: ", targets.size())
-	print("Total created: ", total_targets_created)
-	print("Total cleaned: ", total_targets_cleaned)
-	
-	for target_data in targets.values():
-		print("  ", target_data.get_debug_info())
-	print("============================")
-
-# Get statistics for UI display
-func get_statistics() -> Dictionary:
-	var reliable_targets = 0
-	var stale_targets = 0
-	var lost_targets = 0
-	
-	for target_data in targets.values():
-		if target_data.is_reliable():
-			reliable_targets += 1
-		elif target_data.data_source == TargetData.DataSource.LOST_CONTACT:
-			lost_targets += 1
-		else:
-			stale_targets += 1
-	
-	return {
-		"total": targets.size(),
-		"reliable": reliable_targets,
-		"stale": stale_targets,
-		"lost": lost_targets,
-		"created": total_targets_created,
-		"cleaned": total_targets_cleaned
-	}
-
-# Update all targets with current node positions (call this every frame)
-func update_all_targets():
-	for target_id in targets.keys():
-		var target_data = targets[target_id]
-		
-		# Skip if node is invalid
-		if not target_data.validate_target_node():
-			continue
-		
-		# Get current position and calculate velocity
-		var current_pos = target_data.target_node.global_position
-		var current_vel = Vector2.ZERO
-		
-		# Try to get velocity from the ship if it has one
-		if target_data.target_node.has_method("get_velocity_mps"):
-			current_vel = target_data.target_node.get_velocity_mps()
-		elif "velocity_mps" in target_data.target_node:
-			current_vel = target_data.target_node.velocity_mps
-		
-		# Update the target data with fresh information
-		target_data.update_data(current_pos, current_vel, TargetData.DataSource.DIRECT_VISUAL)
+	var closest_target: Target
