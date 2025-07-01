@@ -2,6 +2,8 @@
 extends Area2D
 class_name Torpedo
 
+var entity_id: String  # NEW: EntityManager ID
+
 # Torpedo specifications
 @export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
 @export var proximity_meters: float = 10.0       # Auto-detonate range
@@ -122,6 +124,29 @@ func _ready():
 	
 	var target_pos = _get_target_position()
 	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
+	
+	# Register with EntityManager
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager:
+		var owner_entity_id = ""
+		if launcher_ship:
+			var launcher_entity = entity_manager.get_entity_for_node(launcher_ship)
+			if launcher_entity:
+				owner_entity_id = launcher_entity.entity_id
+		
+		entity_id = entity_manager.register_entity(
+			self, 
+			4,  # EntityManager.EntityType.TORPEDO
+			1 if owner_entity_id.begins_with("Player") else 2,  # Player or Enemy faction
+			owner_entity_id
+		)
+		
+		# Set targeting relationship if we have a target
+		if target_data and target_data.target_node:
+			var target_entity = entity_manager.get_entity_for_node(target_data.target_node)
+			if target_entity:
+				entity_manager.set_targeting_relationship(entity_id, target_entity.entity_id)
+
 
 func _physics_process(delta):
 	# Validate target data
@@ -183,6 +208,11 @@ func _physics_process(delta):
 	# Debug output
 	if Engine.get_process_frames() % 60 == 0:
 		debug_output(distance_to_target_meters, time_since_launch)
+		
+	# Update EntityManager
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager and entity_id:
+		entity_manager.update_entity(entity_id)
 
 func should_ignite_engines(time_since_launch: float) -> bool:
 	# Ignite engines based on EITHER time OR distance criteria
@@ -429,14 +459,12 @@ func _get_target_velocity() -> Vector2:
 	return target_data.velocity
 
 func _impact():
-	print("TORPEDO IMPACT!")
-	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
-	print("  Distance traveled: ", total_distance_traveled, " meters")
-	print("  Engines ignited: ", engines_ignited)
-	print("  Final transition progress: ", transition_progress)
-	print("  Final rotation progress: ", rotation_progress)
-	print("  Final guidance strength: ", guidance_strength)
+	# Clean up EntityManager registration before destroying
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager and entity_id:
+		entity_manager.queue_destroy_entity(entity_id)
 	
+	print("TORPEDO IMPACT!")
 	queue_free()
 
 func debug_output(distance_meters: float, time_since_launch: float):
