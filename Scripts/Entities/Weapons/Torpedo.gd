@@ -1,4 +1,4 @@
-# Enhanced Torpedo.gd with dramatic launch sequence
+# Enhanced Torpedo.gd with lateral launch movement
 extends Area2D
 class_name Torpedo
 
@@ -16,6 +16,7 @@ var launch_side: int = 1  # 1 for right, -1 for left (set by launcher)
 var engines_ignited: bool = false
 var launch_start_time: float = 0.0
 var lateral_distance_traveled: float = 0.0
+var initial_facing_direction: Vector2  # Store the ship's facing direction at launch
 
 # Intercept guidance parameters (only active after engine ignition)
 @export var navigation_constant: float = 3.0     # Proportional navigation gain
@@ -77,28 +78,29 @@ func _ready():
 		meters_per_pixel = WorldSettings.meters_per_pixel
 		print("  Using fallback from WorldSettings: ", meters_per_pixel)
 	
-	# FIXED LATERAL LAUNCH: Launch parallel to ship direction, offset to the side
+	# LATERAL LAUNCH: Launch sideways relative to ship direction
 	var ship_forward = Vector2.UP  # Default ship forward direction
 	if launcher_ship:
 		# Get the ship's forward direction (assuming ships face "up" in local coordinates)
 		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
 	
+	# Store the ship's facing direction for the torpedo's orientation
+	initial_facing_direction = ship_forward
+	
 	# Calculate side direction perpendicular to ship's forward direction
 	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
 	
-	# Start with velocity in ship's forward direction (parallel launch)
-	velocity_mps = ship_forward * lateral_launch_velocity
+	# Launch velocity is LATERAL (sideways) to the ship
+	velocity_mps = side_direction * lateral_launch_velocity
 	
-	# Optional: Add slight sideways component for clearance (much smaller than forward)
-	var sideways_component = side_direction * (lateral_launch_velocity * 0.1)  # 10% sideways
-	velocity_mps += sideways_component
-	
-	# Orient torpedo to face the movement direction
-	rotation = velocity_mps.angle()
+	# Torpedo FACES the same direction as the ship (not the movement direction)
+	rotation = ship_forward.angle()
 	
 	print("  Ship forward direction: ", ship_forward)
+	print("  Side direction: ", side_direction)
 	print("  Applied launch velocity: ", velocity_mps, " m/s")
-	print("  Torpedo rotation: ", rad_to_deg(rotation), " degrees")
+	print("  Torpedo facing angle: ", rad_to_deg(rotation), " degrees")
+	print("  Velocity angle: ", rad_to_deg(velocity_mps.angle()), " degrees")
 	
 	var target_pos = _get_target_position()
 	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
@@ -136,10 +138,15 @@ func _physics_process(delta):
 		# ACTIVE GUIDANCE: Use intercept calculations
 		var commanded_acceleration = calculate_intercept_guidance(delta)
 		velocity_mps += commanded_acceleration * delta
+		
+		# When engines are active, orient torpedo to face movement direction
+		if velocity_mps.length() > 10.0:
+			rotation = velocity_mps.angle()
 	else:
-		# LATERAL LAUNCH PHASE: Continue forward movement (parallel to ship)
-		# No acceleration applied - torpedo coasts forward
-		pass
+		# LATERAL LAUNCH PHASE: Continue lateral movement
+		# Torpedo keeps facing the original ship direction
+		rotation = initial_facing_direction.angle()
+		# No acceleration applied - torpedo coasts laterally
 	
 	# Track total distance traveled
 	var speed_mps = velocity_mps.length()
@@ -148,10 +155,6 @@ func _physics_process(delta):
 	# Convert to pixel movement and update position
 	var velocity_pixels_per_second = velocity_mps / meters_per_pixel
 	global_position += velocity_pixels_per_second * delta
-	
-	# Orient torpedo to face movement direction (but only if moving significantly)
-	if velocity_mps.length() > 10.0:
-		rotation = velocity_mps.angle()
 	
 	# Debug output
 	if Engine.get_process_frames() % 60 == 0:
@@ -386,11 +389,16 @@ func debug_output(distance_meters: float, time_since_launch: float):
 	if engines_ignited:
 		phase = "ACTIVE GUIDANCE"
 	
+	var facing_angle = rad_to_deg(rotation)
+	var velocity_angle = rad_to_deg(velocity_mps.angle()) if velocity_mps.length() > 0 else 0
+	
 	print("=== TORPEDO STATUS ===")
 	print("  Phase: ", phase)
 	print("  Time since launch: ", time_since_launch, "s")
 	print("  Position: ", global_position)
 	print("  Velocity: ", velocity_mps.length(), " m/s")
+	print("  Facing angle: ", facing_angle, "°")
+	print("  Velocity angle: ", velocity_angle, "°")
 	print("  Lateral distance: ", lateral_distance_traveled, " meters")
 	print("  Distance to target: ", distance_meters, " meters")
 	print("  Tracking mode: ", tracking_mode)
