@@ -142,23 +142,36 @@ func _validate_target() -> bool:
 	
 	return true
 
-# HYBRID TARGET POSITION - This is the key fix!
 func _get_target_position() -> Vector2:
 	if not target_data:
 		return global_position  # Fallback to avoid crashes
 	
-	# STEP 1: Check for direct visual contact first
-	if target_data.target_node and is_instance_valid(target_data.target_node):
-		# Perfect tracking for visual contacts
-		return target_data.target_node.global_position
-	
-	# STEP 2: Fall back to sensor-based tracking with uncertainty
-	if target_data.confidence >= 1.0:
-		# Even sensor data can be perfect sometimes
-		return target_data.predicted_position
-	else:
-		# Apply uncertainty only for imperfect sensor data
-		return target_data.get_uncertain_position()
+	# FIXED: Prioritize data source type over node reference validity
+	match target_data.data_source:
+		TargetData.DataSource.DIRECT_VISUAL:
+			# For direct visual contacts, try node first, then fall back to predicted position
+			if target_data.target_node and is_instance_valid(target_data.target_node):
+				return target_data.target_node.global_position
+			else:
+				# Even if node reference is lost, use predicted position without uncertainty
+				# because this is still a visual contact (TargetManager updates it)
+				return target_data.predicted_position
+		
+		TargetData.DataSource.RADAR_CONTACT, TargetData.DataSource.LIDAR_CONTACT:
+			# Sensor contacts with perfect confidence get no uncertainty
+			if target_data.confidence >= 1.0:
+				return target_data.predicted_position
+			else:
+				# Apply uncertainty for imperfect sensor data
+				return target_data.get_uncertain_position()
+		
+		TargetData.DataSource.ESTIMATED, TargetData.DataSource.LOST_CONTACT:
+			# Always apply uncertainty for estimated/lost contacts
+			return target_data.get_uncertain_position()
+		
+		_:
+			# Fallback - shouldn't happen
+			return target_data.predicted_position
 
 # Get target velocity using hybrid approach
 func _get_target_velocity() -> Vector2:
