@@ -3,7 +3,7 @@ extends Area2D
 class_name Torpedo
 
 # Torpedo specifications
-@export var max_acceleration: float = 2943.0    # 350 Gs in m/s²
+@export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
 @export var proximity_meters: float = 10.0       # Auto-detonate range
 
 # ENHANCED LAUNCH SYSTEM
@@ -12,8 +12,8 @@ class_name Torpedo
 @export var engine_ignition_delay: float = 1.6       # Seconds before engines ignite
 
 # SMOOTH TRANSITION SYSTEM
-@export var transition_duration: float = 3.2        # Time to smoothly transition guidance
-@export var rotation_transition_duration: float = 5.0 # Time to smoothly rotate to velocity direction
+@export var transition_duration: float = 1.6        # Time to smoothly transition guidance
+@export var rotation_transition_duration: float = 3.2 # Time to smoothly rotate to velocity direction
 @export var guidance_ramp_duration: float = 0.8      # Time to ramp up guidance strength
 
 # Launch state tracking
