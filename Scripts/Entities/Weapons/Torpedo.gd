@@ -1,15 +1,20 @@
-# Enhanced Torpedo.gd with lateral launch movement
+# Enhanced Torpedo.gd with smooth transition from lateral launch to guidance
 extends Area2D
 class_name Torpedo
 
 # Torpedo specifications
-@export var max_acceleration: float = 1470.0    # 150 Gs in m/s²
+@export var max_acceleration: float = 2943.0    # 350 Gs in m/s²
 @export var proximity_meters: float = 10.0       # Auto-detonate range
 
 # ENHANCED LAUNCH SYSTEM
-@export var lateral_launch_velocity: float = 200.0   # Much stronger lateral impulse (m/s)
-@export var lateral_launch_distance: float = 150.0   # Distance to travel laterally (meters)
-@export var engine_ignition_delay: float = 0.8       # Seconds before engines ignite
+@export var lateral_launch_velocity: float = 60.0   # Much stronger lateral impulse (m/s)
+@export var lateral_launch_distance: float = 80.0   # Distance to travel laterally (meters)
+@export var engine_ignition_delay: float = 1.6       # Seconds before engines ignite
+
+# SMOOTH TRANSITION SYSTEM
+@export var transition_duration: float = 3.2        # Time to smoothly transition guidance
+@export var rotation_transition_duration: float = 5.0 # Time to smoothly rotate to velocity direction
+@export var guidance_ramp_duration: float = 0.8      # Time to ramp up guidance strength
 
 # Launch state tracking
 var launch_side: int = 1  # 1 for right, -1 for left (set by launcher)
@@ -17,6 +22,16 @@ var engines_ignited: bool = false
 var launch_start_time: float = 0.0
 var lateral_distance_traveled: float = 0.0
 var initial_facing_direction: Vector2  # Store the ship's facing direction at launch
+
+# Smooth transition state
+var engine_ignition_time: float = 0.0
+var transition_progress: float = 0.0      # 0.0 to 1.0 for guidance transition
+var rotation_progress: float = 0.0       # 0.0 to 1.0 for rotation transition
+var guidance_strength: float = 0.0       # 0.0 to 1.0 for guidance ramp-up
+
+# Target rotation tracking
+var target_rotation: float = 0.0
+var initial_rotation: float = 0.0
 
 # Intercept guidance parameters (only active after engine ignition)
 @export var navigation_constant: float = 3.0     # Proportional navigation gain
@@ -57,6 +72,8 @@ func _ready():
 	print("  Launch side: ", "RIGHT" if launch_side > 0 else "LEFT")
 	print("  Lateral launch velocity: ", lateral_launch_velocity, " m/s")
 	print("  Engine ignition delay: ", engine_ignition_delay, " seconds")
+	print("  Transition duration: ", transition_duration, " seconds")
+	print("  Rotation transition: ", rotation_transition_duration, " seconds")
 	
 	if not target_data and target_id.is_empty():
 		print("No target data or ID set - destroying torpedo")
@@ -95,6 +112,7 @@ func _ready():
 	
 	# Torpedo FACES the same direction as the ship (not the movement direction)
 	rotation = ship_forward.angle()
+	initial_rotation = rotation  # Store initial rotation for smooth transition
 	
 	print("  Ship forward direction: ", ship_forward)
 	print("  Side direction: ", side_direction)
@@ -123,6 +141,7 @@ func _physics_process(delta):
 	# Check if engines should ignite
 	if not engines_ignited and should_ignite_engines(time_since_launch):
 		ignite_engines()
+		engine_ignition_time = current_time
 	
 	var target_pos = _get_target_position()
 	var distance_to_target_pixels = global_position.distance_to(target_pos)
@@ -135,13 +154,18 @@ func _physics_process(delta):
 	
 	# Apply appropriate movement logic based on engine state
 	if engines_ignited:
-		# ACTIVE GUIDANCE: Use intercept calculations
-		var commanded_acceleration = calculate_intercept_guidance(delta)
+		# Update transition progress
+		var time_since_ignition = current_time - engine_ignition_time
+		transition_progress = clamp(time_since_ignition / transition_duration, 0.0, 1.0)
+		rotation_progress = clamp(time_since_ignition / rotation_transition_duration, 0.0, 1.0)
+		guidance_strength = clamp(time_since_ignition / guidance_ramp_duration, 0.0, 1.0)
+		
+		# SMOOTH GUIDANCE: Gradually apply intercept calculations
+		var commanded_acceleration = calculate_smooth_guidance(delta)
 		velocity_mps += commanded_acceleration * delta
 		
-		# When engines are active, orient torpedo to face movement direction
-		if velocity_mps.length() > 10.0:
-			rotation = velocity_mps.angle()
+		# SMOOTH ROTATION: Gradually rotate from initial direction to velocity direction
+		update_smooth_rotation(delta)
 	else:
 		# LATERAL LAUNCH PHASE: Continue lateral movement
 		# Torpedo keeps facing the original ship direction
@@ -182,22 +206,33 @@ func ignite_engines():
 	# Initialize guidance system
 	previous_los = to_target
 	
-	# Add initial forward thrust toward target
-	var forward_impulse = to_target * 150.0  # Initial boost toward target
-	velocity_mps += forward_impulse
+	# SMOOTH TRANSITION: Don't add sudden impulse, let guidance system smoothly take over
+	# The guidance system will gradually steer toward the target
 	
-	print("  Post-ignition velocity: ", velocity_mps.length(), " m/s")
+	print("  Smooth transition initialized")
 	print("======================")
 
-# Enhanced guidance system (same as before but with better LOS rate calculation)
-func calculate_intercept_guidance(delta: float) -> Vector2:
+func update_smooth_rotation(delta: float):
+	if velocity_mps.length() < 10.0:
+		return  # Don't rotate if moving very slowly
+	
+	# Calculate target rotation (direction of velocity)
+	target_rotation = velocity_mps.angle()
+	
+	# Smooth interpolation between initial rotation and target rotation
+	var current_target = lerp_angle(initial_rotation, target_rotation, rotation_progress)
+	
+	# Apply smooth rotation with easing
+	var rotation_speed = 3.0 * (1.0 + rotation_progress)  # Speed up rotation as we transition
+	rotation = rotate_toward(rotation, current_target, rotation_speed * delta)
+
+# Enhanced guidance system with smooth transition
+func calculate_smooth_guidance(delta: float) -> Vector2:
 	if not engines_ignited:
 		return Vector2.ZERO
 	
-	# Calculate proportional navigation component
+	# Calculate normal guidance commands
 	var pn_command = calculate_proportional_navigation(delta)
-	
-	# Calculate direct intercept component  
 	var direct_command = calculate_direct_intercept(delta)
 	
 	# Calculate dynamic mixing based on flight conditions
@@ -221,7 +256,29 @@ func calculate_intercept_guidance(delta: float) -> Vector2:
 	
 	# Combine commands with dynamic weighting
 	var pn_weight = 1.0 - effective_direct_weight
-	var final_command = pn_command * pn_weight + direct_command * effective_direct_weight
+	var guidance_command = pn_command * pn_weight + direct_command * effective_direct_weight
+	
+	# SMOOTH TRANSITION: Gradually ramp up guidance strength
+	# During early transition, add a gentle steering toward target
+	var gentle_steering = Vector2.ZERO
+	if transition_progress < 1.0:
+		var target_pos = _get_target_position()
+		var to_target = (target_pos - global_position).normalized()
+		var current_velocity_normalized = velocity_mps.normalized()
+		
+		# Calculate gentle steering perpendicular to current velocity
+		var perpendicular = Vector2(-current_velocity_normalized.y, current_velocity_normalized.x)
+		var steering_amount = to_target.dot(perpendicular)
+		
+		# Apply gentle steering (much less aggressive than full guidance)
+		gentle_steering = perpendicular * steering_amount * max_acceleration * 0.3
+	
+	# Blend between gentle steering and full guidance based on transition progress
+	var transition_factor = smoothstep(0.0, 1.0, transition_progress)  # Smooth S-curve
+	var final_command = lerp(gentle_steering, guidance_command, transition_factor)
+	
+	# Apply guidance strength ramp-up
+	final_command *= guidance_strength
 	
 	# Limit maximum acceleration
 	if final_command.length() > max_acceleration:
@@ -242,7 +299,7 @@ func calculate_proportional_navigation(delta: float) -> Vector2:
 	
 	var los_unit = los_vector / range_to_target
 	
-	# FIXED: Calculate line of sight rate with proper direction
+	# Calculate line of sight rate with proper direction
 	var los_rate_vector = Vector2.ZERO
 	if previous_los.length() > 0.1 and delta > 0:
 		var los_change = los_unit - previous_los
@@ -376,10 +433,12 @@ func _impact():
 	print("  Flight time: ", (Time.get_ticks_msec() / 1000.0) - launch_time, " seconds")
 	print("  Distance traveled: ", total_distance_traveled, " meters")
 	print("  Engines ignited: ", engines_ignited)
+	print("  Final transition progress: ", transition_progress)
+	print("  Final rotation progress: ", rotation_progress)
+	print("  Final guidance strength: ", guidance_strength)
 	
 	queue_free()
 
-# FIXED: Removed unused parameter to fix warning
 func debug_output(distance_meters: float, time_since_launch: float):
 	var tracking_mode = "SENSOR"
 	if target_data.target_node and is_instance_valid(target_data.target_node):
@@ -387,10 +446,13 @@ func debug_output(distance_meters: float, time_since_launch: float):
 	
 	var phase = "LATERAL LAUNCH"
 	if engines_ignited:
-		phase = "ACTIVE GUIDANCE"
+		if transition_progress < 1.0:
+			phase = "TRANSITIONING (%.1f%%)" % (transition_progress * 100.0)
+		else:
+			phase = "ACTIVE GUIDANCE"
 	
 	var facing_angle = rad_to_deg(rotation)
-	var velocity_angle = rad_to_deg(velocity_mps.angle()) if velocity_mps.length() > 0 else 0
+	var velocity_angle = rad_to_deg(velocity_mps.angle()) if velocity_mps.length() > 0 else 0.0
 	
 	print("=== TORPEDO STATUS ===")
 	print("  Phase: ", phase)
@@ -402,6 +464,9 @@ func debug_output(distance_meters: float, time_since_launch: float):
 	print("  Lateral distance: ", lateral_distance_traveled, " meters")
 	print("  Distance to target: ", distance_meters, " meters")
 	print("  Tracking mode: ", tracking_mode)
+	print("  Transition: %.1f%%, Rotation: %.1f%%, Guidance: %.1f%%" % [
+		transition_progress * 100.0, rotation_progress * 100.0, guidance_strength * 100.0
+	])
 	print("=====================")
 
 # Methods called by launcher
