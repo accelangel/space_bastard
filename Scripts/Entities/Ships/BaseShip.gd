@@ -33,7 +33,7 @@ func _ready():
 	if has_node("/root/ShipManager"):
 		get_node("/root/ShipManager").register_ship(self)
 
-func _physics_process(delta):
+func _physics_process(_delta):
 	# Update EntityManager with our new position
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager and entity_id:

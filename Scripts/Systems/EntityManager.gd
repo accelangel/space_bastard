@@ -63,7 +63,7 @@ class EntityData:
 	var entity_id: String
 	var node_ref: Node2D
 	var entity_type: EntityType
-	var faction: FactionType
+	var faction_type: FactionType  # Renamed to avoid shadowing
 	var state: EntityState
 	
 	# Spatial data
@@ -82,11 +82,11 @@ class EntityData:
 	var last_update_time: float
 	var custom_data: Dictionary = {}
 	
-	func _init(id: String, node: Node2D, type: EntityType, faction: FactionType):
+	func _init(id: String, node: Node2D, type: EntityType, faction_val: FactionType):
 		entity_id = id
 		node_ref = node
 		entity_type = type
-		faction = faction
+		faction_type = faction_val
 		state = EntityState.SPAWNING
 		position = node.global_position if node else Vector2.ZERO
 		velocity = Vector2.ZERO
@@ -111,7 +111,7 @@ class EntityData:
 	
 	func get_debug_info() -> String:
 		var type_name = EntityType.keys()[entity_type]
-		var faction_name = FactionType.keys()[faction]
+		var faction_name = FactionType.keys()[faction_type]
 		var state_name = EntityState.keys()[state]
 		return "%s [%s:%s:%s] at %s" % [entity_id, type_name, faction_name, state_name, position]
 
@@ -120,9 +120,11 @@ class SpatialGrid:
 	var grid: Dictionary = {}  # Vector2i -> Array[String] (entity_ids)
 	var cell_size: float
 	var entity_positions: Dictionary = {}  # entity_id -> Vector2i (grid cell)
+	var entity_manager_ref: Node  # Reference to EntityManager
 	
-	func _init(size: float):
+	func _init(size: float, manager_ref: Node):
 		cell_size = size
+		entity_manager_ref = manager_ref
 	
 	func get_cell_coord(position: Vector2) -> Vector2i:
 		return Vector2i(
@@ -166,7 +168,7 @@ class SpatialGrid:
 				if grid.has(cell):
 					for entity_id in grid[cell]:
 						# Additional distance check since cells are square
-						var entity_pos = EntityManager.get_entity_position(entity_id)
+						var entity_pos = entity_manager_ref.get_entity_position(entity_id)
 						if entity_pos.distance_squared_to(center) <= radius_squared:
 							result.append(entity_id)
 		
@@ -183,14 +185,14 @@ class SpatialGrid:
 				var cell = Vector2i(x, y)
 				if grid.has(cell):
 					for entity_id in grid[cell]:
-						var entity_pos = EntityManager.get_entity_position(entity_id)
+						var entity_pos = entity_manager_ref.get_entity_position(entity_id)
 						if rect.has_point(entity_pos):
 							result.append(entity_id)
 		
 		return result
 
 func _ready():
-	spatial_grid = SpatialGrid.new(grid_cell_size)
+	spatial_grid = SpatialGrid.new(grid_cell_size, self)
 	
 	# Connect to SceneTree for automatic cleanup
 	if get_tree():
@@ -215,7 +217,7 @@ func _physics_process(delta):
 		spatial_update_timer = 0.0
 
 # Register a new entity
-func register_entity(node: Node2D, entity_type: EntityType, faction: FactionType = FactionType.NEUTRAL, 
+func register_entity(node: Node2D, entity_type: EntityType, faction_type: FactionType = FactionType.NEUTRAL, 
 					 owner_id: String = "") -> String:
 	if not node or not is_instance_valid(node):
 		push_error("Attempted to register invalid node as entity")
@@ -229,7 +231,7 @@ func register_entity(node: Node2D, entity_type: EntityType, faction: FactionType
 		return entity_id
 	
 	# Create entity data
-	var entity_data = EntityData.new(entity_id, node, entity_type, faction)
+	var entity_data = EntityData.new(entity_id, node, entity_type, faction_type)
 	entity_data.owner_id = owner_id
 	
 	# Determine radius based on entity type
@@ -241,7 +243,7 @@ func register_entity(node: Node2D, entity_type: EntityType, faction: FactionType
 	
 	# Add to type and faction groups
 	_add_to_group(entities_by_type, entity_type, entity_id)
-	_add_to_group(entities_by_faction, faction, entity_id)
+	_add_to_group(entities_by_faction, faction_type, entity_id)
 	
 	# Queue for spatial indexing
 	pending_spawns.append(entity_data)
@@ -368,9 +370,9 @@ func get_entities_by_type(entity_types: Array[EntityType]) -> Array[EntityData]:
 func get_entities_by_faction(factions: Array[FactionType]) -> Array[EntityData]:
 	var result: Array[EntityData] = []
 	
-	for faction in factions:
-		if entities_by_faction.has(faction):
-			for entity_id in entities_by_faction[faction]:
+	for faction_type in factions:
+		if entities_by_faction.has(faction_type):
+			for entity_id in entities_by_faction[faction_type]:
 				if entities.has(entity_id):
 					result.append(entities[entity_id])
 	
@@ -466,7 +468,7 @@ func _destroy_entity(entity_id: String):
 	
 	# Remove from type and faction groups
 	_remove_from_group(entities_by_type, entity_data.entity_type, entity_id)
-	_remove_from_group(entities_by_faction, entity_data.faction, entity_id)
+	_remove_from_group(entities_by_faction, entity_data.faction_type, entity_id)
 	
 	# Clean up targeting relationships
 	for target_id in entity_data.target_ids:
@@ -547,7 +549,7 @@ func _filter_entities(entity_ids: Array[String],
 			continue
 		
 		# Filter by faction
-		if factions.size() > 0 and entity_data.faction not in factions:
+		if factions.size() > 0 and entity_data.faction_type not in factions:
 			continue
 		
 		# Filter by state
@@ -583,7 +585,7 @@ func get_debug_info() -> String:
 		var type_key = EntityType.keys()[entity_data.entity_type]
 		by_type_counts[type_key] = by_type_counts.get(type_key, 0) + 1
 		
-		var faction_key = FactionType.keys()[entity_data.faction]
+		var faction_key = FactionType.keys()[entity_data.faction_type]
 		by_faction_counts[faction_key] = by_faction_counts.get(faction_key, 0) + 1
 	
 	return "Entities: %d total, %d active | Created: %d, Destroyed: %d | Queries this frame: %d" % [
