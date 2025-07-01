@@ -61,24 +61,10 @@ var previous_error: Vector2 = Vector2.ZERO
 var integral_error: Vector2 = Vector2.ZERO
 var integral_decay: float = 0.95
 
-# Debug tracking
-var launch_time: float = 0.0
-var total_distance_traveled: float = 0.0
-
 func _ready():
-	launch_time = Time.get_ticks_msec() / 1000.0
-	launch_start_time = launch_time
-	
-	print("TORPEDO _ready() called at time: ", launch_time)
-	print("  Initial position: ", global_position)
-	print("  Launch side: ", "RIGHT" if launch_side > 0 else "LEFT")
-	print("  Lateral launch velocity: ", lateral_launch_velocity, " m/s")
-	print("  Engine ignition delay: ", engine_ignition_delay, " seconds")
-	print("  Transition duration: ", transition_duration, " seconds")
-	print("  Rotation transition: ", rotation_transition_duration, " seconds")
+	launch_start_time = Time.get_ticks_msec() / 1000.0
 	
 	if not target_data and target_id.is_empty():
-		print("No target data or ID set - destroying torpedo")
 		queue_free()
 		return
 	
@@ -88,14 +74,11 @@ func _ready():
 		if target_manager and target_manager.has_method("get_target_data"):
 			target_data = target_manager.get_target_data(target_id)
 		if not target_data:
-			print("Could not find target data for ID: ", target_id)
 			queue_free()
 			return
 	
 	if meters_per_pixel <= 0:
-		print("ERROR: Invalid meters_per_pixel value: ", meters_per_pixel)
 		meters_per_pixel = WorldSettings.meters_per_pixel
-		print("  Using fallback from WorldSettings: ", meters_per_pixel)
 	
 	# LATERAL LAUNCH: Launch sideways relative to ship direction
 	var ship_forward = Vector2.UP  # Default ship forward direction
@@ -115,15 +98,6 @@ func _ready():
 	# Torpedo FACES the same direction as the ship (not the movement direction)
 	rotation = ship_forward.angle()
 	initial_rotation = rotation  # Store initial rotation for smooth transition
-	
-	print("  Ship forward direction: ", ship_forward)
-	print("  Side direction: ", side_direction)
-	print("  Applied launch velocity: ", velocity_mps, " m/s")
-	print("  Torpedo facing angle: ", rad_to_deg(rotation), " degrees")
-	print("  Velocity angle: ", rad_to_deg(velocity_mps.angle()), " degrees")
-	
-	var target_pos = _get_target_position()
-	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
 	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
@@ -147,11 +121,9 @@ func _ready():
 			if target_entity:
 				entity_manager.set_targeting_relationship(entity_id, target_entity.entity_id)
 
-
 func _physics_process(delta):
 	# Validate target data
 	if not _validate_target():
-		print("Target lost or invalid - destroying torpedo")
 		queue_free()
 		return
 	
@@ -197,18 +169,10 @@ func _physics_process(delta):
 		rotation = initial_facing_direction.angle()
 		# No acceleration applied - torpedo coasts laterally
 	
-	# Track total distance traveled
-	var speed_mps = velocity_mps.length()
-	total_distance_traveled += speed_mps * delta
-	
 	# Convert to pixel movement and update position
 	var velocity_pixels_per_second = velocity_mps / meters_per_pixel
 	global_position += velocity_pixels_per_second * delta
 	
-	# Debug output
-	if Engine.get_process_frames() % 60 == 0:
-		debug_output(distance_to_target_meters, time_since_launch)
-		
 	# Update EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager and entity_id:
@@ -226,21 +190,8 @@ func ignite_engines():
 	var target_pos = _get_target_position()
 	var to_target = (target_pos - global_position).normalized()
 	
-	print("=== ENGINES IGNITED ===")
-	print("  Time since launch: ", Time.get_ticks_msec() / 1000.0 - launch_start_time, " seconds")
-	print("  Lateral distance traveled: ", lateral_distance_traveled, " meters")
-	print("  Current position: ", global_position)
-	print("  Current velocity: ", velocity_mps.length(), " m/s")
-	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
-	
 	# Initialize guidance system
 	previous_los = to_target
-	
-	# SMOOTH TRANSITION: Don't add sudden impulse, let guidance system smoothly take over
-	# The guidance system will gradually steer toward the target
-	
-	print("  Smooth transition initialized")
-	print("======================")
 
 func update_smooth_rotation(delta: float):
 	if velocity_mps.length() < 10.0:
@@ -418,7 +369,6 @@ func _validate_target() -> bool:
 		return target_data.validate_target_node()
 	
 	if not target_data.is_valid():
-		print("Target data became invalid (age: ", target_data.data_age, "s, confidence: ", target_data.confidence, ")")
 		return false
 	
 	return true
@@ -464,38 +414,7 @@ func _impact():
 	if entity_manager and entity_id:
 		entity_manager.queue_destroy_entity(entity_id)
 	
-	print("TORPEDO IMPACT!")
 	queue_free()
-
-func debug_output(distance_meters: float, time_since_launch: float):
-	var tracking_mode = "SENSOR"
-	if target_data.target_node and is_instance_valid(target_data.target_node):
-		tracking_mode = "VISUAL"
-	
-	var phase = "LATERAL LAUNCH"
-	if engines_ignited:
-		if transition_progress < 1.0:
-			phase = "TRANSITIONING (%.1f%%)" % (transition_progress * 100.0)
-		else:
-			phase = "ACTIVE GUIDANCE"
-	
-	var facing_angle = rad_to_deg(rotation)
-	var velocity_angle = rad_to_deg(velocity_mps.angle()) if velocity_mps.length() > 0 else 0.0
-	
-	print("=== TORPEDO STATUS ===")
-	print("  Phase: ", phase)
-	print("  Time since launch: ", time_since_launch, "s")
-	print("  Position: ", global_position)
-	print("  Velocity: ", velocity_mps.length(), " m/s")
-	print("  Facing angle: ", facing_angle, "°")
-	print("  Velocity angle: ", velocity_angle, "°")
-	print("  Lateral distance: ", lateral_distance_traveled, " meters")
-	print("  Distance to target: ", distance_meters, " meters")
-	print("  Tracking mode: ", tracking_mode)
-	print("  Transition: %.1f%%, Rotation: %.1f%%, Guidance: %.1f%%" % [
-		transition_progress * 100.0, rotation_progress * 100.0, guidance_strength * 100.0
-	])
-	print("=====================")
 
 # Methods called by launcher
 func set_target(target: Node2D):

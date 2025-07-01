@@ -21,8 +21,6 @@ var meters_per_pixel: float:
 
 func _ready():
 	parent_ship = get_parent()
-	print("TorpedoLauncher initialized with scale: ", meters_per_pixel, " m/px from WorldSettings")
-	print("  Launch system: Alternating lateral launches")
 
 func _process(_delta):
 	# Clean up destroyed torpedoes
@@ -36,7 +34,6 @@ func _process(_delta):
 
 func launch_torpedo(target: Node2D) -> Torpedo:
 	if not can_launch():
-		print("Cannot launch: cooldown or max torpedoes reached")
 		return null
 	
 	if not torpedo_scene:
@@ -54,8 +51,6 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	var launch_side = current_launch_side
 	current_launch_side *= -1  # Flip for next launch
 	
-	var side_name = "RIGHT" if launch_side > 0 else "LEFT"
-	
 	# Set up the torpedo BEFORE adding to scene tree
 	torpedo.global_position = global_position
 	torpedo.set_launcher(parent_ship)
@@ -63,25 +58,7 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	torpedo.set_meters_per_pixel(meters_per_pixel)
 	torpedo.set_launch_side(launch_side)  # NEW: Set which side to launch toward
 	
-	var parent_name: String = "None"
-	if parent_ship != null:
-		parent_name = parent_ship.name
-	
-	var target_name: String = "None"
-	if target != null:
-		target_name = target.name
-	
 	torpedoes_launched += 1
-	
-	print("=== LAUNCHING TORPEDO #", torpedoes_launched, " ===")
-	print("  Launcher position: ", global_position)
-	print("  Parent ship: ", parent_name)
-	print("  Target: ", target_name)
-	print("  Launch side: ", side_name)
-	print("  World scale: ", meters_per_pixel, " m/pixel")
-	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
-	print("  Next torpedo will launch: ", "LEFT" if current_launch_side < 0 else "RIGHT")
-	print("==================================")
 	
 	# Add to scene tree (triggers _ready())
 	get_tree().root.add_child(torpedo)
@@ -90,7 +67,6 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	active_torpedoes.append(torpedo)
 	last_launch_time = get_current_time()
 	
-	print("Torpedo launched! Active: ", active_torpedoes.size(), "/", max_torpedoes)
 	return torpedo
 
 func can_launch() -> bool:
@@ -110,4 +86,3 @@ func get_current_time() -> float:
 func reset_launch_pattern():
 	current_launch_side = 1
 	torpedoes_launched = 0
-	print("Launch pattern reset - next torpedo will launch RIGHT")

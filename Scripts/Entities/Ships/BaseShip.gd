@@ -27,7 +27,6 @@ func _ready():
 		var entity_type = _get_entity_type()
 		var faction = _get_faction_type()
 		entity_id = entity_manager.register_entity(self, entity_type, faction)
-		print("Ship registered with EntityManager: ", entity_id)
 	
 	# Keep ShipManager registration for backward compatibility
 	if has_node("/root/ShipManager"):
