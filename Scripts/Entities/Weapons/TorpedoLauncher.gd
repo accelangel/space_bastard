@@ -1,3 +1,4 @@
+# Enhanced TorpedoLauncher.gd with alternating launch sides
 extends Node2D
 class_name TorpedoLauncher
 
@@ -9,6 +10,10 @@ var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0
 var parent_ship: Node2D
 
+# ALTERNATING LAUNCH SYSTEM
+var current_launch_side: int = 1  # 1 for right, -1 for left
+var torpedoes_launched: int = 0   # Track total launched for alternating
+
 # Get meters_per_pixel directly from WorldSettings singleton
 var meters_per_pixel: float:
 	get:
@@ -17,6 +22,7 @@ var meters_per_pixel: float:
 func _ready():
 	parent_ship = get_parent()
 	print("TorpedoLauncher initialized with scale: ", meters_per_pixel, " m/px from WorldSettings")
+	print("  Launch system: Alternating lateral launches")
 
 func _process(_delta):
 	# Clean up destroyed torpedoes
@@ -43,12 +49,19 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 		push_error("Torpedo scene must have Torpedo script!")
 		return null
 	
+	# ALTERNATING LAUNCH SIDE LOGIC
+	# Alternate sides with each launch to prevent collisions
+	var launch_side = current_launch_side
+	current_launch_side *= -1  # Flip for next launch
+	
+	var side_name = "RIGHT" if launch_side > 0 else "LEFT"
+	
 	# Set up the torpedo BEFORE adding to scene tree
-	# This ensures _ready() is called with correct data
 	torpedo.global_position = global_position
 	torpedo.set_launcher(parent_ship)
 	torpedo.set_target(target)
-	torpedo.set_meters_per_pixel(meters_per_pixel)  # Pass current WorldSettings value
+	torpedo.set_meters_per_pixel(meters_per_pixel)
+	torpedo.set_launch_side(launch_side)  # NEW: Set which side to launch toward
 	
 	var parent_name: String = "None"
 	if parent_ship != null:
@@ -58,15 +71,19 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	if target != null:
 		target_name = target.name
 	
-	print("=== LAUNCHING TORPEDO ===")
+	torpedoes_launched += 1
+	
+	print("=== LAUNCHING TORPEDO #", torpedoes_launched, " ===")
 	print("  Launcher position: ", global_position)
 	print("  Parent ship: ", parent_name)
 	print("  Target: ", target_name)
+	print("  Launch side: ", side_name)
 	print("  World scale: ", meters_per_pixel, " m/pixel")
 	print("  Distance to target: ", global_position.distance_to(target.global_position) * meters_per_pixel, " meters")
-	print("========================")
+	print("  Next torpedo will launch: ", "LEFT" if current_launch_side < 0 else "RIGHT")
+	print("==================================")
 	
-	# NOW add to scene tree (this triggers _ready())
+	# Add to scene tree (triggers _ready())
 	get_tree().root.add_child(torpedo)
 	
 	# Track the torpedo
@@ -88,3 +105,9 @@ func get_active_torpedo_count() -> int:
 
 func get_current_time() -> float:
 	return Time.get_ticks_msec() / 1000.0
+
+# Optional: Reset alternating pattern (useful for testing)
+func reset_launch_pattern():
+	current_launch_side = 1
+	torpedoes_launched = 0
+	print("Launch pattern reset - next torpedo will launch RIGHT")
