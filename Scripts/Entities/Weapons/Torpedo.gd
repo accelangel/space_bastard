@@ -77,15 +77,30 @@ func _ready():
 		meters_per_pixel = WorldSettings.meters_per_pixel
 		print("  Using fallback from WorldSettings: ", meters_per_pixel)
 	
-	# LATERAL LAUNCH: Pure sideways velocity initially
+	# FIXED LATERAL LAUNCH: Launch parallel to ship direction, offset to the side
+	var ship_forward = Vector2.UP  # Default ship forward direction
+	if launcher_ship:
+		# Get the ship's forward direction (assuming ships face "up" in local coordinates)
+		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
+	
+	# Calculate side direction perpendicular to ship's forward direction
+	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
+	
+	# Start with velocity in ship's forward direction (parallel launch)
+	velocity_mps = ship_forward * lateral_launch_velocity
+	
+	# Optional: Add slight sideways component for clearance (much smaller than forward)
+	var sideways_component = side_direction * (lateral_launch_velocity * 0.1)  # 10% sideways
+	velocity_mps += sideways_component
+	
+	# Orient torpedo to face the movement direction
+	rotation = velocity_mps.angle()
+	
+	print("  Ship forward direction: ", ship_forward)
+	print("  Applied launch velocity: ", velocity_mps, " m/s")
+	print("  Torpedo rotation: ", rad_to_deg(rotation), " degrees")
+	
 	var target_pos = _get_target_position()
-	var to_target = (target_pos - global_position).normalized()
-	var perpendicular = Vector2(-to_target.y, to_target.x) * launch_side
-	
-	# Start with ONLY lateral velocity - no forward component yet
-	velocity_mps = perpendicular * lateral_launch_velocity
-	
-	print("  Applied lateral launch: ", velocity_mps, " m/s")
 	print("  Distance to target: ", global_position.distance_to(target_pos) * meters_per_pixel, " meters")
 
 func _physics_process(delta):
@@ -122,8 +137,8 @@ func _physics_process(delta):
 		var commanded_acceleration = calculate_intercept_guidance(delta)
 		velocity_mps += commanded_acceleration * delta
 	else:
-		# LATERAL LAUNCH PHASE: Continue lateral movement only
-		# No acceleration applied - torpedo coasts laterally
+		# LATERAL LAUNCH PHASE: Continue forward movement (parallel to ship)
+		# No acceleration applied - torpedo coasts forward
 		pass
 	
 	# Track total distance traveled
@@ -140,7 +155,7 @@ func _physics_process(delta):
 	
 	# Debug output
 	if Engine.get_process_frames() % 60 == 0:
-		debug_output(distance_to_target_meters, distance_to_target_pixels, time_since_launch)
+		debug_output(distance_to_target_meters, time_since_launch)
 
 func should_ignite_engines(time_since_launch: float) -> bool:
 	# Ignite engines based on EITHER time OR distance criteria
@@ -244,9 +259,6 @@ func calculate_proportional_navigation(delta: float) -> Vector2:
 	var acceleration_command = los_rate_vector * lateral_command
 	
 	return acceleration_command
-
-# [Rest of the functions remain the same: calculate_direct_intercept, calculate_intercept_point, 
-#  _validate_target, _get_target_position, _get_target_velocity, _impact]
 
 func calculate_direct_intercept(delta: float) -> Vector2:
 	var target_pos = _get_target_position()
@@ -364,7 +376,8 @@ func _impact():
 	
 	queue_free()
 
-func debug_output(distance_meters: float, distance_pixels: float, time_since_launch: float):
+# FIXED: Removed unused parameter to fix warning
+func debug_output(distance_meters: float, time_since_launch: float):
 	var tracking_mode = "SENSOR"
 	if target_data.target_node and is_instance_valid(target_data.target_node):
 		tracking_mode = "VISUAL"
