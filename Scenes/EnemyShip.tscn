@@ -1,7 +1,8 @@
-[gd_scene load_steps=4 format=3 uid="uid://ihisk0qiusis"]
+[gd_scene load_steps=5 format=3 uid="uid://ihisk0qiusis"]
 
 [ext_resource type="Script" path="res://Scripts/Entities/Ships/EnemyShip.gd" id="1_l7pq4"]
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
+[ext_resource type="PackedScene" uid="uid://vi2i12x2q47s" path="res://Scenes/PointDefenseCannon.tscn" id="3_s8ewm"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
 radius = 120.193
@@ -20,3 +21,6 @@ shape = SubResource("CapsuleShape2D_hb6w0")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
 texture = ExtResource("1_pf77x")
+
+[node name="PointDefenseCannon" parent="." instance=ExtResource("3_s8ewm")]
+position = Vector2(45, -284)

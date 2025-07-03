@@ -1,9 +1,10 @@
-[gd_scene load_steps=6 format=3 uid="uid://caeufsiepjyek"]
+[gd_scene load_steps=7 format=3 uid="uid://caeufsiepjyek"]
 
 [ext_resource type="Script" path="res://Scripts/Entities/Ships/PlayerShip.gd" id="1_jqy2v"]
 [ext_resource type="Texture2D" uid="uid://bctq41y8vay8u" path="res://Art/PlayerShip.png" id="1_k28x5"]
 [ext_resource type="Script" path="res://Scripts/Entities/Weapons/TorpedoLauncher.gd" id="2_lovhs"]
 [ext_resource type="PackedScene" uid="uid://8pxodvf5qpvg" path="res://Scenes/Torpedo.tscn" id="3_7tlgh"]
+[ext_resource type="PackedScene" uid="uid://vi2i12x2q47s" path="res://Scenes/PointDefenseCannon.tscn" id="5_5ugsn"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_j8x4e"]
 radius = 93.3436
@@ -26,3 +27,6 @@ texture = ExtResource("1_k28x5")
 [node name="TorpedoLauncher" type="Node2D" parent="."]
 script = ExtResource("2_lovhs")
 torpedo_scene = ExtResource("3_7tlgh")
+
+[node name="PointDefenseCannon" parent="." instance=ExtResource("5_5ugsn")]
+position = Vector2(8, -305)

@@ -9,13 +9,13 @@ var entity_id: String  # NEW: EntityManager ID
 @export var proximity_meters: float = 10.0       # Auto-detonate range
 
 # ENHANCED LAUNCH SYSTEM
-@export var lateral_launch_velocity: float = 60.0   # Much stronger lateral impulse (m/s)
-@export var lateral_launch_distance: float = 80.0   # Distance to travel laterally (meters)
-@export var engine_ignition_delay: float = 1.6       # Seconds before engines ignite
+@export var lateral_launch_velocity: float = 80.0   # Much stronger lateral impulse (m/s)
+@export var lateral_launch_distance: float = 40.0   # Distance to travel laterally (meters)
+@export var engine_ignition_delay: float = 0.8       # Seconds before engines ignite
 
 # SMOOTH TRANSITION SYSTEM
-@export var transition_duration: float = 1.6        # Time to smoothly transition guidance
-@export var rotation_transition_duration: float = 3.2 # Time to smoothly rotate to velocity direction
+@export var transition_duration: float = 0.8        # Time to smoothly transition guidance
+@export var rotation_transition_duration: float = 1.6 # Time to smoothly rotate to velocity direction
 @export var guidance_ramp_duration: float = 0.8      # Time to ramp up guidance strength
 
 # Launch state tracking
