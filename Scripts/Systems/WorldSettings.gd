@@ -1,4 +1,4 @@
-# Scripts/Systems/WorldSettings.gd
+# Scripts/Systems/Worl Settings.gd
 extends Node
 
 var meters_per_pixel := 0.25  # Fixed to match your design document

@@ -4,7 +4,7 @@
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
-radius = 94.1811
+radius = 120.193
 height = 581.28
 
 [node name="EnemyShip" type="Node2D" groups=["enemy_ships"]]
