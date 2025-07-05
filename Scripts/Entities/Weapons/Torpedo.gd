@@ -61,12 +61,6 @@ var previous_error: Vector2 = Vector2.ZERO
 var integral_error: Vector2 = Vector2.ZERO
 var integral_decay: float = 0.95
 
-# Minor update to Torpedo.gd _ready() function
-# This ensures torpedoes work with sensor-provided target data
-
-# Minor update to Torpedo.gd _ready() function
-# This ensures torpedoes work with sensor-provided target data
-
 func _ready():
 	launch_start_time = Time.get_ticks_msec() / 1000.0
 	
@@ -152,204 +146,6 @@ func _ready():
 			if target_entity:
 				entity_manager.set_targeting_relationship(entity_id, target_entity.entity_id)
 				print("Torpedo targeting relationship set: ", entity_id, " -> ", target_entity.entity_id)
-
-# Methods called by launcher (ensure compatibility with sensor-based targeting)
-func set_target_node(target: Node2D):
-	if target:
-		target_id = target.name + "_" + str(target.get_instance_id())
-		var target_manager = get_node_or_null("/root/TargetManager")
-		if target_manager and target_manager.has_method("register_target"):
-			target_data = target_manager.register_target(target)
-			print("Torpedo: Registered target with TargetManager: ", target_id)
-		else:
-			target_data = TargetData.new(target_id, target, target.global_position)
-			print("Torpedo: Created direct TargetData: ", target_id)
-	launch_start_time = Time.get_ticks_msec() / 1000.0
-	
-	if not target_data and target_id.is_empty():
-		print("Torpedo: No target data or ID provided, destroying")
-		queue_free()
-		return
-	
-	# Get target data if we only have ID
-	if target_id and not target_data:
-		var target_manager = get_node_or_null("/root/TargetManager")
-		if target_manager and target_manager.has_method("get_target_data"):
-			target_data = target_manager.get_target_data(target_id)
-			if target_data:
-				print("Torpedo: Found target data for ID: ", target_id)
-			else:
-				print("Torpedo: Could not find target data for ID: ", target_id)
-		
-		if not target_data:
-			print("Torpedo: No target data available, destroying")
-			queue_free()
-			return
-	
-	if meters_per_pixel <= 0:
-		meters_per_pixel = WorldSettings.meters_per_pixel
-	
-	# LATERAL LAUNCH: Launch sideways relative to ship direction
-	var ship_forward = Vector2.UP  # Default ship forward direction
-	if launcher_ship:
-		# Get the ship's forward direction (assuming ships face "up" in local coordinates)
-		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
-	
-	# Store the ship's facing direction for the torpedo's orientation
-	initial_facing_direction = ship_forward
-	
-	# Calculate side direction perpendicular to ship's forward direction
-	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
-	
-	# Launch velocity is LATERAL (sideways) to the ship
-	velocity_mps = side_direction * lateral_launch_velocity
-	
-	# Torpedo FACES the same direction as the ship (not the movement direction)
-	rotation = ship_forward.angle()
-	initial_rotation = rotation  # Store initial rotation for smooth transition
-	
-	# Register with EntityManager - FIXED: Use launcher ship's faction
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		var owner_entity_id = ""
-		var torpedo_faction = EntityManager.FactionType.NEUTRAL  # Default fallback
-		
-		if launcher_ship:
-			# Get launcher ship's faction from EntityManager
-			var launcher_entity = entity_manager.get_entity_for_node(launcher_ship)
-			if launcher_entity:
-				owner_entity_id = launcher_entity.entity_id
-				torpedo_faction = launcher_entity.faction_type
-				print("Torpedo inheriting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher ", launcher_ship.name)
-			else:
-				# Fallback: determine faction from ship type
-				if launcher_ship.has_method("_get_faction_type"):
-					torpedo_faction = launcher_ship._get_faction_type()
-					print("Torpedo getting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher method")
-				elif launcher_ship.is_in_group("enemy_ships"):
-					torpedo_faction = EntityManager.FactionType.ENEMY
-					print("Torpedo defaulting to ENEMY faction from group")
-				else:
-					torpedo_faction = EntityManager.FactionType.PLAYER
-					print("Torpedo defaulting to PLAYER faction")
-		
-		entity_id = entity_manager.register_entity(
-			self, 
-			EntityManager.EntityType.TORPEDO,
-			torpedo_faction,
-			owner_entity_id
-		)
-		
-		print("Torpedo registered: ", entity_id, " with faction ", EntityManager.FactionType.keys()[torpedo_faction])
-		
-		# Set targeting relationship if we have a target
-		if target_data and target_data.target_node:
-			var target_entity = entity_manager.get_entity_for_node(target_data.target_node)
-			if target_entity:
-				entity_manager.set_targeting_relationship(entity_id, target_entity.entity_id)
-				print("Torpedo targeting relationship set: ", entity_id, " -> ", target_entity.entity_id)
-
-# Methods called by launcher (ensure compatibility with sensor-based targeting)
-
-# REMOVE the duplicate set_target function from torpedo_sensor_update artifact
-# and UPDATE the existing set_target function in your Torpedo.gd file
-
-# Replace the existing set_target function (around line 636) with this:
-func set_target(target: Node2D):
-	if target:
-		target_id = target.name + "_" + str(target.get_instance_id())
-		var target_manager = get_node_or_null("/root/TargetManager")
-		if target_manager and target_manager.has_method("register_target"):
-			target_data = target_manager.register_target(target)
-			print("Torpedo: Registered target with TargetManager: ", target_id)
-		else:
-			target_data = TargetData.new(target_id, target, target.global_position)
-			print("Torpedo: Created direct TargetData: ", target_id)
-	if target:
-		target_id = target.name + "_" + str(target.get_instance_id())
-		var target_manager = get_node_or_null("/root/TargetManager")
-		if target_manager and target_manager.has_method("register_target"):
-			target_data = target_manager.register_target(target)
-			print("Torpedo: Registered target with TargetManager: ", target_id)
-		else:
-			target_data = TargetData.new(target_id, target, target.global_position)
-			print("Torpedo: Created direct TargetData: ", target_id)
-	launch_start_time = Time.get_ticks_msec() / 1000.0
-	
-	if not target_data and target_id.is_empty():
-		queue_free()
-		return
-	
-	# Get target data if we only have ID
-	if target_id and not target_data:
-		var target_manager = get_node_or_null("/root/TargetManager")
-		if target_manager and target_manager.has_method("get_target_data"):
-			target_data = target_manager.get_target_data(target_id)
-		if not target_data:
-			queue_free()
-			return
-	
-	if meters_per_pixel <= 0:
-		meters_per_pixel = WorldSettings.meters_per_pixel
-	
-	# LATERAL LAUNCH: Launch sideways relative to ship direction
-	var ship_forward = Vector2.UP  # Default ship forward direction
-	if launcher_ship:
-		# Get the ship's forward direction (assuming ships face "up" in local coordinates)
-		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
-	
-	# Store the ship's facing direction for the torpedo's orientation
-	initial_facing_direction = ship_forward
-	
-	# Calculate side direction perpendicular to ship's forward direction
-	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
-	
-	# Launch velocity is LATERAL (sideways) to the ship
-	velocity_mps = side_direction * lateral_launch_velocity
-	
-	# Torpedo FACES the same direction as the ship (not the movement direction)
-	rotation = ship_forward.angle()
-	initial_rotation = rotation  # Store initial rotation for smooth transition
-	
-	# Register with EntityManager - FIXED: Use launcher ship's faction
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		var owner_entity_id = ""
-		var torpedo_faction = EntityManager.FactionType.NEUTRAL  # Default fallback
-		
-		if launcher_ship:
-			# Get launcher ship's faction from EntityManager
-			var launcher_entity = entity_manager.get_entity_for_node(launcher_ship)
-			if launcher_entity:
-				owner_entity_id = launcher_entity.entity_id
-				torpedo_faction = launcher_entity.faction_type
-				print("Torpedo inheriting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher ", launcher_ship.name)
-			else:
-				# Fallback: determine faction from ship type
-				if launcher_ship.has_method("_get_faction_type"):
-					torpedo_faction = launcher_ship._get_faction_type()
-					print("Torpedo getting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher method")
-				elif launcher_ship.is_in_group("enemy_ships"):
-					torpedo_faction = EntityManager.FactionType.ENEMY
-					print("Torpedo defaulting to ENEMY faction from group")
-				else:
-					torpedo_faction = EntityManager.FactionType.PLAYER
-					print("Torpedo defaulting to PLAYER faction")
-		
-		entity_id = entity_manager.register_entity(
-			self, 
-			EntityManager.EntityType.TORPEDO,
-			torpedo_faction,
-			owner_entity_id
-		)
-		
-		print("Torpedo registered: ", entity_id, " with faction ", EntityManager.FactionType.keys()[torpedo_faction])
-		
-		# Set targeting relationship if we have a target
-		if target_data and target_data.target_node:
-			var target_entity = entity_manager.get_entity_for_node(target_data.target_node)
-			if target_entity:
-				entity_manager.set_targeting_relationship(entity_id, target_entity.entity_id)
 
 func _physics_process(delta):
 	# Validate target data
@@ -653,8 +449,10 @@ func set_target(target: Node2D):
 		var target_manager = get_node_or_null("/root/TargetManager")
 		if target_manager and target_manager.has_method("register_target"):
 			target_data = target_manager.register_target(target)
+			print("Torpedo: Registered target with TargetManager: ", target_id)
 		else:
 			target_data = TargetData.new(target_id, target, target.global_position)
+			print("Torpedo: Created direct TargetData: ", target_id)
 
 func set_launcher(ship: Node2D):
 	launcher_ship = ship

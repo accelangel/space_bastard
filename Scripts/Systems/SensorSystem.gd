@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - UPDATED for Full Integration
+# Scripts/Systems/SensorSystem.gd - DEBUG VERSION
 extends Node2D
 class_name SensorSystem
 
@@ -16,6 +16,10 @@ var ship_faction: int = 1  # Will be set by parent ship
 # Performance tracking
 var last_scan_count: int = 0
 var total_scans: int = 0
+
+# DEBUG: Add counters
+var debug_torpedo_count: int = 0
+var debug_threat_count: int = 0
 
 class DetectedTarget:
 	var entity_id: String
@@ -123,6 +127,26 @@ func perform_radar_scan():
 	
 	last_scan_count = detected_entities.size()
 	total_scans += 1
+	
+	# DEBUG: Count torpedoes specifically
+	debug_torpedo_count = 0
+	for entity_data in detected_entities:
+		if entity_data.entity_type == EntityManager.EntityType.TORPEDO:
+			debug_torpedo_count += 1
+	
+	# DEBUG: Print detailed scan results for enemy ships
+	if ship_faction == 2:  # Enemy ship
+		print("=== ENEMY SENSOR SCAN DEBUG ===")
+		print("Total entities detected: ", detected_entities.size())
+		print("Torpedoes detected: ", debug_torpedo_count)
+		print("Ship faction: ", ship_faction)
+		print("Scan center: ", scan_center)
+		print("Scan range (pixels): ", range_pixels)
+		
+		for entity_data in detected_entities:
+			if entity_data.entity_type == EntityManager.EntityType.TORPEDO:
+				print("  Torpedo: ", entity_data.entity_id, " faction=", entity_data.faction_type, " type=", EntityManager.EntityType.keys()[entity_data.entity_type])
+		print("=== END SENSOR DEBUG ===")
 	
 	# Process detected entities and register with TargetManager
 	for entity_data in detected_entities:
@@ -289,7 +313,21 @@ func get_detected_enemies() -> Array[DetectedTarget]:
 	else:  # Neutral targets everyone? Or no one?
 		enemy_factions = [EntityManager.FactionType.ENEMY, EntityManager.FactionType.PLAYER]
 	
-	return get_detected_targets([], enemy_factions)
+	var enemies = get_detected_targets([], enemy_factions)
+	
+	# DEBUG: Print detailed enemy detection for enemy ships
+	if ship_faction == 2:  # Enemy ship
+		print("--- ENEMY DETECTION DEBUG ---")
+		print("Ship faction: ", ship_faction)
+		print("Looking for enemy factions: ", enemy_factions)
+		print("Total detected targets: ", detected_targets.size())
+		print("Filtered enemies found: ", enemies.size())
+		
+		for enemy in enemies:
+			print("  Enemy: ", enemy.entity_id, " type=", EntityManager.EntityType.keys()[enemy.entity_type], " faction=", EntityManager.FactionType.keys()[enemy.faction_type])
+		print("--- END ENEMY DEBUG ---")
+	
+	return enemies
 
 # Get detected incoming threats (enemy projectiles)
 func get_incoming_threats() -> Array[DetectedTarget]:
@@ -307,13 +345,42 @@ func get_incoming_threats() -> Array[DetectedTarget]:
 	
 	var threats = get_detected_targets(threat_types, enemy_factions)
 	
+	# DEBUG: Detailed threat analysis for enemy ships
+	if ship_faction == 2:  # Enemy ship
+		print("*** THREAT DETECTION DEBUG ***")
+		print("Ship faction: ", ship_faction)
+		
+		var threat_type_names = []
+		for t in threat_types:
+			threat_type_names.append(EntityManager.EntityType.keys()[t])
+		print("Looking for threat types: ", threat_type_names)
+		
+		var enemy_faction_names = []
+		for f in enemy_factions:
+			enemy_faction_names.append(EntityManager.FactionType.keys()[f])
+		print("From enemy factions: ", enemy_faction_names)
+		print("Raw threats found: ", threats.size())
+		
+		for threat in threats:
+			print("  Threat: ", threat.entity_id, " type=", EntityManager.EntityType.keys()[threat.entity_type], " faction=", EntityManager.FactionType.keys()[threat.faction_type])
+	
 	# Additional filtering: only return threats that are actually heading toward us
 	var incoming_threats: Array[DetectedTarget] = []
 	
 	for threat in threats:
 		if is_threat_incoming(threat):
 			incoming_threats.append(threat)
+			if ship_faction == 2:  # Enemy ship debug
+				print("    INCOMING: ", threat.entity_id)
+		else:
+			if ship_faction == 2:  # Enemy ship debug
+				print("    NOT INCOMING: ", threat.entity_id)
 	
+	if ship_faction == 2:  # Enemy ship
+		print("Final incoming threats: ", incoming_threats.size())
+		print("*** END THREAT DEBUG ***")
+	
+	debug_threat_count = incoming_threats.size()
 	return incoming_threats
 
 # Check if a detected target is heading toward our ship

@@ -28,10 +28,6 @@ texture = ExtResource("1_k28x5")
 [node name="TorpedoLauncher" type="Node2D" parent="."]
 script = ExtResource("2_lovhs")
 torpedo_scene = ExtResource("3_7tlgh")
-launch_cooldown = null
-max_torpedoes = null
-auto_launch_enabled = null
-auto_launch_interval = null
 
 [node name="SensorSystem" type="Node2D" parent="."]
 script = ExtResource("5_dplm1")
