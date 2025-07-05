@@ -36,11 +36,6 @@ func _ready():
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
 		entity_id = entity_manager.register_entity(self, "enemy_ship", faction)
-		
-	# Add PDC system programmatically
-	pdc_system = PDCSystem.new()
-	pdc_system.name = "PDCSystem"
-	add_child(pdc_system)
 	
 	# Connect collision detection
 	area_entered.connect(_on_area_entered)
