@@ -117,7 +117,7 @@ func ClickAndDrag():
 
 func HandleShipSelection():
 	# Handle ship selection on double-click
-	if Input.is_action_just_pressed("ui_accept"):
+	if Input.is_action_just_pressed("select_ship"):
 		handle_mouse_click()
 	
 	# Stop following on escape key
@@ -126,8 +126,7 @@ func HandleShipSelection():
 			stop_following_ship()
 
 func handle_mouse_click():
-	var current_time = Time.get_time_dict_from_system()
-	var current_time_float = current_time.hour * 3600 + current_time.minute * 60 + current_time.second + current_time.microsecond / 1000000.0
+	var current_time_float = Time.get_time_dict_from_system()["hour"] * 3600.0 + Time.get_time_dict_from_system()["minute"] * 60.0 + Time.get_time_dict_from_system()["second"]
 	var current_mouse_pos = get_viewport().get_mouse_position()
 	
 	# Check if this is a double-click
@@ -153,10 +152,10 @@ func select_ship_at_mouse():
 	
 	var results = space_state.intersect_point(query)
 	
-	# Look for ships in the results
+	# Look for ships and torpedoes in the results
 	for result in results:
 		var body = result.collider
-		if body.is_in_group("enemy_ships") or body.is_in_group("player_ships") or body.has_method("get_velocity_mps"):
+		if body.is_in_group("enemy_ships") or body.is_in_group("player_ships") or body.is_in_group("torpedoes") or body.has_method("get_velocity_mps"):
 			start_following_ship(body)
 			print("Now following: ", body.name)
 			return
