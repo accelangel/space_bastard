@@ -49,13 +49,29 @@ func check_collisions():
 	if not entity_manager:
 		return
 	
+	# FIX: Create properly typed arrays for the function parameters
+	var enemy_entity_types: Array[EntityManager.EntityType] = [
+		EntityManager.EntityType.ENEMY_SHIP, 
+		EntityManager.EntityType.TORPEDO, 
+		EntityManager.EntityType.MISSILE
+	]
+	
+	var enemy_factions: Array[EntityManager.FactionType] = [
+		EntityManager.FactionType.ENEMY
+	]
+	
+	var exclude_states: Array[EntityManager.EntityState] = [
+		EntityManager.EntityState.DESTROYED, 
+		EntityManager.EntityState.CLEANUP
+	]
+	
 	# Get entities in collision radius
 	var nearby_entities = entity_manager.get_entities_in_radius(
 		global_position,
 		collision_radius,
-		[EntityManager.EntityType.ENEMY_SHIP, EntityManager.EntityType.TORPEDO, EntityManager.EntityType.MISSILE],
-		[EntityManager.FactionType.ENEMY],  # Only hit enemies
-		[EntityManager.EntityState.DESTROYED, EntityManager.EntityState.CLEANUP]
+		enemy_entity_types,
+		enemy_factions,
+		exclude_states
 	)
 	
 	# Check for actual collision

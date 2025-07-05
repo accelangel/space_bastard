@@ -89,12 +89,28 @@ func update_target_search():
 	var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
 	
 	# Look for enemy entities first (using EntityManager)
+	# FIX: Create properly typed arrays for the function parameters
+	var enemy_entity_types: Array[EntityManager.EntityType] = [
+		EntityManager.EntityType.ENEMY_SHIP, 
+		EntityManager.EntityType.TORPEDO, 
+		EntityManager.EntityType.MISSILE
+	]
+	
+	var enemy_factions: Array[EntityManager.FactionType] = [
+		EntityManager.FactionType.ENEMY
+	]
+	
+	var exclude_states: Array[EntityManager.EntityState] = [
+		EntityManager.EntityState.DESTROYED, 
+		EntityManager.EntityState.CLEANUP
+	]
+	
 	var enemy_entities = entity_manager.get_entities_in_radius(
 		global_position,
 		range_pixels,
-		[EntityManager.EntityType.ENEMY_SHIP, EntityManager.EntityType.TORPEDO, EntityManager.EntityType.MISSILE],
-		[EntityManager.FactionType.ENEMY],
-		[EntityManager.EntityState.DESTROYED, EntityManager.EntityState.CLEANUP]
+		enemy_entity_types,
+		enemy_factions,
+		exclude_states
 	)
 	
 	# Convert to targets and find the closest threat
@@ -163,7 +179,7 @@ func handle_tracking(delta):
 		if abs(angle_diff) < deg_to_rad(5.0):  # Within 5 degrees
 			current_state = PDCState.FIRING
 
-func handle_firing(delta):
+func handle_firing(_delta):
 	if not current_target or not current_target.is_reliable():
 		current_target = null
 		current_state = PDCState.SCANNING
@@ -188,12 +204,12 @@ func handle_firing(delta):
 		fire_bullet()
 		fire_timer = 0.0
 
-func handle_reloading(delta):
+func handle_reloading(_delta):
 	# For now, just switch back to scanning after a brief pause
 	if fire_timer >= 0.5:  # Half second reload
 		current_state = PDCState.SCANNING
 
-func handle_offline(delta):
+func handle_offline(_delta):
 	# PDC is offline - do nothing
 	pass
 
