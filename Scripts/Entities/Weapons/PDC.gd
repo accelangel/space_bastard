@@ -39,6 +39,10 @@ enum PDCState {
 var current_state: PDCState = PDCState.SCANNING
 
 func _ready():
+	# If bullet_scene is not assigned, try to load it
+	if not bullet_scene:
+		bullet_scene = preload("res://Scenes/PDCBullet.tscn")
+	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
@@ -248,11 +252,15 @@ func calculate_intercept_point() -> Vector2:
 
 func fire_bullet():
 	if not bullet_scene:
-		print("PDC cannot fire - no bullet scene!")
+		print("Error: PDC bullet_scene is null! Cannot fire.")
 		return
 	
 	# Create bullet
 	var bullet = bullet_scene.instantiate()
+	if not bullet:
+		print("Error: Failed to instantiate bullet from scene!")
+		return
+	
 	get_tree().current_scene.add_child(bullet)
 	
 	# Position bullet at muzzle
