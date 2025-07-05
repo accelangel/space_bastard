@@ -22,6 +22,7 @@ rotation = 0.0523599
 shape = SubResource("CapsuleShape2D_j8x4e")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
+scale = Vector2(0.25, 0.25)
 texture = ExtResource("1_k28x5")
 
 [node name="TorpedoLauncher" type="Node2D" parent="."]
@@ -30,3 +31,4 @@ torpedo_scene = ExtResource("3_7tlgh")
 
 [node name="PointDefenseCannon" parent="." instance=ExtResource("5_5ugsn")]
 position = Vector2(8, -305)
+fire_rate = 10.0
