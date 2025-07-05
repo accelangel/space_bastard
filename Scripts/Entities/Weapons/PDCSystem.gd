@@ -1,13 +1,14 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - COMPLETE REWRITE
+# Scripts/Entities/Weapons/PDCSystem.gd - IMPROVED VERSION
 extends Node2D
 class_name PDCSystem
 
 # PDC Configuration
-@export var fire_rate: float = 50.0  # Bullets per second
-@export var bullet_velocity_mps: float = 200.0  # m/s
-@export var bullets_per_stream: int = 25  # Number of bullets in each stream
-@export var stream_spread_degrees: float = 5.0  # Much tighter spread for a stream effect
-@export var engagement_range_meters: float = 15000.0  # 15km - when to start firing
+@export var fire_rate: float = 200.0  # Bullets per second
+@export var bullet_velocity_mps: float = 300.0  # Increased from 200 m/s
+@export var bullets_per_stream: int = 25  # Increased from 25
+@export var stream_spread_degrees: float = 1.0  # Increased spread for better coverage
+@export var engagement_range_meters: float = 12000.0  # Reduced from 15km for earlier engagement
+@export var prediction_time_seconds: float = 0.5  # How far ahead to predict torpedo path
 
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
@@ -20,7 +21,8 @@ var sensor_system: SensorSystem
 var fire_timer: float = 0.0
 var shots_fired: int = 0
 var current_burst_count: int = 0
-var burst_interval: float = 0.05  # Time between bullets in a stream
+var burst_interval: float = 0.03  # Faster burst rate
+var cooldown_timer: float = 0.0
 
 # Statistics
 var torpedoes_intercepted: int = 0
@@ -43,6 +45,7 @@ func _ready():
 
 func _physics_process(delta):
 	fire_timer += delta
+	cooldown_timer += delta
 	
 	if not sensor_system:
 		return
@@ -50,25 +53,42 @@ func _physics_process(delta):
 	# Get all enemy torpedoes
 	var torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	for torpedo in torpedoes:
-		if should_engage(torpedo):
-			# Fire a stream at this torpedo
-			if current_burst_count < bullets_per_stream and fire_timer >= burst_interval:
-				fire_stream_bullet(torpedo)
+	# Find the closest threatening torpedo
+	var target_torpedo = find_most_threatening_torpedo(torpedoes)
+	
+	if target_torpedo and should_engage(target_torpedo):
+		# Fire stream at torpedo path
+		if current_burst_count < bullets_per_stream and fire_timer >= burst_interval:
+			fire_path_saturation_bullet(target_torpedo)
+			fire_timer = 0.0
+			current_burst_count += 1
+		elif current_burst_count >= bullets_per_stream:
+			# Reset for next stream after cooldown
+			if cooldown_timer >= 0.5:  # Half second between streams
+				current_burst_count = 0
+				cooldown_timer = 0.0
 				fire_timer = 0.0
-				current_burst_count += 1
-			elif current_burst_count >= bullets_per_stream:
-				# Reset for next stream after a short cooldown
-				if fire_timer >= 1.0 / fire_rate:
-					current_burst_count = 0
-					fire_timer = 0.0
-			break  # Only engage one torpedo at a time
+
+func find_most_threatening_torpedo(torpedoes: Array) -> Node2D:
+	var closest_torpedo: Node2D = null
+	var closest_distance: float = INF
+	
+	for torpedo in torpedoes:
+		if not torpedo or not is_instance_valid(torpedo):
+			continue
+			
+		var distance = global_position.distance_to(torpedo.global_position)
+		if distance < closest_distance:
+			closest_distance = distance
+			closest_torpedo = torpedo
+	
+	return closest_torpedo
 
 func should_engage(torpedo: Node2D) -> bool:
 	if not torpedo or not is_instance_valid(torpedo):
 		return false
 	
-	# Check range first
+	# Check range
 	var distance_meters = global_position.distance_to(torpedo.global_position) * WorldSettings.meters_per_pixel
 	if distance_meters > engagement_range_meters:
 		return false
@@ -80,44 +100,49 @@ func should_engage(torpedo: Node2D) -> bool:
 	elif "velocity_mps" in torpedo:
 		torpedo_vel = torpedo.velocity_mps
 	
-	# Check if torpedo is approaching
+	# Only engage if torpedo is moving towards us
 	var to_torpedo = torpedo.global_position - global_position
 	var approaching = torpedo_vel.dot(-to_torpedo.normalized()) > 0
 	
-	return approaching
+	return approaching and torpedo_vel.length() > 10.0
 
-func fire_stream_bullet(torpedo: Node2D):
-	# Get torpedo velocity for prediction
+func fire_path_saturation_bullet(torpedo: Node2D):
+	# Get torpedo current position and velocity
+	var torpedo_pos = torpedo.global_position
 	var torpedo_vel = Vector2.ZERO
 	if torpedo.has_method("get_velocity_mps"):
 		torpedo_vel = torpedo.get_velocity_mps()
 	elif "velocity_mps" in torpedo:
 		torpedo_vel = torpedo.velocity_mps
 	
-	if torpedo_vel.length() < 10.0:  # Torpedo not moving much
-		return
-	
 	# Get ship velocity
 	var ship_velocity_mps = Vector2.ZERO
 	if parent_ship and parent_ship.has_method("get_velocity_mps"):
 		ship_velocity_mps = parent_ship.get_velocity_mps()
 	
-	# Calculate intercept point accounting for ship movement
-	var intercept_point = calculate_intercept_with_ship_velocity(
-		torpedo.global_position, 
-		torpedo_vel,
-		ship_velocity_mps
-	)
+	# Calculate where torpedo will be along its path
+	var prediction_times = []
+	for i in range(bullets_per_stream):
+		var time_factor = float(i) / float(bullets_per_stream - 1)
+		var prediction_time = 0.5 + (prediction_time_seconds * time_factor)  # 0.5 to 3.0 seconds ahead
+		prediction_times.append(prediction_time)
 	
-	# Calculate base direction to intercept
-	var to_intercept = (intercept_point - global_position).normalized()
+	# Use the current bullet's prediction time
+	var bullet_prediction_time = prediction_times[current_burst_count]
+	var predicted_torpedo_pos = torpedo_pos + (torpedo_vel * bullet_prediction_time)
 	
-	# Add a small spread to create the stream effect
-	# The spread increases slightly with each bullet in the stream
+	# Calculate bullet direction (from ship to predicted position)
+	var base_direction = (predicted_torpedo_pos - global_position).normalized()
+	
+	# Add spread to create a wall across the torpedo's path
 	var spread_factor = (current_burst_count - bullets_per_stream / 2.0) / float(bullets_per_stream)
 	var spread_angle = deg_to_rad(stream_spread_degrees) * spread_factor
 	
-	var bullet_direction = to_intercept.rotated(spread_angle)
+	# Also add some perpendicular spread to create a wider wall
+	var perpendicular = base_direction.rotated(PI / 2.0)
+	var perpendicular_spread = perpendicular * spread_factor * 0.3  # 30% of the main spread
+	
+	var bullet_direction = (base_direction + perpendicular_spread).normalized().rotated(spread_angle)
 	
 	# Fire the bullet
 	if bullet_scene:
@@ -127,9 +152,9 @@ func fire_stream_bullet(torpedo: Node2D):
 		# Set bullet properties
 		bullet.global_position = global_position
 		
-		# Calculate bullet velocity (relative to world, includes ship velocity)
-		var bullet_velocity_relative = bullet_direction * bullet_velocity_mps
-		var bullet_velocity_world = bullet_velocity_relative + ship_velocity_mps
+		# Calculate bullet velocity in world space
+		# Bullet velocity is relative to the ship, so add ship velocity
+		var bullet_velocity_world = (bullet_direction * bullet_velocity_mps) + ship_velocity_mps
 		var bullet_velocity_pixels = bullet_velocity_world / WorldSettings.meters_per_pixel
 		
 		if bullet.has_method("set_velocity"):
@@ -140,51 +165,11 @@ func fire_stream_bullet(torpedo: Node2D):
 			if bullet.has_method("set_faction"):
 				bullet.set_faction(parent_ship.faction)
 		
-		# Connect to bullet's destruction signal to track interceptions
+		# Connect to bullet's destruction signal
 		if bullet.has_signal("hit_target"):
 			bullet.hit_target.connect(_on_torpedo_intercepted)
 		
 		shots_fired += 1
-
-func calculate_intercept_with_ship_velocity(target_pos: Vector2, target_vel: Vector2, ship_vel: Vector2) -> Vector2:
-	# Calculate relative velocity (target relative to ship)
-	var relative_target_vel = target_vel - ship_vel
-	var relative_pos = target_pos - global_position
-	var distance = relative_pos.length()
-	
-	# Bullet speed relative to ship
-	var bullet_speed_mps = bullet_velocity_mps
-	var bullet_speed_pixels = bullet_speed_mps / WorldSettings.meters_per_pixel
-	
-	# More sophisticated intercept calculation accounting for relative motion
-	# Using quadratic formula to solve for intercept time
-	var a = relative_target_vel.dot(relative_target_vel) - bullet_speed_mps * bullet_speed_mps
-	var b = 2.0 * relative_pos.dot(relative_target_vel)
-	var c = relative_pos.dot(relative_pos)
-	
-	var discriminant = b * b - 4.0 * a * c
-	
-	if discriminant < 0 or abs(a) < 0.01:
-		# No intercept possible, aim directly at current position
-		return target_pos
-	
-	var t1 = (-b - sqrt(discriminant)) / (2.0 * a)
-	var t2 = (-b + sqrt(discriminant)) / (2.0 * a)
-	
-	# Choose the earliest positive time
-	var intercept_time = 0.0
-	if t1 > 0 and t2 > 0:
-		intercept_time = min(t1, t2)
-	elif t1 > 0:
-		intercept_time = t1
-	elif t2 > 0:
-		intercept_time = t2
-	else:
-		# No valid intercept time
-		return target_pos
-	
-	# Return predicted intercept position
-	return target_pos + target_vel * intercept_time
 
 func _on_torpedo_intercepted():
 	torpedoes_intercepted += 1
@@ -193,7 +178,7 @@ func _on_torpedo_intercepted():
 func get_debug_info() -> String:
 	var status = "IDLE"
 	if current_burst_count > 0:
-		status = "FIRING STREAM"
+		status = "FIRING STREAM (%d/%d)" % [current_burst_count, bullets_per_stream]
 	
 	return "PDC: %d shots | %d intercepts | Status: %s | Range: %.1f km" % [
 		shots_fired, torpedoes_intercepted, status, engagement_range_meters / 1000.0

@@ -79,7 +79,7 @@ func update_entity_position(entity_id: String, new_position: Vector2):
 
 func unregister_entity(entity_id: String):
 	if entities.has(entity_id):
-		print("Unregistered entity: ", entity_id)
+		#print("Unregistered entity: ", entity_id)
 		entities.erase(entity_id)
 
 func cleanup_out_of_bounds():
@@ -95,7 +95,7 @@ func cleanup_out_of_bounds():
 		
 		# Check if out of bounds
 		if not map_bounds.has_point(entity_data.position):
-			print("Entity out of bounds, removing: ", entity_id)
+			#print("Entity out of bounds, removing: ", entity_id)
 			if entity_data.node_ref:
 				entity_data.node_ref.queue_free()
 			to_remove.append(entity_id)
