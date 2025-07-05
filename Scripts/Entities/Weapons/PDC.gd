@@ -1,4 +1,4 @@
-# Scripts/Weapons/PDC.gd
+# Scripts/Weapons/PDC.gd - FIXED VERSION
 extends Node2D
 class_name PDC
 
@@ -7,7 +7,6 @@ class_name PDC
 @export var fire_rate: float = 10.0  # Rounds per second
 @export var muzzle_velocity_mps: float = 1200.0  # Bullet velocity in m/s
 @export var targeting_lead_time: float = 0.1  # How far ahead to aim
-@export var faction_type: int = 1  # FactionType.PLAYER by default
 
 # Preload the bullet scene
 @export var bullet_scene: PackedScene
@@ -22,6 +21,8 @@ var current_target: TargetData = null
 var target_angle: float = 0.0
 var fire_timer: float = 0.0
 var entity_id: String
+var pdc_faction: int = 1  # Will be set by parent ship
+var parent_ship: Node2D = null
 
 # Performance settings
 var target_update_interval: float = 0.1  # How often to search for targets
@@ -39,6 +40,20 @@ enum PDCState {
 var current_state: PDCState = PDCState.SCANNING
 
 func _ready():
+	# Get parent ship reference
+	parent_ship = get_parent()
+	
+	# Determine faction based on parent ship
+	if parent_ship:
+		if parent_ship.has_method("_get_faction_type"):
+			pdc_faction = parent_ship._get_faction_type()
+		elif parent_ship.is_in_group("enemy_ships"):
+			pdc_faction = 2  # Enemy faction
+		else:
+			pdc_faction = 1  # Player faction
+	
+	print("PDC initialized with faction: ", pdc_faction, " on ship: ", str(parent_ship.name) if parent_ship else "unknown")
+	
 	# If bullet_scene is not assigned, try to load it
 	if not bullet_scene:
 		bullet_scene = preload("res://Scenes/PDCBullet.tscn")
@@ -49,7 +64,7 @@ func _ready():
 		entity_id = entity_manager.register_entity(
 			self, 
 			EntityManager.EntityType.STATION,  # Or create a PDC type
-			faction_type
+			pdc_faction
 		)
 	
 	# Set up fire timer
@@ -58,8 +73,6 @@ func _ready():
 	# Make sure we have a bullet scene
 	if not bullet_scene:
 		print("Warning: PDC has no bullet scene assigned!")
-	
-	print("PDC initialized - Range: ", max_range_meters, "m, Fire rate: ", fire_rate, " rps")
 
 func _physics_process(delta):
 	target_update_timer += delta
@@ -92,45 +105,65 @@ func update_target_search():
 	
 	var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
 	
-	# Look for enemy entities first (using EntityManager)
-	# FIX: Create properly typed arrays for the function parameters
-	var enemy_entity_types: Array[EntityManager.EntityType] = [
-		EntityManager.EntityType.ENEMY_SHIP, 
+	# FIXED: Only target incoming torpedoes and missiles, not ships
+	var threat_entity_types: Array[EntityManager.EntityType] = [
 		EntityManager.EntityType.TORPEDO, 
 		EntityManager.EntityType.MISSILE
 	]
 	
-	var enemy_factions: Array[EntityManager.FactionType] = [
-		EntityManager.FactionType.ENEMY
-	]
+	# FIXED: Target entities from enemy factions only
+	var enemy_factions: Array[EntityManager.FactionType] = []
+	if pdc_faction == 1:  # Player PDC targets enemy projectiles
+		enemy_factions = [EntityManager.FactionType.ENEMY]
+	else:  # Enemy PDC targets player projectiles
+		enemy_factions = [EntityManager.FactionType.PLAYER]
 	
 	var exclude_states: Array[EntityManager.EntityState] = [
 		EntityManager.EntityState.DESTROYED, 
 		EntityManager.EntityState.CLEANUP
 	]
 	
-	var enemy_entities = entity_manager.get_entities_in_radius(
+	var threat_entities = entity_manager.get_entities_in_radius(
 		global_position,
 		range_pixels,
-		enemy_entity_types,
+		threat_entity_types,
 		enemy_factions,
 		exclude_states
 	)
 	
-	# Convert to targets and find the closest threat
+	# Convert to targets and find the closest incoming threat
 	var best_target: TargetData = null
 	var best_score = -1.0
 	
-	for entity_data in enemy_entities:
+	for entity_data in threat_entities:
+		# Skip if this is our own entity
+		if entity_data.entity_id == entity_id:
+			continue
+		
+		# Skip if this entity belongs to our parent ship
+		if parent_ship and entity_data.node_ref and entity_data.node_ref.get_parent() == parent_ship:
+			continue
+		
 		# Get target data for this entity
 		var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
 		if not target_data or not target_data.is_reliable():
+			continue
+		
+		# Check if projectile is heading towards us (incoming threat)
+		var to_pdc = global_position - target_data.predicted_position
+		var dot_product = target_data.velocity.normalized().dot(to_pdc.normalized())
+		
+		# Only engage if projectile is moving towards us (dot product > 0)
+		if dot_product <= 0.1:  # Allow slight margin for error
 			continue
 		
 		# Calculate threat score (closer and faster = higher threat)
 		var distance = global_position.distance_to(target_data.predicted_position)
 		var speed = target_data.velocity.length()
 		var threat_score = (speed * 0.1) + (1.0 / (distance + 1.0)) * 1000.0
+		
+		# Bonus for incoming projectiles
+		threat_score *= (1.0 + dot_product)
 		
 		if threat_score > best_score:
 			best_target = target_data
@@ -140,7 +173,7 @@ func update_target_search():
 	if best_target != current_target:
 		current_target = best_target
 		if current_target:
-			print("PDC acquired target: ", current_target.target_id)
+			print("PDC (faction %d) acquired incoming threat: %s" % [pdc_faction, current_target.target_id])
 			current_state = PDCState.TRACKING
 		else:
 			current_state = PDCState.SCANNING
@@ -279,11 +312,11 @@ func fire_bullet():
 		var bullet_vel_pixels = bullet_direction * (muzzle_velocity_mps / WorldSettings.meters_per_pixel)
 		bullet.set_velocity(bullet_vel_pixels)
 	
-	# Set bullet faction
+	# FIXED: Set bullet faction to match PDC
 	if bullet.has_method("set_faction"):
-		bullet.set_faction(faction_type)
+		bullet.set_faction(pdc_faction)
 	
-	print("PDC fired at target: ", current_target.target_id if current_target else "none")
+	print("PDC (faction %d) fired at incoming threat: %s" % [pdc_faction, current_target.target_id if current_target else "none"])
 
 func set_offline(offline: bool):
 	if offline:
@@ -295,4 +328,4 @@ func set_offline(offline: bool):
 func get_debug_info() -> String:
 	var state_name = PDCState.keys()[current_state]
 	var target_name = current_target.target_id if current_target else "none"
-	return "PDC [%s] Target: %s | Angle: %.1f°" % [state_name, target_name, rad_to_deg(barrel.rotation)]
+	return "PDC [%s] Faction: %d Target: %s | Angle: %.1f°" % [state_name, pdc_faction, target_name, rad_to_deg(barrel.rotation)]

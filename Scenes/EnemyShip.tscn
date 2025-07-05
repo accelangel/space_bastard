@@ -24,4 +24,4 @@ scale = Vector2(0.25, 0.25)
 texture = ExtResource("1_pf77x")
 
 [node name="PointDefenseCannon" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(45, -284)
+position = Vector2(13, -80)

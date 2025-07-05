@@ -10,6 +10,7 @@ scale = Vector2(0.25, 0.25)
 script = ExtResource("1_3abb1")
 
 [node name="TurretBase" type="Sprite2D" parent="."]
+scale = Vector2(0.25, 0.25)
 texture = ExtResource("2_viucw")
 
 [node name="Barrel" type="Sprite2D" parent="TurretBase"]

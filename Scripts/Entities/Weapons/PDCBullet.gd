@@ -1,4 +1,4 @@
-# Scripts/Weapons/PDCBullet.gd
+# Scripts/Weapons/PDCBullet.gd - FIXED VERSION
 extends Node2D
 class_name PDCBullet
 
@@ -8,7 +8,7 @@ class_name PDCBullet
 
 # Movement
 var velocity: Vector2 = Vector2.ZERO
-var faction_type: int = 1  # FactionType.PLAYER by default
+var faction_type: int = 1  # Will be set by PDC
 
 # Lifecycle
 var lifetime: float = 0.0
@@ -49,16 +49,18 @@ func check_collisions():
 	if not entity_manager:
 		return
 	
-	# FIX: Create properly typed arrays for the function parameters
-	var enemy_entity_types: Array[EntityManager.EntityType] = [
-		EntityManager.EntityType.ENEMY_SHIP, 
+	# FIXED: Only target enemy projectiles (torpedoes, missiles)
+	var target_entity_types: Array[EntityManager.EntityType] = [
 		EntityManager.EntityType.TORPEDO, 
 		EntityManager.EntityType.MISSILE
 	]
 	
-	var enemy_factions: Array[EntityManager.FactionType] = [
-		EntityManager.FactionType.ENEMY
-	]
+	# FIXED: Target entities from enemy factions only
+	var enemy_factions: Array[EntityManager.FactionType] = []
+	if faction_type == 1:  # Player bullet targets enemy projectiles
+		enemy_factions = [EntityManager.FactionType.ENEMY]
+	else:  # Enemy bullet targets player projectiles
+		enemy_factions = [EntityManager.FactionType.PLAYER]
 	
 	var exclude_states: Array[EntityManager.EntityState] = [
 		EntityManager.EntityState.DESTROYED, 
@@ -69,7 +71,7 @@ func check_collisions():
 	var nearby_entities = entity_manager.get_entities_in_radius(
 		global_position,
 		collision_radius,
-		enemy_entity_types,
+		target_entity_types,
 		enemy_factions,
 		exclude_states
 	)
@@ -78,6 +80,10 @@ func check_collisions():
 	for entity_data in nearby_entities:
 		if entity_data.entity_id == entity_id:
 			continue  # Don't hit ourselves
+		
+		# Don't hit entities of our own faction
+		if entity_data.faction == faction_type:
+			continue
 		
 		var distance = global_position.distance_to(entity_data.position)
 		var combined_radius = collision_radius + entity_data.radius
@@ -88,7 +94,7 @@ func check_collisions():
 			break
 
 func hit_target(target_entity):
-	print("PDC bullet hit: ", target_entity.entity_id)
+	print("PDC bullet (faction %d) hit target: %s" % [faction_type, target_entity.entity_id])
 	
 	# Deal damage if target has health
 	if target_entity.node_ref and target_entity.node_ref.has_method("take_damage"):
@@ -104,6 +110,13 @@ func set_velocity(new_velocity: Vector2):
 
 func set_faction(new_faction: int):
 	faction_type = new_faction
+	
+	# Update EntityManager registration if needed
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager and entity_id:
+		# Note: You might need to add an update_entity_faction method to EntityManager
+		# or re-register the entity with the new faction
+		pass
 
 func despawn():
 	# Unregister from EntityManager
