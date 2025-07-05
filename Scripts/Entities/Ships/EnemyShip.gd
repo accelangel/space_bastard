@@ -26,9 +26,9 @@ func setup_sensor_system():
 	sensor_system.name = "SensorSystem"
 	
 	# Configure for enemy ship
-	sensor_system.radar_range_meters = 3000.0  # 3km detection range
+	sensor_system.radar_range_meters = 50000.0  # 3km detection range
 	sensor_system.radar_update_interval = 0.3   # Fast updates for defense
-	sensor_system.radar_accuracy = 0.90         # Good accuracy
+	sensor_system.radar_accuracy = 1.0         # Good accuracy
 	
 	# Add as child
 	add_child(sensor_system)

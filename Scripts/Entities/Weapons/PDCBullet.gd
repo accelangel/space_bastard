@@ -3,7 +3,7 @@ extends Node2D
 class_name PDCBullet
 
 @export var damage: float = 25.0
-@export var max_lifetime: float = 20.0  # FIXED: Much longer lifetime - 20 seconds
+@export var max_lifetime: float = 200.0  # FIXED: Much longer lifetime - 20 seconds
 @export var collision_radius: float = 10.0  # Slightly larger collision radius
 
 # Movement
@@ -46,7 +46,7 @@ func _physics_process(delta):
 	check_collisions()
 	
 	# FIXED: More reasonable despawn conditions
-	var max_distance_pixels = 25000.0  # 25km in pixels (25000 * 0.25m = 6.25km actual)
+	var max_distance_pixels = 250000.0  # 25km in pixels (25000 * 0.25m = 6.25km actual)
 	
 	# Despawn if too old OR traveled too far
 	if lifetime >= max_lifetime:

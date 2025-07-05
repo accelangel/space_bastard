@@ -3,16 +3,16 @@ extends Node2D
 class_name PDC
 
 # DEFENSIVE SPECIFICATIONS - More reasonable values
-@export var max_range_meters: float = 15000.0    # 15km engagement range (more reasonable)
-@export var optimal_range_meters: float = 8000.0 # 8km optimal engagement
+@export var max_range_meters: float = 40000.0    # 15km engagement range (more reasonable)
+@export var optimal_range_meters: float = 25000.0 # 8km optimal engagement
 @export var rotation_speed: float = 180.0        # Degrees per second - still fast but reasonable
-@export var fire_rate: float = 10.0              # 10 rounds per second - more reasonable
-@export var muzzle_velocity_mps: float = 800.0   # 800 m/s bullet velocity (much more reasonable)
+@export var fire_rate: float = 5.0              # 10 rounds per second - more reasonable
+@export var muzzle_velocity_mps: float = 400.0   # 800 m/s bullet velocity (much more reasonable)
 @export var targeting_lead_time: float = 1.0     # Lead targets by 1 second
 
 # Defensive fire patterns
 @export var burst_fire_mode: bool = true         
-@export var burst_size: int = 5                  # Smaller bursts
+@export var burst_size: int = 10                  # Smaller bursts
 @export var burst_spread_degrees: float = 2.0    # Tighter spread
 
 # Preload the bullet scene
