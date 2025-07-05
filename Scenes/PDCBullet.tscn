@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3 uid="uid://csn1e2p65xco"]
+
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/PDCBullet.gd" id="1_s6vo5"]
+[ext_resource type="Texture2D" uid="uid://7i4phj8tqx4l" path="res://Art/PDCProjectile.png" id="2_5c0wa"]
+
+[node name="PDCBullet" type="Node2D"]
+script = ExtResource("1_s6vo5")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("2_5c0wa")
