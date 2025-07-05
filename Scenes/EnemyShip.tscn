@@ -8,13 +8,11 @@
 radius = 120.193
 height = 581.28
 
-[node name="EnemyShip" type="Node2D" groups=["enemy_ships"]]
+[node name="EnemyShip" type="Area2D" groups=["enemy_ships"]]
 script = ExtResource("1_l7pq4")
 acceleration_gs = null
 
-[node name="Area2D" type="Area2D" parent="."]
-
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D"]
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 z_index = 1
 position = Vector2(-3, -26)
 rotation = 0.191986

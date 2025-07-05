@@ -10,12 +10,10 @@
 radius = 93.3436
 height = 598.855
 
-[node name="PlayerShip" type="Node2D"]
+[node name="PlayerShip" type="Area2D"]
 script = ExtResource("1_jqy2v")
 
-[node name="Area2D" type="Area2D" parent="."]
-
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Area2D"]
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 z_index = 1
 position = Vector2(-8, -23)
 rotation = 0.0523599
