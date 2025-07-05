@@ -1,26 +1,8 @@
-[gd_scene load_steps=5 format=3 uid="uid://vi2i12x2q47s"]
+[gd_scene load_steps=2 format=3 uid="uid://vi2i12x2q47s"]
 
-[ext_resource type="Script" path="res://Scripts/Entities/Weapons/PDC.gd" id="1_3abb1"]
-[ext_resource type="Texture2D" uid="uid://msi4v1kh72sk" path="res://Art/pdcTurret.png" id="2_viucw"]
-[ext_resource type="Texture2D" uid="uid://bco62h01afoln" path="res://Art/pdcBarrel.png" id="3_2iybs"]
-[ext_resource type="PackedScene" uid="uid://csn1e2p65xco" path="res://Scenes/PDCBullet.tscn" id="4_58w3o"]
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/PDCSystem.gd" id="1_3abb1"]
 
 [node name="PDC" type="Node2D"]
 rotation = 1.5708
 scale = Vector2(0.25, 0.25)
 script = ExtResource("1_3abb1")
-
-[node name="TurretBase" type="Sprite2D" parent="."]
-scale = Vector2(0.25, 0.25)
-texture = ExtResource("2_viucw")
-
-[node name="Barrel" type="Sprite2D" parent="TurretBase"]
-position = Vector2(0, -105)
-texture = ExtResource("3_2iybs")
-
-[node name="MuzzlePoint" type="Marker2D" parent="TurretBase/Barrel"]
-position = Vector2(0, -123)
-
-[node name="FireTimer" type="Timer" parent="."]
-
-[node name="PDCProjectile" parent="." instance=ExtResource("4_58w3o")]

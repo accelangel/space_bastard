@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://Scripts/Systems/GameCamera.gd" id="1_at0gn"]
 [ext_resource type="PackedScene" uid="uid://ihisk0qiusis" path="res://Scenes/EnemyShip.tscn" id="3_to3xv"]
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="3_ucvrg"]
-[ext_resource type="PackedScene" uid="uid://caeufsiepjyek" path="res://Scenes/ShipBase.tscn" id="4_k7omc"]
+[ext_resource type="PackedScene" uid="uid://caeufsiepjyek" path="res://Scenes/PlayerShip.tscn" id="4_k7omc"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -39,7 +39,8 @@ texture = ExtResource("3_ucvrg")
 [node name="EnemyShip" parent="." instance=ExtResource("3_to3xv")]
 position = Vector2(64000, -35500)
 rotation = -2.35619
+acceleration_gs = null
 
-[node name="ShipBase" parent="." instance=ExtResource("4_k7omc")]
+[node name="PlayerShip" parent="." instance=ExtResource("4_k7omc")]
 position = Vector2(-64000, 35500)
 rotation = 0.785398

@@ -10,7 +10,7 @@
 radius = 93.3436
 height = 598.855
 
-[node name="ShipBase" type="Node2D"]
+[node name="PlayerShip" type="Node2D"]
 script = ExtResource("1_jqy2v")
 
 [node name="Area2D" type="Area2D" parent="."]

@@ -1,8 +1,7 @@
-[gd_scene load_steps=6 format=3 uid="uid://ihisk0qiusis"]
+[gd_scene load_steps=5 format=3 uid="uid://ihisk0qiusis"]
 
 [ext_resource type="Script" path="res://Scripts/Entities/Ships/EnemyShip.gd" id="1_l7pq4"]
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
-[ext_resource type="PackedScene" uid="uid://vi2i12x2q47s" path="res://Scenes/PDC.tscn" id="3_s8ewm"]
 [ext_resource type="Script" path="res://Scripts/Systems/SensorSystem.gd" id="4_8qbgp"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
@@ -11,6 +10,7 @@ height = 581.28
 
 [node name="EnemyShip" type="Node2D" groups=["enemy_ships"]]
 script = ExtResource("1_l7pq4")
+acceleration_gs = null
 
 [node name="Area2D" type="Area2D" parent="."]
 
@@ -23,9 +23,6 @@ shape = SubResource("CapsuleShape2D_hb6w0")
 [node name="Sprite2D" type="Sprite2D" parent="."]
 scale = Vector2(0.25, 0.25)
 texture = ExtResource("1_pf77x")
-
-[node name="PDC" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(14, -80)
 
 [node name="SensorSystem" type="Node2D" parent="."]
 script = ExtResource("4_8qbgp")
