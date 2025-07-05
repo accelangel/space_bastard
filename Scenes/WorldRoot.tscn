@@ -39,7 +39,6 @@ texture = ExtResource("3_ucvrg")
 [node name="EnemyShip" parent="." instance=ExtResource("3_to3xv")]
 position = Vector2(64000, -35500)
 rotation = -2.35619
-acceleration_gs = null
 
 [node name="PlayerShip" parent="." instance=ExtResource("4_k7omc")]
 position = Vector2(-64000, 35500)

@@ -3,7 +3,7 @@ extends Area2D
 class_name PlayerShip
 
 # Ship properties
-@export var acceleration_gs: float = 0.35
+@export var acceleration_gs: float = 0.05
 @export var rotation_speed: float = 2.0
 @export var faction: String = "friendly"
 
@@ -51,10 +51,10 @@ func _physics_process(delta):
 		entity_manager.update_entity_position(entity_id, global_position)
 	
 	# Debug output
-	if Engine.get_process_frames() % 60 == 0:
-		var speed_mps = velocity_mps.length()
-		var speed_kmh = speed_mps * 3.6
-		print("PlayerShip - Speed: %.1f m/s (%.1f km/h)" % [speed_mps, speed_kmh])
+	#if Engine.get_process_frames() % 60 == 0:
+		#var speed_mps = velocity_mps.length()
+		#var speed_kmh = speed_mps * 3.6
+		#print("PlayerShip - Speed: %.1f m/s (%.1f km/h)" % [speed_mps, speed_kmh])
 
 func set_movement_direction(new_direction: Vector2):
 	movement_direction = new_direction.normalized()

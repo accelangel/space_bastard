@@ -3,8 +3,9 @@
 [ext_resource type="Script" path="res://Scripts/Entities/Weapons/Torpedo.gd" id="1_6te71"]
 [ext_resource type="Texture2D" uid="uid://cy7ccql58dstn" path="res://Art/AnimatedTorpedo.png" id="2_dmlvw"]
 
-[sub_resource type="RectangleShape2D" id="RectangleShape2D_q5qps"]
-size = Vector2(24, 6)
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_rk6od"]
+radius = 5.0
+height = 42.0
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_v3sgl"]
 atlas = ExtResource("2_dmlvw")
@@ -32,8 +33,8 @@ animations = [{
 script = ExtResource("1_6te71")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(1, 0)
-shape = SubResource("RectangleShape2D_q5qps")
+rotation = 1.5708
+shape = SubResource("CapsuleShape2D_rk6od")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
 rotation = 1.5708

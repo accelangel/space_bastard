@@ -2,6 +2,9 @@
 extends Area2D
 class_name PDCBullet
 
+# Signals
+signal hit_target
+
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
 var faction: String = "friendly"
@@ -35,6 +38,9 @@ func _physics_process(delta):
 func _on_area_entered(area: Area2D):
 	# Check if we hit something hostile
 	if is_hostile_to(area):
+		# Emit signal before destroying
+		hit_target.emit()
+		
 		# Both bullet and target die instantly
 		area.queue_free()
 		queue_free()

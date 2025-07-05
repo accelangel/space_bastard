@@ -62,6 +62,9 @@ var integral_decay: float = 0.95
 func _ready():
 	launch_start_time = Time.get_ticks_msec() / 1000.0
 	
+	# Add to torpedoes group for identification
+	add_to_group("torpedoes")
+	
 	if not target_node:
 		print("Torpedo: No target provided, self-destructing")
 		queue_free()

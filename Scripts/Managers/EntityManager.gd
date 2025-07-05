@@ -69,7 +69,7 @@ func register_entity(node: Node2D, type: String, faction: String) -> String:
 	var entity_data = EntityData.new(entity_id, node, type, faction)
 	entities[entity_id] = entity_data
 	
-	print("Registered entity: ", entity_id, " (", type, ", ", faction, ")")
+	#print("Registered entity: ", entity_id, " (", type, ", ", faction, ")")
 	return entity_id
 
 func update_entity_position(entity_id: String, new_position: Vector2):

@@ -47,8 +47,8 @@ func Zoom(delta):
 		zoomTarget = clamp(zoomTarget, zoom_min, zoom_max)
 		
 		# Debug: check if zoom is being clamped
-		if old_target != zoomTarget:
-			print("Zoom clamped from ", old_target, " to ", zoomTarget, " (min: ", zoom_min, ")")
+		#if old_target != zoomTarget:
+			#print("Zoom clamped from ", old_target, " to ", zoomTarget, " (min: ", zoom_min, ")")
 	
 	# Smooth interpolation toward target zoom
 	if zoom.distance_to(zoomTarget) > 0.001:
