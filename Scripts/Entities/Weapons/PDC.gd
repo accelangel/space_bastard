@@ -1,4 +1,4 @@
-# Scripts/Weapons/PDC.gd - DEBUG VERSION
+# Scripts/Weapons/PDC.gd - FIXED VERSION
 extends Node2D
 class_name PDC
 
@@ -158,36 +158,52 @@ func print_debug_info():
 		var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
 		print("Search range (pixels): ", range_pixels)
 		
-		# Get ALL entities nearby
-		var all_nearby = entity_manager.get_entities_in_radius(global_position, range_pixels)
+		# Get ALL entities nearby - FIXED: Use properly typed empty arrays
+		var all_entity_types: Array[EntityManager.EntityType] = []
+		var all_factions: Array[EntityManager.FactionType] = []
+		var no_exclude_states: Array[EntityManager.EntityState] = []
+		
+		var all_nearby = entity_manager.get_entities_in_radius(
+			global_position, 
+			range_pixels,
+			all_entity_types,
+			all_factions,
+			no_exclude_states
+		)
 		print("All entities in range: ", all_nearby.size())
 		
 		for entity_data in all_nearby:
 			print("  Entity: ", entity_data.entity_id, " Type: ", EntityManager.EntityType.keys()[entity_data.entity_type], " Faction: ", EntityManager.FactionType.keys()[entity_data.faction_type])
 		
-		# Check specifically for torpedoes
+		# Check specifically for torpedoes - FIXED: Properly typed arrays
+		var torpedo_types: Array[EntityManager.EntityType] = [EntityManager.EntityType.TORPEDO]
+		var any_factions: Array[EntityManager.FactionType] = []
+		var no_exclude_states2: Array[EntityManager.EntityState] = []
+		
 		var torpedoes = entity_manager.get_entities_in_radius(
 			global_position, 
 			range_pixels,
-			[EntityManager.EntityType.TORPEDO],
-			[],  # Any faction
-			[]   # Any state
+			torpedo_types,
+			any_factions,
+			no_exclude_states2
 		)
 		print("Torpedoes in range: ", torpedoes.size())
 		
-		# Check for enemy torpedoes specifically
+		# Check for enemy torpedoes specifically - FIXED: Properly typed arrays
 		var enemy_factions: Array[EntityManager.FactionType] = []
 		if pdc_faction == 1:  # Player PDC targets enemy projectiles
 			enemy_factions = [EntityManager.FactionType.ENEMY]
 		else:  # Enemy PDC targets player projectiles
 			enemy_factions = [EntityManager.FactionType.PLAYER]
 		
+		var no_exclude_states3: Array[EntityManager.EntityState] = []
+		
 		var enemy_torpedoes = entity_manager.get_entities_in_radius(
 			global_position, 
 			range_pixels,
-			[EntityManager.EntityType.TORPEDO],
+			torpedo_types,
 			enemy_factions,
-			[]
+			no_exclude_states3
 		)
 		print("Enemy torpedoes in range: ", enemy_torpedoes.size())
 	
@@ -209,13 +225,13 @@ func update_target_search():
 	var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
 	print("PDC search range: ", range_pixels, " pixels (", max_range_meters, " meters)")
 	
-	# Target incoming torpedoes and missiles
+	# FIXED: Target incoming torpedoes and missiles with properly typed arrays
 	var threat_entity_types: Array[EntityManager.EntityType] = [
 		EntityManager.EntityType.TORPEDO, 
 		EntityManager.EntityType.MISSILE
 	]
 	
-	# Target entities from enemy factions only
+	# FIXED: Target entities from enemy factions only with properly typed arrays
 	var enemy_factions: Array[EntityManager.FactionType] = []
 	if pdc_faction == 1:  # Player PDC targets enemy projectiles
 		enemy_factions = [EntityManager.FactionType.ENEMY]

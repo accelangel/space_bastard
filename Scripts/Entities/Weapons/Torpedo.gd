@@ -99,21 +99,39 @@ func _ready():
 	rotation = ship_forward.angle()
 	initial_rotation = rotation  # Store initial rotation for smooth transition
 	
-	# Register with EntityManager
+	# Register with EntityManager - FIXED: Use launcher ship's faction
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
 		var owner_entity_id = ""
+		var torpedo_faction = EntityManager.FactionType.NEUTRAL  # Default fallback
+		
 		if launcher_ship:
+			# Get launcher ship's faction from EntityManager
 			var launcher_entity = entity_manager.get_entity_for_node(launcher_ship)
 			if launcher_entity:
 				owner_entity_id = launcher_entity.entity_id
+				torpedo_faction = launcher_entity.faction_type
+				print("Torpedo inheriting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher ", launcher_ship.name)
+			else:
+				# Fallback: determine faction from ship type
+				if launcher_ship.has_method("_get_faction_type"):
+					torpedo_faction = launcher_ship._get_faction_type()
+					print("Torpedo getting faction ", EntityManager.FactionType.keys()[torpedo_faction], " from launcher method")
+				elif launcher_ship.is_in_group("enemy_ships"):
+					torpedo_faction = EntityManager.FactionType.ENEMY
+					print("Torpedo defaulting to ENEMY faction from group")
+				else:
+					torpedo_faction = EntityManager.FactionType.PLAYER
+					print("Torpedo defaulting to PLAYER faction")
 		
 		entity_id = entity_manager.register_entity(
 			self, 
-			4,  # EntityManager.EntityType.TORPEDO
-			1 if owner_entity_id.begins_with("Player") else 2,  # Player or Enemy faction
+			EntityManager.EntityType.TORPEDO,
+			torpedo_faction,
 			owner_entity_id
 		)
+		
+		print("Torpedo registered: ", entity_id, " with faction ", EntityManager.FactionType.keys()[torpedo_faction])
 		
 		# Set targeting relationship if we have a target
 		if target_data and target_data.target_node:
