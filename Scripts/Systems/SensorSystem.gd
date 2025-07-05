@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - Ship-based Radar System
+# Scripts/Systems/SensorSystem.gd - UPDATED for Full Integration
 extends Node2D
 class_name SensorSystem
 
@@ -81,8 +81,14 @@ func perform_radar_scan():
 		return
 	
 	var entity_manager = get_node_or_null("/root/EntityManager")
+	var target_manager = get_node_or_null("/root/TargetManager")
+	
 	if not entity_manager:
 		print("ERROR: No EntityManager found for radar scan!")
+		return
+	
+	if not target_manager:
+		print("ERROR: No TargetManager found for radar scan!")
 		return
 	
 	var range_pixels = radar_range_meters / WorldSettings.meters_per_pixel
@@ -118,7 +124,7 @@ func perform_radar_scan():
 	last_scan_count = detected_entities.size()
 	total_scans += 1
 	
-	# Process detected entities
+	# Process detected entities and register with TargetManager
 	for entity_data in detected_entities:
 		# Skip our own ship
 		if entity_data.node_ref == parent_ship:
@@ -147,6 +153,50 @@ func perform_radar_scan():
 			print("Radar detected new target: ", entity_data.entity_id, 
 				  " (", EntityManager.EntityType.keys()[entity_data.entity_type], 
 				  ", faction ", EntityManager.FactionType.keys()[entity_data.faction_type], ")")
+		
+		# CRITICAL: Register/update this target with TargetManager
+		# This bridges SensorSystem detections to TargetData that weapons can use
+		update_target_manager_with_detection(entity_data, target_manager)
+
+# NEW: Bridge function to update TargetManager with our sensor data
+func update_target_manager_with_detection(entity_data, target_manager):
+	var detected = detected_targets[entity_data.entity_id]
+	
+	# Determine data source based on detection quality and range
+	var data_source = TargetData.DataSource.RADAR_CONTACT
+	if detected.confidence >= 1.0:
+		data_source = TargetData.DataSource.RADAR_CONTACT  # High quality sensor data
+	elif detected.confidence >= 0.8:
+		data_source = TargetData.DataSource.RADAR_CONTACT
+	else:
+		data_source = TargetData.DataSource.ESTIMATED
+	
+	# If we have direct visual (node reference is valid), use that instead
+	if entity_data.node_ref and is_instance_valid(entity_data.node_ref):
+		# For very close targets or clear sensor readings, use direct visual
+		var distance_meters = parent_ship.global_position.distance_to(entity_data.position) * WorldSettings.meters_per_pixel
+		if distance_meters < 500.0 or detected.confidence >= 0.98:
+			data_source = TargetData.DataSource.DIRECT_VISUAL
+	
+	# Update TargetManager with this detection
+	if entity_data.node_ref:
+		# Try to get existing TargetData
+		var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
+		
+		if target_data:
+			# Update existing target data
+			target_data.update_data(detected.position, detected.velocity, data_source)
+		else:
+			# Register new target
+			target_manager.register_target(entity_data.node_ref, data_source)
+	else:
+		# Node reference lost, but we can still update by ID if it exists
+		target_manager.update_target_data(
+			entity_data.entity_id,
+			detected.position,
+			detected.velocity,
+			data_source
+		)
 
 func update_target_tracking():
 	# Remove stale targets
@@ -162,6 +212,53 @@ func update_target_tracking():
 		detected_targets.erase(entity_id)
 
 # PUBLIC API - Used by weapons and other systems
+
+# NEW: Get TargetData objects for weapons to use
+func get_target_data_for_threats() -> Array[TargetData]:
+	var target_manager = get_node_or_null("/root/TargetManager")
+	if not target_manager:
+		return []
+	
+	var result: Array[TargetData] = []
+	var threats = get_incoming_threats()
+	
+	for threat in threats:
+		# Try to find corresponding TargetData
+		var entity_manager = get_node_or_null("/root/EntityManager")
+		if entity_manager:
+			var entity_data = entity_manager.get_entity(threat.entity_id)
+			if entity_data and entity_data.node_ref:
+				var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
+				if target_data:
+					result.append(target_data)
+	
+	return result
+
+# NEW: Get best threat target as TargetData for PDC systems
+func get_best_threat_target_data() -> TargetData:
+	var target_data_threats = get_target_data_for_threats()
+	
+	if target_data_threats.is_empty():
+		return null
+	
+	# Find closest incoming threat
+	var best_target: TargetData = null
+	var best_score = -1.0
+	
+	for target_data in target_data_threats:
+		if not target_data.is_reliable():
+			continue
+		
+		# Score based on distance and threat level
+		var distance = parent_ship.global_position.distance_to(target_data.predicted_position)
+		var speed = target_data.velocity.length()
+		var threat_score = (speed * 0.1) + (1.0 / (distance + 1.0)) * 1000.0
+		
+		if threat_score > best_score:
+			best_target = target_data
+			best_score = threat_score
+	
+	return best_target
 
 # Get all detected targets (optionally filtered)
 func get_detected_targets(filter_types: Array[EntityManager.EntityType] = [], 

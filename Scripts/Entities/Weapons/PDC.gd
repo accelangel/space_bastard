@@ -1,4 +1,4 @@
-# Scripts/Weapons/PDC.gd - FIXED VERSION
+# Scripts/Weapons/PDC.gd - UPDATED to use SensorSystem
 extends Node2D
 class_name PDC
 
@@ -24,8 +24,11 @@ var entity_id: String
 var pdc_faction: int = 1  # Will be set by parent ship
 var parent_ship: Node2D = null
 
+# Ship's sensor system reference
+var ship_sensor_system: SensorSystem = null
+
 # Performance settings
-var target_update_interval: float = 0.5  # Slower for debugging
+var target_update_interval: float = 0.2  # How often to check for new targets
 var target_update_timer: float = 0.0
 
 # Debug counters
@@ -52,9 +55,15 @@ func _ready():
 	parent_ship = get_parent()
 	if parent_ship:
 		print("PDC parent ship: ", parent_ship.name)
+		
+		# Find the ship's sensor system
+		ship_sensor_system = parent_ship.get_node_or_null("SensorSystem")
+		if ship_sensor_system:
+			print("PDC found ship sensor system: ", ship_sensor_system.name)
+		else:
+			print("ERROR: PDC could not find ship sensor system!")
 	else:
-		print("PDC parent ship: NULL")
-
+		print("ERROR: PDC has no parent ship!")
 	
 	# Determine faction based on parent ship
 	if parent_ship:
@@ -68,10 +77,7 @@ func _ready():
 			pdc_faction = 1  # Player faction
 			print("PDC faction default (player): ", pdc_faction)
 	
-	if parent_ship:
-		print("PDC initialized with faction: ", pdc_faction, " on ship: ", parent_ship.name)
-	else:
-		print("PDC initialized with faction: ", pdc_faction, " on ship: unknown")
+	print("PDC initialized with faction: ", pdc_faction)
 	
 	# If bullet_scene is not assigned, try to load it
 	if not bullet_scene:
@@ -81,19 +87,8 @@ func _ready():
 	else:
 		print("PDC loaded bullet scene: false")
 	
-	# Check if managers exist
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	var target_manager = get_node_or_null("/root/TargetManager")
-	if entity_manager:
-		print("EntityManager exists: true")
-	else:
-		print("EntityManager exists: false")
-	if target_manager:
-		print("TargetManager exists: true")
-	else:
-		print("TargetManager exists: false")
-	
 	# Register with EntityManager
+	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
 		entity_id = entity_manager.register_entity(
 			self, 
@@ -124,9 +119,9 @@ func _physics_process(delta):
 		print_debug_info()
 		last_debug_time = current_time
 	
-	# Update target search periodically
+	# Update target search periodically using SensorSystem
 	if target_update_timer >= target_update_interval:
-		update_target_search()
+		update_target_from_sensors()
 		target_update_timer = 0.0
 	
 	# Update PDC behavior based on state
@@ -147,193 +142,61 @@ func print_debug_info():
 	print("State: ", PDCState.keys()[current_state])
 	if current_target:
 		print("Current target: ", current_target.target_id)
+		print("Target confidence: ", current_target.confidence)
+		print("Target data age: ", current_target.data_age)
 	else:
 		print("Current target: NONE")
 	print("Faction: ", pdc_faction)
 	print("Global position: ", global_position)
 	
-	# Check for nearby entities manually
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
-		print("Search range (pixels): ", range_pixels)
-		
-		# Get ALL entities nearby - FIXED: Use properly typed empty arrays
-		var all_entity_types: Array[EntityManager.EntityType] = []
-		var all_factions: Array[EntityManager.FactionType] = []
-		var no_exclude_states: Array[EntityManager.EntityState] = []
-		
-		var all_nearby = entity_manager.get_entities_in_radius(
-			global_position, 
-			range_pixels,
-			all_entity_types,
-			all_factions,
-			no_exclude_states
-		)
-		print("All entities in range: ", all_nearby.size())
-		
-		for entity_data in all_nearby:
-			print("  Entity: ", entity_data.entity_id, " Type: ", EntityManager.EntityType.keys()[entity_data.entity_type], " Faction: ", EntityManager.FactionType.keys()[entity_data.faction_type])
-		
-		# Check specifically for torpedoes - FIXED: Properly typed arrays
-		var torpedo_types: Array[EntityManager.EntityType] = [EntityManager.EntityType.TORPEDO]
-		var any_factions: Array[EntityManager.FactionType] = []
-		var no_exclude_states2: Array[EntityManager.EntityState] = []
-		
-		var torpedoes = entity_manager.get_entities_in_radius(
-			global_position, 
-			range_pixels,
-			torpedo_types,
-			any_factions,
-			no_exclude_states2
-		)
-		print("Torpedoes in range: ", torpedoes.size())
-		
-		# Check for enemy torpedoes specifically - FIXED: Properly typed arrays
-		var enemy_factions: Array[EntityManager.FactionType] = []
-		if pdc_faction == 1:  # Player PDC targets enemy projectiles
-			enemy_factions = [EntityManager.FactionType.ENEMY]
-		else:  # Enemy PDC targets player projectiles
-			enemy_factions = [EntityManager.FactionType.PLAYER]
-		
-		var no_exclude_states3: Array[EntityManager.EntityState] = []
-		
-		var enemy_torpedoes = entity_manager.get_entities_in_radius(
-			global_position, 
-			range_pixels,
-			torpedo_types,
-			enemy_factions,
-			no_exclude_states3
-		)
-		print("Enemy torpedoes in range: ", enemy_torpedoes.size())
+	# Check sensor system status
+	if ship_sensor_system:
+		print("Sensor system active: true")
+		var threat_data = ship_sensor_system.get_target_data_for_threats()
+		print("Threats detected by sensors: ", threat_data.size())
+		for threat in threat_data:
+			print("  Threat: ", threat.target_id, " confidence: ", threat.confidence)
+	else:
+		print("Sensor system active: false")
 	
 	print("--- END DEBUG ---")
 
-func update_target_search():
-	print("PDC updating target search...")
+# NEW: Use ship's sensor system to find targets
+func update_target_from_sensors():
+	print("PDC checking sensor system for threats...")
 	
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	var target_manager = get_node_or_null("/root/TargetManager")
-	
-	if not entity_manager:
-		print("ERROR: No EntityManager found!")
-		return
-	if not target_manager:
-		print("ERROR: No TargetManager found!")
+	if not ship_sensor_system:
+		print("ERROR: No sensor system available!")
+		current_target = null
+		current_state = PDCState.SCANNING
 		return
 	
-	var range_pixels = max_range_meters / WorldSettings.meters_per_pixel
-	print("PDC search range: ", range_pixels, " pixels (", max_range_meters, " meters)")
+	# Get the best threat target from sensors
+	var best_threat = ship_sensor_system.get_best_threat_target_data()
 	
-	# FIXED: Target incoming torpedoes and missiles with properly typed arrays
-	var threat_entity_types: Array[EntityManager.EntityType] = [
-		EntityManager.EntityType.TORPEDO, 
-		EntityManager.EntityType.MISSILE
-	]
-	
-	# FIXED: Target entities from enemy factions only with properly typed arrays
-	var enemy_factions: Array[EntityManager.FactionType] = []
-	if pdc_faction == 1:  # Player PDC targets enemy projectiles
-		enemy_factions = [EntityManager.FactionType.ENEMY]
-	else:  # Enemy PDC targets player projectiles
-		enemy_factions = [EntityManager.FactionType.PLAYER]
-	
-	print("PDC looking for entity types: ", threat_entity_types)
-	print("PDC looking for enemy factions: ", enemy_factions)
-	
-	var exclude_states: Array[EntityManager.EntityState] = [
-		EntityManager.EntityState.DESTROYED, 
-		EntityManager.EntityState.CLEANUP
-	]
-	
-	var threat_entities = entity_manager.get_entities_in_radius(
-		global_position,
-		range_pixels,
-		threat_entity_types,
-		enemy_factions,
-		exclude_states
-	)
-	
-	print("Found ", threat_entities.size(), " potential threats")
-	
-	# Convert to targets and find the closest incoming threat
-	var best_target: TargetData = null
-	var best_score = -1.0
-	
-	for entity_data in threat_entities:
-		print("Evaluating threat: ", entity_data.entity_id)
+	if best_threat:
+		# Check if this target is within our engagement range
+		var distance_meters = global_position.distance_to(best_threat.predicted_position) * WorldSettings.meters_per_pixel
 		
-		# Skip if this is our own entity
-		if entity_data.entity_id == entity_id:
-			print("  Skipping - own entity")
-			continue
-		
-		# Skip if this entity belongs to our parent ship
-		if parent_ship and entity_data.node_ref and entity_data.node_ref.get_parent() == parent_ship:
-			print("  Skipping - parent ship entity")
-			continue
-		
-		# Get target data for this entity
-		var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
-		if not target_data:
-			print("  No target data found, registering...")
-			# Try to register it ourselves
-			target_data = target_manager.register_target(entity_data.node_ref)
-		
-		if not target_data:
-			print("  ERROR: Could not get target data")
-			continue
-		
-		if not target_data.is_reliable():
-			print("  Target data not reliable")
-			continue
-		
-		print("  Target data valid, velocity: ", target_data.velocity)
-		
-		# Check if projectile is heading towards us (incoming threat)
-		var to_pdc = global_position - target_data.predicted_position
-		var velocity_normalized: Vector2
-		if target_data.velocity.length() > 0:
-			velocity_normalized = target_data.velocity.normalized()
+		if distance_meters <= max_range_meters:
+			# Check if this is a new target or an update to current target
+			if not current_target or current_target.target_id != best_threat.target_id:
+				current_target = best_threat
+				print("PDC acquired new threat: ", current_target.target_id, " at range ", distance_meters, "m")
+				current_state = PDCState.TRACKING
+			else:
+				# Update current target data
+				current_target = best_threat
+				print("PDC updated target data for: ", current_target.target_id)
 		else:
-			velocity_normalized = Vector2.ZERO
-		
-		var dot_product: float
-		if to_pdc.length() > 0:
-			dot_product = velocity_normalized.dot(to_pdc.normalized())
-		else:
-			dot_product = 0.0
-		
-		print("  Dot product (incoming check): ", dot_product)
-		
-		# RELAXED: Accept any target for debugging
-		# if dot_product <= 0.1:  # Allow slight margin for error
-		#	print("  Not incoming - dot product too low")
-		#	continue
-		
-		# Calculate threat score (closer and faster = higher threat)
-		var distance = global_position.distance_to(target_data.predicted_position)
-		var speed = target_data.velocity.length()
-		var threat_score = (speed * 0.1) + (1.0 / (distance + 1.0)) * 1000.0
-		
-		# Bonus for incoming projectiles
-		threat_score *= (1.0 + max(0, dot_product))
-		
-		print("  Threat score: ", threat_score)
-		
-		if threat_score > best_score:
-			best_target = target_data
-			best_score = threat_score
-			print("  NEW BEST TARGET!")
-	
-	# Update current target
-	if best_target != current_target:
-		current_target = best_target
+			print("PDC best threat out of range: ", distance_meters, "m (max: ", max_range_meters, "m)")
+			if current_target:
+				current_target = null
+				current_state = PDCState.SCANNING
+	else:
+		print("PDC no threats detected by sensors")
 		if current_target:
-			print("PDC (faction %d) acquired incoming threat: %s" % [pdc_faction, current_target.target_id])
-			current_state = PDCState.TRACKING
-		else:
-			print("PDC lost target, returning to scanning")
+			current_target = null
 			current_state = PDCState.SCANNING
 
 func handle_scanning(_delta):
@@ -426,11 +289,6 @@ func calculate_intercept_point() -> Vector2:
 	
 	var target_pos = current_target.predicted_position
 	var target_vel = current_target.velocity
-	var _bullet_speed = muzzle_velocity_mps / WorldSettings.meters_per_pixel
-	
-	# Simple intercept calculation
-	var _relative_pos = target_pos - global_position
-	var _relative_vel = target_vel
 	
 	# For debugging, just aim slightly ahead
 	return target_pos + target_vel * 0.5  # Aim 0.5 seconds ahead
@@ -470,9 +328,9 @@ func fire_bullet():
 		bullet.set_faction(pdc_faction)
 	
 	if current_target:
-		print("PDC (faction %d) fired at incoming threat: %s" % [pdc_faction, current_target.target_id])
+		print("PDC (faction %d) fired at threat: %s" % [pdc_faction, current_target.target_id])
 	else:
-		print("PDC (faction %d) fired at incoming threat: none" % [pdc_faction])
+		print("PDC (faction %d) fired at threat: none" % [pdc_faction])
 
 func set_offline(offline: bool):
 	if offline:
