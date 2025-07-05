@@ -1,83 +1,71 @@
-# Scripts/Systems/EntityManager.gd
+# Scripts/Managers/EntityManager.gd - WITH ENTITY SELF-REPORTING
 extends Node
 
-# Core entity tracking
-var entities: Dictionary = {}  # entity_id -> EntityData
-var entity_lookup: Dictionary = {}  # Node reference -> entity_id
-
-# Spatial indexing for fast proximity queries
+# Core entity tracking (unchanged)
+var entities: Dictionary = {}
+var entity_lookup: Dictionary = {}
 var spatial_grid: SpatialGrid
-var grid_cell_size: float = 1000.0  # pixels per cell
+var grid_cell_size: float = 1000.0
 
 # Entity type groups for fast filtering
-var entities_by_type: Dictionary = {}  # EntityType -> Array[entity_id]
-var entities_by_faction: Dictionary = {}  # FactionType -> Array[entity_id]
+var entities_by_type: Dictionary = {}
+var entities_by_faction: Dictionary = {}
 
 # Lifecycle tracking
 var pending_spawns: Array[EntityData] = []
-var pending_updates: Array[String] = []  # entity_ids that need spatial updates
-var pending_destroys: Array[String] = []  # entity_ids to be destroyed
+var pending_updates: Array[String] = []
+var pending_destroys: Array[String] = []
+
+# NEW: Radar system registry
+var active_radar_systems: Array[SensorSystem] = []
 
 # Performance settings
 var max_updates_per_frame: int = 50
 var spatial_update_interval: float = 0.1
 var spatial_update_timer: float = 0.0
 
+# NEW: Entity reporting settings
+var entity_report_interval: float = 0.0166667  # 60 Hz entity reports
+var entity_report_timer: float = 0.0
+var entities_to_report: Array[String] = []     # Queue for this frame
+
 # Statistics
 var total_entities_created: int = 0
 var total_entities_destroyed: int = 0
-var frame_query_count: int = 0
+var total_reports_sent: int = 0
 
+# Enums (unchanged)
 enum EntityType {
-	UNKNOWN,
-	PLAYER_SHIP,
-	ENEMY_SHIP,
-	NEUTRAL_SHIP,
-	TORPEDO,
-	MISSILE,
-	PROJECTILE,
-	ASTEROID,
-	STATION,
-	PICKUP,
-	EFFECT,
-	SENSOR_CONTACT
+	UNKNOWN, PLAYER_SHIP, ENEMY_SHIP, NEUTRAL_SHIP,
+	TORPEDO, MISSILE, PROJECTILE, ASTEROID, STATION,
+	PICKUP, EFFECT, SENSOR_CONTACT
 }
 
 enum FactionType {
-	NEUTRAL,
-	PLAYER,
-	ENEMY,
-	CIVILIAN
+	NEUTRAL, PLAYER, ENEMY, CIVILIAN
 }
 
 enum EntityState {
-	SPAWNING,
-	ACTIVE,
-	DAMAGED,
-	DISABLED,
-	DESTROYED,
-	CLEANUP
+	SPAWNING, ACTIVE, DAMAGED, DISABLED, DESTROYED, CLEANUP
 }
 
+# EntityData class (unchanged from previous version)
 class EntityData:
 	var entity_id: String
 	var node_ref: Node2D
 	var entity_type: EntityType
-	var faction_type: FactionType  # Renamed to avoid shadowing
+	var faction_type: FactionType
 	var state: EntityState
 	
-	# Spatial data
 	var position: Vector2
 	var velocity: Vector2
-	var radius: float  # Collision/detection radius
+	var radius: float
 	var last_spatial_update: float
 	
-	# Relationships
-	var owner_id: String  # Who created/owns this entity
-	var target_ids: Array[String] = []  # Entities this is targeting
-	var targeting_ids: Array[String] = []  # Entities targeting this
+	var owner_id: String
+	var target_ids: Array[String] = []
+	var targeting_ids: Array[String] = []
 	
-	# Metadata
 	var creation_time: float
 	var last_update_time: float
 	var custom_data: Dictionary = {}
@@ -90,7 +78,7 @@ class EntityData:
 		state = EntityState.SPAWNING
 		position = node.global_position if node else Vector2.ZERO
 		velocity = Vector2.ZERO
-		radius = 50.0  # Default radius
+		radius = 50.0
 		creation_time = Time.get_ticks_msec() / 1000.0
 		last_update_time = creation_time
 		last_spatial_update = creation_time
@@ -103,7 +91,6 @@ class EntityData:
 			position = node_ref.global_position
 			last_update_time = Time.get_ticks_msec() / 1000.0
 			
-			# Update velocity if available
 			if node_ref.has_method("get_velocity_mps"):
 				velocity = node_ref.get_velocity_mps()
 			elif "velocity_mps" in node_ref:
@@ -115,30 +102,23 @@ class EntityData:
 		var state_name = EntityState.keys()[state]
 		return "%s [%s:%s:%s] at %s" % [entity_id, type_name, faction_name, state_name, position]
 
-# Spatial indexing system for fast proximity queries
+# Spatial Grid class (unchanged)
 class SpatialGrid:
-	var grid: Dictionary = {}  # Vector2i -> Array[String] (entity_ids)
+	var grid: Dictionary = {}
 	var cell_size: float
-	var entity_positions: Dictionary = {}  # entity_id -> Vector2i (grid cell)
-	var entity_manager_ref: Node  # Reference to EntityManager
+	var entity_positions: Dictionary = {}
+	var entity_manager_ref: Node
 	
 	func _init(size: float, manager_ref: Node):
 		cell_size = size
 		entity_manager_ref = manager_ref
 	
 	func get_cell_coord(position: Vector2) -> Vector2i:
-		return Vector2i(
-			int(position.x / cell_size),
-			int(position.y / cell_size)
-		)
+		return Vector2i(int(position.x / cell_size), int(position.y / cell_size))
 	
 	func add_entity(entity_id: String, position: Vector2):
 		var cell = get_cell_coord(position)
-		
-		# Remove from old cell if it exists
 		remove_entity(entity_id)
-		
-		# Add to new cell
 		if not grid.has(cell):
 			grid[cell] = []
 		grid[cell].append(entity_id)
@@ -156,67 +136,94 @@ class SpatialGrid:
 	func get_entities_in_radius(center: Vector2, radius: float) -> Array[String]:
 		var result: Array[String] = []
 		var radius_squared = radius * radius
-		
-		# Calculate which grid cells to check
 		var min_cell = get_cell_coord(center - Vector2(radius, radius))
 		var max_cell = get_cell_coord(center + Vector2(radius, radius))
 		
-		# Check all relevant cells
 		for x in range(min_cell.x, max_cell.x + 1):
 			for y in range(min_cell.y, max_cell.y + 1):
 				var cell = Vector2i(x, y)
 				if grid.has(cell):
 					for entity_id in grid[cell]:
-						# Additional distance check since cells are square
 						var entity_pos = entity_manager_ref.get_entity_position(entity_id)
 						if entity_pos.distance_squared_to(center) <= radius_squared:
 							result.append(entity_id)
-		
-		return result
-	
-	func get_entities_in_rect(rect: Rect2) -> Array[String]:
-		var result: Array[String] = []
-		
-		var min_cell = get_cell_coord(rect.position)
-		var max_cell = get_cell_coord(rect.position + rect.size)
-		
-		for x in range(min_cell.x, max_cell.x + 1):
-			for y in range(min_cell.y, max_cell.y + 1):
-				var cell = Vector2i(x, y)
-				if grid.has(cell):
-					for entity_id in grid[cell]:
-						var entity_pos = entity_manager_ref.get_entity_position(entity_id)
-						if rect.has_point(entity_pos):
-							result.append(entity_id)
-		
 		return result
 
 func _ready():
 	spatial_grid = SpatialGrid.new(grid_cell_size, self)
 	
-	# Connect to SceneTree for automatic cleanup
 	if get_tree():
 		get_tree().node_removed.connect(_on_node_removed)
 	
-	print("EntityManager initialized")
+	print("EntityManager initialized with self-reporting")
 	print("  Grid cell size: ", grid_cell_size, " pixels")
-	print("  Max updates per frame: ", max_updates_per_frame)
+	print("  Entity report frequency: ", 1.0 / entity_report_interval, " Hz")
 
 func _physics_process(delta):
-	frame_query_count = 0
 	spatial_update_timer += delta
+	entity_report_timer += delta
 	
-	# Process lifecycle events
 	_process_spawns()
 	_process_updates()
 	_process_destroys()
 	
-	# Periodic spatial updates
+	# NEW: Process entity reports to radar systems
+	if entity_report_timer >= entity_report_interval:
+		process_entity_reports()
+		entity_report_timer = 0.0
+	
 	if spatial_update_timer >= spatial_update_interval:
 		_update_spatial_index()
 		spatial_update_timer = 0.0
 
-# Register a new entity
+# NEW: Register a radar system to receive entity reports
+func register_radar_system(radar_system: SensorSystem):
+	if radar_system not in active_radar_systems:
+		active_radar_systems.append(radar_system)
+		var ship_name = "unknown"
+		if radar_system.parent_ship:
+			ship_name = radar_system.parent_ship.name
+		print("EntityManager: Registered radar system from ", ship_name)
+
+# NEW: Process entity reports to all radar systems
+func process_entity_reports():
+	if active_radar_systems.is_empty():
+		return  # No radar systems to report to
+	
+	var reports_sent_this_frame = 0
+	
+	# Report all active entities to all radar systems
+	for entity_data in entities.values():
+		if entity_data.state != EntityState.ACTIVE:
+			continue
+		
+		if not entity_data.is_valid():
+			continue
+		
+		# Update entity position first
+		entity_data.update_position()
+		
+		# Report to all radar systems
+		for radar_system in active_radar_systems:
+			if radar_system and is_instance_valid(radar_system):
+				radar_system.receive_entity_report(
+					entity_data.entity_id,
+					entity_data.position,
+					entity_data.velocity,
+					entity_data.entity_type,
+					entity_data.faction_type
+				)
+				reports_sent_this_frame += 1
+			else:
+				# Clean up invalid radar systems
+				active_radar_systems.erase(radar_system)
+	
+	total_reports_sent += reports_sent_this_frame
+	
+	if reports_sent_this_frame > 0:
+		print("EntityManager: Sent ", reports_sent_this_frame, " reports to ", active_radar_systems.size(), " radar systems")
+
+# All other methods remain unchanged from the original EntityManager
 func register_entity(node: Node2D, entity_type: EntityType, faction_type: FactionType = FactionType.NEUTRAL, 
 					 owner_id: String = "") -> String:
 	if not node or not is_instance_valid(node):
@@ -225,35 +232,26 @@ func register_entity(node: Node2D, entity_type: EntityType, faction_type: Factio
 	
 	var entity_id = _generate_entity_id(node)
 	
-	# Check if already registered
 	if entities.has(entity_id):
 		print("Warning: Entity already registered: ", entity_id)
 		return entity_id
 	
-	# Create entity data
 	var entity_data = EntityData.new(entity_id, node, entity_type, faction_type)
 	entity_data.owner_id = owner_id
-	
-	# Determine radius based on entity type
 	entity_data.radius = _get_default_radius(entity_type, node)
 	
-	# Store entity
 	entities[entity_id] = entity_data
 	entity_lookup[node] = entity_id
 	
-	# Add to type and faction groups
 	_add_to_group(entities_by_type, entity_type, entity_id)
 	_add_to_group(entities_by_faction, faction_type, entity_id)
 	
-	# Queue for spatial indexing
 	pending_spawns.append(entity_data)
-	
 	total_entities_created += 1
-	print("Registered entity: ", entity_data.get_debug_info())
 	
+	print("Registered entity: ", entity_data.get_debug_info())
 	return entity_id
 
-# Update entity data (position, velocity, etc.)
 func update_entity(entity_id: String, force_spatial_update: bool = false):
 	if not entities.has(entity_id):
 		return
@@ -266,12 +264,10 @@ func update_entity(entity_id: String, force_spatial_update: bool = false):
 	var old_position = entity_data.position
 	entity_data.update_position()
 	
-	# Queue spatial update if position changed significantly or forced
 	if force_spatial_update or old_position.distance_squared_to(entity_data.position) > 100.0:
 		if entity_id not in pending_updates:
 			pending_updates.append(entity_id)
 
-# Set entity state
 func set_entity_state(entity_id: String, new_state: EntityState):
 	if not entities.has(entity_id):
 		return
@@ -283,7 +279,6 @@ func set_entity_state(entity_id: String, new_state: EntityState):
 	print("Entity state changed: ", entity_id, " from ", EntityState.keys()[old_state], 
 		  " to ", EntityState.keys()[new_state])
 	
-	# Handle state-specific logic
 	match new_state:
 		EntityState.ACTIVE:
 			if old_state == EntityState.SPAWNING:
@@ -291,45 +286,36 @@ func set_entity_state(entity_id: String, new_state: EntityState):
 		EntityState.DESTROYED:
 			queue_destroy_entity(entity_id)
 
-# Queue entity for destruction
 func queue_destroy_entity(entity_id: String):
 	if entity_id not in pending_destroys:
 		pending_destroys.append(entity_id)
 
-# Get entity data
 func get_entity(entity_id: String) -> EntityData:
 	return entities.get(entity_id)
 
-# Get entity by node reference
 func get_entity_for_node(node: Node2D) -> EntityData:
 	if not entity_lookup.has(node):
 		return null
 	var entity_id = entity_lookup[node]
 	return entities.get(entity_id)
 
-# Get entity position (optimized for frequent calls)
 func get_entity_position(entity_id: String) -> Vector2:
 	if entities.has(entity_id):
 		return entities[entity_id].position
 	return Vector2.ZERO
 
-# SPATIAL QUERIES - The core functionality for sensors and game logic
-
-# Get all entities within radius of a position
+# SPATIAL QUERIES - Now much less used since radar uses self-reporting
 func get_entities_in_radius(center: Vector2, radius: float, 
 							entity_types: Array[EntityType] = [], 
 							factions: Array[FactionType] = [],
 							exclude_states: Array[EntityState] = [EntityState.DESTROYED]) -> Array[EntityData]:
-	frame_query_count += 1
 	var candidate_ids = spatial_grid.get_entities_in_radius(center, radius)
 	return _filter_entities(candidate_ids, entity_types, factions, exclude_states)
 
-# Get closest entity to a position
 func get_closest_entity(center: Vector2, max_range: float = INF,
 						entity_types: Array[EntityType] = [],
 						factions: Array[FactionType] = [],
 						exclude_entity: String = "") -> EntityData:
-	frame_query_count += 1
 	var candidates = get_entities_in_radius(center, max_range, entity_types, factions)
 	
 	var closest: EntityData = null
@@ -346,15 +332,6 @@ func get_closest_entity(center: Vector2, max_range: float = INF,
 	
 	return closest
 
-# Get entities within a rectangular area
-func get_entities_in_rect(rect: Rect2,
-						  entity_types: Array[EntityType] = [],
-						  factions: Array[FactionType] = []) -> Array[EntityData]:
-	frame_query_count += 1
-	var candidate_ids = spatial_grid.get_entities_in_rect(rect)
-	return _filter_entities(candidate_ids, entity_types, factions)
-
-# Get all entities of specific type(s)
 func get_entities_by_type(entity_types: Array[EntityType]) -> Array[EntityData]:
 	var result: Array[EntityData] = []
 	
@@ -366,7 +343,6 @@ func get_entities_by_type(entity_types: Array[EntityType]) -> Array[EntityData]:
 	
 	return result
 
-# Get all entities of specific faction(s)
 func get_entities_by_faction(factions: Array[FactionType]) -> Array[EntityData]:
 	var result: Array[EntityData] = []
 	
@@ -378,21 +354,6 @@ func get_entities_by_faction(factions: Array[FactionType]) -> Array[EntityData]:
 	
 	return result
 
-# Get entities targeting a specific entity
-func get_entities_targeting(target_entity_id: String) -> Array[EntityData]:
-	if not entities.has(target_entity_id):
-		return []
-	
-	var result: Array[EntityData] = []
-	var target_data = entities[target_entity_id]
-	
-	for targeting_id in target_data.targeting_ids:
-		if entities.has(targeting_id):
-			result.append(entities[targeting_id])
-	
-	return result
-
-# Set targeting relationship
 func set_targeting_relationship(hunter_id: String, target_id: String):
 	if not entities.has(hunter_id) or not entities.has(target_id):
 		return
@@ -400,15 +361,12 @@ func set_targeting_relationship(hunter_id: String, target_id: String):
 	var hunter = entities[hunter_id]
 	var target = entities[target_id]
 	
-	# Add to hunter's target list
 	if target_id not in hunter.target_ids:
 		hunter.target_ids.append(target_id)
 	
-	# Add to target's targeting list
 	if hunter_id not in target.targeting_ids:
 		target.targeting_ids.append(hunter_id)
 
-# Remove targeting relationship
 func remove_targeting_relationship(hunter_id: String, target_id: String):
 	if entities.has(hunter_id):
 		entities[hunter_id].target_ids.erase(target_id)
@@ -416,8 +374,7 @@ func remove_targeting_relationship(hunter_id: String, target_id: String):
 	if entities.has(target_id):
 		entities[target_id].targeting_ids.erase(hunter_id)
 
-# INTERNAL METHODS
-
+# Internal methods (unchanged)
 func _process_spawns():
 	for entity_data in pending_spawns:
 		if entity_data.is_valid():
@@ -434,7 +391,6 @@ func _process_updates():
 	
 	for entity_id in updates_to_process:
 		if processed >= max_updates_per_frame:
-			# Carry over remaining updates to next frame
 			pending_updates.append(entity_id)
 			continue
 		
@@ -444,7 +400,6 @@ func _process_updates():
 				var old_pos = entity_data.position
 				entity_data.update_position()
 				
-				# Update spatial index if position changed
 				if old_pos != entity_data.position:
 					spatial_grid.add_entity(entity_id, entity_data.position)
 					entity_data.last_spatial_update = Time.get_ticks_msec() / 1000.0
@@ -463,21 +418,16 @@ func _destroy_entity(entity_id: String):
 	
 	var entity_data = entities[entity_id]
 	
-	# Remove from spatial index
 	spatial_grid.remove_entity(entity_id)
-	
-	# Remove from type and faction groups
 	_remove_from_group(entities_by_type, entity_data.entity_type, entity_id)
 	_remove_from_group(entities_by_faction, entity_data.faction_type, entity_id)
 	
-	# Clean up targeting relationships
 	for target_id in entity_data.target_ids:
 		remove_targeting_relationship(entity_id, target_id)
 	
 	for hunter_id in entity_data.targeting_ids:
 		remove_targeting_relationship(hunter_id, entity_id)
 	
-	# Remove from lookup tables
 	if entity_data.node_ref and entity_lookup.has(entity_data.node_ref):
 		entity_lookup.erase(entity_data.node_ref)
 	
@@ -487,13 +437,12 @@ func _destroy_entity(entity_id: String):
 	print("Destroyed entity: ", entity_id)
 
 func _update_spatial_index():
-	# Update positions for all active entities
 	for entity_data in entities.values():
 		if entity_data.is_valid() and entity_data.state == EntityState.ACTIVE:
 			var old_pos = entity_data.position
 			entity_data.update_position()
 			
-			if old_pos.distance_squared_to(entity_data.position) > 25.0:  # 5 pixel threshold
+			if old_pos.distance_squared_to(entity_data.position) > 25.0:
 				spatial_grid.add_entity(entity_data.entity_id, entity_data.position)
 				entity_data.last_spatial_update = Time.get_ticks_msec() / 1000.0
 
@@ -507,11 +456,9 @@ func _generate_entity_id(node: Node2D) -> String:
 	return node.name + "_" + str(node.get_instance_id())
 
 func _get_default_radius(entity_type: EntityType, node: Node2D) -> float:
-	# Check if node has collision shape for accurate radius
 	if node.has_method("get_collision_radius"):
 		return node.get_collision_radius()
 	
-	# Default radii by type
 	match entity_type:
 		EntityType.PLAYER_SHIP, EntityType.ENEMY_SHIP, EntityType.NEUTRAL_SHIP:
 			return 75.0
@@ -544,15 +491,12 @@ func _filter_entities(entity_ids: Array[String],
 		
 		var entity_data = entities[entity_id]
 		
-		# Filter by type
 		if entity_types.size() > 0 and entity_data.entity_type not in entity_types:
 			continue
 		
-		# Filter by faction
 		if factions.size() > 0 and entity_data.faction_type not in factions:
 			continue
 		
-		# Filter by state
 		if entity_data.state in exclude_states:
 			continue
 		
@@ -572,7 +516,6 @@ func _remove_from_group(group_dict: Dictionary, key, entity_id: String):
 		if group_dict[key].is_empty():
 			group_dict.erase(key)
 
-# Debug and utility methods
 func get_debug_info() -> String:
 	var active_count = 0
 	var by_type_counts = {}
@@ -588,8 +531,8 @@ func get_debug_info() -> String:
 		var faction_key = FactionType.keys()[entity_data.faction_type]
 		by_faction_counts[faction_key] = by_faction_counts.get(faction_key, 0) + 1
 	
-	return "Entities: %d total, %d active | Created: %d, Destroyed: %d | Queries this frame: %d" % [
-		entities.size(), active_count, total_entities_created, total_entities_destroyed, frame_query_count
+	return "Entities: %d total, %d active | Radar Systems: %d | Reports Sent: %d" % [
+		entities.size(), active_count, active_radar_systems.size(), total_reports_sent
 	]
 
 func get_performance_stats() -> Dictionary:
@@ -597,8 +540,8 @@ func get_performance_stats() -> Dictionary:
 		"total_entities": entities.size(),
 		"active_entities": entities.values().filter(func(e): return e.state == EntityState.ACTIVE).size(),
 		"spatial_cells": spatial_grid.grid.size(),
-		"pending_updates": pending_updates.size(),
-		"frame_queries": frame_query_count,
+		"radar_systems": active_radar_systems.size(),
+		"reports_sent": total_reports_sent,
 		"created": total_entities_created,
 		"destroyed": total_entities_destroyed
 	}

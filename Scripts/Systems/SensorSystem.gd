@@ -1,25 +1,24 @@
-# Scripts/Systems/SensorSystem.gd - DEBUG VERSION
+# Scripts/Systems/SensorSystem.gd - ENTITY SELF-REPORTING RADAR
 extends Node2D
 class_name SensorSystem
 
-# Radar specifications
-@export var radar_range_meters: float = 5000.0  # Detection range
-@export var radar_update_interval: float = 0.5   # Seconds between scans
-@export var radar_accuracy: float = 0.95         # Base accuracy (0.0 to 1.0)
+# RADAR SPECIFICATIONS - Now just processes reports
+@export var radar_range_meters: float = 250000000.0  # 250,000 km - full map coverage
+@export var radar_accuracy: float = 1.0              # Perfect military accuracy
+@export var cleanup_interval: float = 1.0            # How often to clean stale contacts
 
-# Target tracking
+# LEGACY COMPATIBILITY - Keep these exports so old scenes don't crash
+@export var radar_update_interval: float = 0.0166667 # Not used anymore, but kept for scene compatibility
+
+# Target tracking - now populated by entity reports
 var detected_targets: Dictionary = {}  # entity_id -> DetectedTarget
-var radar_update_timer: float = 0.0
 var parent_ship: Node2D
-var ship_faction: int = 1  # Will be set by parent ship
+var ship_faction: int = 1
 
 # Performance tracking
-var last_scan_count: int = 0
-var total_scans: int = 0
-
-# DEBUG: Add counters
-var debug_torpedo_count: int = 0
-var debug_threat_count: int = 0
+var reports_processed: int = 0
+var total_contacts: int = 0
+var cleanup_timer: float = 0.0
 
 class DetectedTarget:
 	var entity_id: String
@@ -40,11 +39,11 @@ class DetectedTarget:
 		detection_time = Time.get_ticks_msec() / 1000.0
 		last_update_time = detection_time
 	
-	func update_detection(new_pos: Vector2, new_vel: Vector2, accuracy: float):
+	func update_from_report(new_pos: Vector2, new_vel: Vector2):
 		position = new_pos
 		velocity = new_vel
 		last_update_time = Time.get_ticks_msec() / 1000.0
-		confidence = accuracy
+		confidence = 1.0  # Self-reported data is always accurate
 	
 	func get_age() -> float:
 		return Time.get_ticks_msec() / 1000.0 - last_update_time
@@ -55,7 +54,7 @@ class DetectedTarget:
 func _ready():
 	parent_ship = get_parent()
 	if parent_ship:
-		print("SensorSystem initialized on ship: ", parent_ship.name)
+		print("ENTITY-REPORTING RADAR initialized on ship: ", parent_ship.name)
 		
 		# Get ship faction
 		if parent_ship.has_method("_get_faction_type"):
@@ -65,179 +64,95 @@ func _ready():
 		else:
 			ship_faction = 1  # Player faction
 		
-		print("SensorSystem faction: ", ship_faction)
+		print("RADAR faction: ", ship_faction)
+		print("RADAR RANGE: ", radar_range_meters / 1000.0, " km")
 	else:
-		print("ERROR: SensorSystem has no parent ship!")
+		print("ERROR: RADAR has no parent ship!")
+	
+	# Register this radar system with EntityManager so entities can find us
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager:
+		# Add a method to EntityManager to register radar systems
+		if entity_manager.has_method("register_radar_system"):
+			entity_manager.register_radar_system(self)
+		else:
+			print("WARNING: EntityManager doesn't support radar registration yet")
 
 func _physics_process(delta):
-	radar_update_timer += delta
+	cleanup_timer += delta
 	
-	# Update target data age and remove stale targets
-	update_target_tracking()
-	
-	# Perform radar scan
-	if radar_update_timer >= radar_update_interval:
-		perform_radar_scan()
-		radar_update_timer = 0.0
+	# Periodic cleanup of stale contacts
+	if cleanup_timer >= cleanup_interval:
+		cleanup_stale_contacts()
+		cleanup_timer = 0.0
 
-func perform_radar_scan():
-	if not parent_ship:
-		return
+# MAIN API: Entities call this to report their position
+func receive_entity_report(entity_id: String, entity_pos: Vector2, velocity: Vector2, 
+						  entity_type: int, faction_type: int):
+	# Check if this entity is within our radar range
+	var distance = parent_ship.global_position.distance_to(entity_pos) * WorldSettings.meters_per_pixel
+	if distance > radar_range_meters:
+		return  # Out of range, ignore
 	
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	var target_manager = get_node_or_null("/root/TargetManager")
-	
-	if not entity_manager:
-		print("ERROR: No EntityManager found for radar scan!")
-		return
-	
-	if not target_manager:
-		print("ERROR: No TargetManager found for radar scan!")
-		return
-	
-	var range_pixels = radar_range_meters / WorldSettings.meters_per_pixel
-	var scan_center = parent_ship.global_position
-	
-	# Define what we want to detect based on our faction
-	var target_types: Array[EntityManager.EntityType] = [
-		EntityManager.EntityType.TORPEDO,
-		EntityManager.EntityType.MISSILE,
-		EntityManager.EntityType.PROJECTILE,
-		EntityManager.EntityType.PLAYER_SHIP,
-		EntityManager.EntityType.ENEMY_SHIP,
-		EntityManager.EntityType.NEUTRAL_SHIP
-	]
-	
-	# We detect all factions (but weapons will filter by enemy/friendly)
-	var all_factions: Array[EntityManager.FactionType] = []
-	
-	var exclude_states: Array[EntityManager.EntityState] = [
-		EntityManager.EntityState.DESTROYED,
-		EntityManager.EntityState.CLEANUP
-	]
-	
-	# Perform the scan
-	var detected_entities = entity_manager.get_entities_in_radius(
-		scan_center,
-		range_pixels,
-		target_types,
-		all_factions,
-		exclude_states
-	)
-	
-	last_scan_count = detected_entities.size()
-	total_scans += 1
-	
-	# DEBUG: Count torpedoes specifically
-	debug_torpedo_count = 0
-	for entity_data in detected_entities:
-		if entity_data.entity_type == EntityManager.EntityType.TORPEDO:
-			debug_torpedo_count += 1
-	
-	# DEBUG: Print detailed scan results for enemy ships
-	if ship_faction == 2:  # Enemy ship
-		print("=== ENEMY SENSOR SCAN DEBUG ===")
-		print("Total entities detected: ", detected_entities.size())
-		print("Torpedoes detected: ", debug_torpedo_count)
-		print("Ship faction: ", ship_faction)
-		print("Scan center: ", scan_center)
-		print("Scan range (pixels): ", range_pixels)
-		
-		for entity_data in detected_entities:
-			if entity_data.entity_type == EntityManager.EntityType.TORPEDO:
-				print("  Torpedo: ", entity_data.entity_id, " faction=", entity_data.faction_type, " type=", EntityManager.EntityType.keys()[entity_data.entity_type])
-		print("=== END SENSOR DEBUG ===")
-	
-	# Process detected entities and register with TargetManager
-	for entity_data in detected_entities:
-		# Skip our own ship
-		if entity_data.node_ref == parent_ship:
-			continue
-		
-		# Skip entities that belong to our ship (our own weapons)
-		if entity_data.owner_id and entity_data.owner_id.begins_with(parent_ship.name):
-			continue
-		
-		# Update or create detection record
-		if detected_targets.has(entity_data.entity_id):
-			# Update existing detection
-			var detected = detected_targets[entity_data.entity_id]
-			detected.update_detection(entity_data.position, entity_data.velocity, radar_accuracy)
-		else:
-			# New detection
-			var detected = DetectedTarget.new(
-				entity_data.entity_id,
-				entity_data.position,
-				entity_data.velocity,
-				entity_data.entity_type,
-				entity_data.faction_type
-			)
-			detected_targets[entity_data.entity_id] = detected
-			
-			print("Radar detected new target: ", entity_data.entity_id, 
-				  " (", EntityManager.EntityType.keys()[entity_data.entity_type], 
-				  ", faction ", EntityManager.FactionType.keys()[entity_data.faction_type], ")")
-		
-		# CRITICAL: Register/update this target with TargetManager
-		# This bridges SensorSystem detections to TargetData that weapons can use
-		update_target_manager_with_detection(entity_data, target_manager)
-
-# NEW: Bridge function to update TargetManager with our sensor data
-func update_target_manager_with_detection(entity_data, target_manager):
-	var detected = detected_targets[entity_data.entity_id]
-	
-	# Determine data source based on detection quality and range
-	var data_source = TargetData.DataSource.RADAR_CONTACT
-	if detected.confidence >= 1.0:
-		data_source = TargetData.DataSource.RADAR_CONTACT  # High quality sensor data
-	elif detected.confidence >= 0.8:
-		data_source = TargetData.DataSource.RADAR_CONTACT
+	# Update or create detection record
+	if detected_targets.has(entity_id):
+		# Update existing detection
+		var detected = detected_targets[entity_id]
+		detected.update_from_report(entity_pos, velocity)
 	else:
-		data_source = TargetData.DataSource.ESTIMATED
+		# New detection
+		var detected = DetectedTarget.new(entity_id, entity_pos, velocity, entity_type, faction_type)
+		detected_targets[entity_id] = detected
+		
+		print("RADAR new contact: ", entity_id, 
+			  " (", EntityManager.EntityType.keys()[entity_type], 
+			  ", faction ", EntityManager.FactionType.keys()[faction_type], ")")
 	
-	# If we have direct visual (node reference is valid), use that instead
-	if entity_data.node_ref and is_instance_valid(entity_data.node_ref):
-		# For very close targets or clear sensor readings, use direct visual
-		var distance_meters = parent_ship.global_position.distance_to(entity_data.position) * WorldSettings.meters_per_pixel
-		if distance_meters < 500.0 or detected.confidence >= 0.98:
-			data_source = TargetData.DataSource.DIRECT_VISUAL
+	reports_processed += 1
 	
 	# Update TargetManager with this detection
-	if entity_data.node_ref:
-		# Try to get existing TargetData
-		var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
-		
-		if target_data:
-			# Update existing target data
-			target_data.update_data(detected.position, detected.velocity, data_source)
-		else:
-			# Register new target
-			target_manager.register_target(entity_data.node_ref, data_source)
-	else:
-		# Node reference lost, but we can still update by ID if it exists
-		target_manager.update_target_data(
-			entity_data.entity_id,
-			detected.position,
-			detected.velocity,
-			data_source
-		)
+	update_target_manager_with_detection(entity_id, entity_pos, velocity)
 
-func update_target_tracking():
-	# Remove stale targets
-	var targets_to_remove = []
+# Bridge function to update TargetManager
+func update_target_manager_with_detection(entity_id: String, entity_pos: Vector2, velocity: Vector2):
+	var target_manager = get_node_or_null("/root/TargetManager")
+	if not target_manager:
+		return
+	
+	# Entity reports are always high-quality data
+	var data_source = TargetData.DataSource.DIRECT_VISUAL
+	
+	# Try to find the actual node for this entity
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager:
+		var entity_data = entity_manager.get_entity(entity_id)
+		if entity_data and entity_data.node_ref:
+			# Update existing TargetData or register new target
+			var target_data = target_manager.get_target_data_for_node(entity_data.node_ref)
+			if target_data:
+				target_data.update_data(entity_pos, velocity, data_source)
+			else:
+				target_manager.register_target(entity_data.node_ref, data_source)
+		else:
+			# Fallback: update by ID
+			target_manager.update_target_data(entity_id, entity_pos, velocity, data_source)
+
+func cleanup_stale_contacts():
+	var contacts_to_remove = []
 	
 	for entity_id in detected_targets.keys():
 		var detected = detected_targets[entity_id]
-		if detected.is_stale(15.0):  # 15 second timeout
-			targets_to_remove.append(entity_id)
+		if detected.is_stale(5.0):  # 5 second timeout for entity reports
+			contacts_to_remove.append(entity_id)
 	
-	for entity_id in targets_to_remove:
-		print("Radar lost contact with: ", entity_id)
+	for entity_id in contacts_to_remove:
+		print("RADAR lost contact: ", entity_id)
 		detected_targets.erase(entity_id)
+	
+	total_contacts = detected_targets.size()
 
-# PUBLIC API - Used by weapons and other systems
+# PUBLIC API - Used by weapons and other systems (unchanged)
 
-# NEW: Get TargetData objects for weapons to use
 func get_target_data_for_threats() -> Array[TargetData]:
 	var target_manager = get_node_or_null("/root/TargetManager")
 	if not target_manager:
@@ -247,7 +162,6 @@ func get_target_data_for_threats() -> Array[TargetData]:
 	var threats = get_incoming_threats()
 	
 	for threat in threats:
-		# Try to find corresponding TargetData
 		var entity_manager = get_node_or_null("/root/EntityManager")
 		if entity_manager:
 			var entity_data = entity_manager.get_entity(threat.entity_id)
@@ -258,25 +172,21 @@ func get_target_data_for_threats() -> Array[TargetData]:
 	
 	return result
 
-# NEW: Get best threat target as TargetData for PDC systems
 func get_best_threat_target_data() -> TargetData:
 	var target_data_threats = get_target_data_for_threats()
 	
 	if target_data_threats.is_empty():
 		return null
 	
-	# Find closest incoming threat
 	var best_target: TargetData = null
 	var best_score = -1.0
 	
 	for target_data in target_data_threats:
-		if not target_data.is_reliable():
-			continue
-		
-		# Score based on distance and threat level
 		var distance = parent_ship.global_position.distance_to(target_data.predicted_position)
+		var distance_km = distance * WorldSettings.meters_per_pixel / 1000.0
 		var speed = target_data.velocity.length()
-		var threat_score = (speed * 0.1) + (1.0 / (distance + 1.0)) * 1000.0
+		
+		var threat_score = speed * 10.0 + (50000.0 / (distance_km + 1.0))
 		
 		if threat_score > best_score:
 			best_target = target_data
@@ -284,17 +194,14 @@ func get_best_threat_target_data() -> TargetData:
 	
 	return best_target
 
-# Get all detected targets (optionally filtered)
 func get_detected_targets(filter_types: Array[EntityManager.EntityType] = [], 
 						 filter_factions: Array[EntityManager.FactionType] = []) -> Array[DetectedTarget]:
 	var result: Array[DetectedTarget] = []
 	
 	for detected in detected_targets.values():
-		# Filter by type if specified
 		if filter_types.size() > 0 and detected.entity_type not in filter_types:
 			continue
 		
-		# Filter by faction if specified
 		if filter_factions.size() > 0 and detected.faction_type not in filter_factions:
 			continue
 		
@@ -302,7 +209,6 @@ func get_detected_targets(filter_types: Array[EntityManager.EntityType] = [],
 	
 	return result
 
-# Get detected enemies (based on our faction)
 func get_detected_enemies() -> Array[DetectedTarget]:
 	var enemy_factions: Array[EntityManager.FactionType] = []
 	
@@ -310,26 +216,11 @@ func get_detected_enemies() -> Array[DetectedTarget]:
 		enemy_factions = [EntityManager.FactionType.ENEMY]
 	elif ship_faction == 2:  # Enemy ship targets players
 		enemy_factions = [EntityManager.FactionType.PLAYER]
-	else:  # Neutral targets everyone? Or no one?
+	else:
 		enemy_factions = [EntityManager.FactionType.ENEMY, EntityManager.FactionType.PLAYER]
 	
-	var enemies = get_detected_targets([], enemy_factions)
-	
-	# DEBUG: Print detailed enemy detection for enemy ships
-	if ship_faction == 2:  # Enemy ship
-		print("--- ENEMY DETECTION DEBUG ---")
-		print("Ship faction: ", ship_faction)
-		print("Looking for enemy factions: ", enemy_factions)
-		print("Total detected targets: ", detected_targets.size())
-		print("Filtered enemies found: ", enemies.size())
-		
-		for enemy in enemies:
-			print("  Enemy: ", enemy.entity_id, " type=", EntityManager.EntityType.keys()[enemy.entity_type], " faction=", EntityManager.FactionType.keys()[enemy.faction_type])
-		print("--- END ENEMY DEBUG ---")
-	
-	return enemies
+	return get_detected_targets([], enemy_factions)
 
-# Get detected incoming threats (enemy projectiles)
 func get_incoming_threats() -> Array[DetectedTarget]:
 	var threat_types: Array[EntityManager.EntityType] = [
 		EntityManager.EntityType.TORPEDO,
@@ -338,70 +229,54 @@ func get_incoming_threats() -> Array[DetectedTarget]:
 	]
 	
 	var enemy_factions: Array[EntityManager.FactionType] = []
-	if ship_faction == 1:  # Player ship
+	if ship_faction == 1:
 		enemy_factions = [EntityManager.FactionType.ENEMY]
-	elif ship_faction == 2:  # Enemy ship
+	elif ship_faction == 2:
 		enemy_factions = [EntityManager.FactionType.PLAYER]
 	
 	var threats = get_detected_targets(threat_types, enemy_factions)
 	
-	# DEBUG: Detailed threat analysis for enemy ships
-	if ship_faction == 2:  # Enemy ship
-		print("*** THREAT DETECTION DEBUG ***")
-		print("Ship faction: ", ship_faction)
-		
-		var threat_type_names = []
-		for t in threat_types:
-			threat_type_names.append(EntityManager.EntityType.keys()[t])
-		print("Looking for threat types: ", threat_type_names)
-		
-		var enemy_faction_names = []
-		for f in enemy_factions:
-			enemy_faction_names.append(EntityManager.FactionType.keys()[f])
-		print("From enemy factions: ", enemy_faction_names)
-		print("Raw threats found: ", threats.size())
-		
-		for threat in threats:
-			print("  Threat: ", threat.entity_id, " type=", EntityManager.EntityType.keys()[threat.entity_type], " faction=", EntityManager.FactionType.keys()[threat.faction_type])
-	
-	# Additional filtering: only return threats that are actually heading toward us
+	# All enemy projectiles are immediate threats (same aggressive logic)
 	var incoming_threats: Array[DetectedTarget] = []
 	
 	for threat in threats:
-		if is_threat_incoming(threat):
+		if is_military_threat(threat):
 			incoming_threats.append(threat)
-			if ship_faction == 2:  # Enemy ship debug
-				print("    INCOMING: ", threat.entity_id)
-		else:
-			if ship_faction == 2:  # Enemy ship debug
-				print("    NOT INCOMING: ", threat.entity_id)
 	
-	if ship_faction == 2:  # Enemy ship
-		print("Final incoming threats: ", incoming_threats.size())
-		print("*** END THREAT DEBUG ***")
-	
-	debug_threat_count = incoming_threats.size()
 	return incoming_threats
 
-# Check if a detected target is heading toward our ship
-func is_threat_incoming(detected: DetectedTarget) -> bool:
+func is_military_threat(detected: DetectedTarget) -> bool:
 	if not parent_ship:
 		return false
 	
-	# Simple check: is the threat moving in our general direction?
-	var to_us = parent_ship.global_position - detected.position
-	var threat_velocity = detected.velocity
+	var distance_to_target = parent_ship.global_position.distance_to(detected.position) * WorldSettings.meters_per_pixel
+	var distance_km = distance_to_target / 1000.0
 	
-	if threat_velocity.length() < 10.0:  # Very slow or stationary
+	# Same aggressive threat logic as before
+	if distance_km < 50.0:
+		return true
+	
+	if detected.entity_type == EntityManager.EntityType.TORPEDO:
+		return true
+	
+	if detected.entity_type == EntityManager.EntityType.MISSILE:
+		return true
+	
+	if detected.entity_type == EntityManager.EntityType.PROJECTILE:
+		var speed_mps = detected.velocity.length()
+		if distance_km < 25.0 and speed_mps > 100.0:
+			return true
 		return false
 	
-	# Check if velocity vector points toward us (dot product > 0)
+	var threat_velocity = detected.velocity
+	if threat_velocity.length() < 10.0:
+		return false
+	
+	var to_us = parent_ship.global_position - detected.position
 	var dot_product = threat_velocity.normalized().dot(to_us.normalized())
 	
-	# Allow some margin for error (0.3 is about 70 degrees cone)
-	return dot_product > 0.3
+	return dot_product > -0.5
 
-# Get closest threat to our ship
 func get_closest_threat() -> DetectedTarget:
 	if not parent_ship:
 		return null
@@ -421,28 +296,9 @@ func get_closest_threat() -> DetectedTarget:
 	
 	return closest
 
-# Get targets within a specific range
-func get_targets_in_range(center: Vector2, range_meters: float, 
-						 filter_types: Array[EntityManager.EntityType] = [], 
-						 filter_factions: Array[EntityManager.FactionType] = []) -> Array[DetectedTarget]:
-	var range_pixels = range_meters / WorldSettings.meters_per_pixel
-	var range_sq = range_pixels * range_pixels
-	var result: Array[DetectedTarget] = []
-	
-	var all_targets = get_detected_targets(filter_types, filter_factions)
-	
-	for target in all_targets:
-		var distance_sq = center.distance_squared_to(target.position)
-		if distance_sq <= range_sq:
-			result.append(target)
-	
-	return result
-
-# Debug information
 func get_debug_info() -> String:
 	var threats = get_incoming_threats()
-	var all_contacts = detected_targets.size()
 	
-	return "Radar: %d contacts, %d threats | Range: %.0fm | Scans: %d" % [
-		all_contacts, threats.size(), radar_range_meters, total_scans
+	return "ENTITY-REPORTING RADAR: %d contacts, %d threats | Reports: %d | Range: %.0f km" % [
+		total_contacts, threats.size(), reports_processed, radar_range_meters / 1000.0
 	]
