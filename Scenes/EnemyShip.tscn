@@ -23,5 +23,5 @@ shape = SubResource("CapsuleShape2D_hb6w0")
 scale = Vector2(0.25, 0.25)
 texture = ExtResource("1_pf77x")
 
-[node name="PointDefenseCannon" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(13, -80)
+[node name="PDC" parent="." instance=ExtResource("3_s8ewm")]
+position = Vector2(14, -80)

@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" uid="uid://csn1e2p65xco" path="res://Scenes/PDCBullet.tscn" id="4_58w3o"]
 
 [node name="PDC" type="Node2D"]
+rotation = 1.5708
 scale = Vector2(0.25, 0.25)
 script = ExtResource("1_3abb1")
 
