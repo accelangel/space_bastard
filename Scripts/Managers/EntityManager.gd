@@ -31,7 +31,7 @@ class EntityData:
 func _ready():
 	# Set up map boundaries for auto-cleanup
 	var half_size = WorldSettings.map_size_pixels / 2
-	map_bounds = Rect2(-half_size, -half_size, WorldSettings.map_size_pixels.x, WorldSettings.map_size_pixels.y)
+	map_bounds = Rect2(-half_size.x, -half_size.y, WorldSettings.map_size_pixels.x, WorldSettings.map_size_pixels.y)
 	
 	print("EntityManager initialized (Simplified)")
 	print("Map bounds: ", map_bounds)

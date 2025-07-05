@@ -14,7 +14,8 @@ func _ready():
 	if parent_ship and "faction" in parent_ship:
 		ship_faction = parent_ship.faction
 	
-	print("SensorSystem initialized for ", parent_ship.name if parent_ship else "unknown", " faction: ", ship_faction)
+	var ship_name = parent_ship.name if parent_ship else "unknown"
+	print("SensorSystem initialized for ", ship_name, " faction: ", ship_faction)
 
 func update_contacts(entity_reports: Array):
 	# Clear old contacts

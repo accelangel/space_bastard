@@ -1,5 +1,5 @@
 # Scripts/Entities/Weapons/PDCBullet.gd - SIMPLIFIED VERSION
-extends Area2D
+extends Node2D  # Changed back to Node2D to match the scene
 class_name PDCBullet
 
 # Bullet properties
@@ -16,9 +16,6 @@ func _ready():
 	if entity_manager:
 		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction)
 	
-	# Connect collision signal
-	area_entered.connect(_on_area_entered)
-	
 	# Set rotation to match velocity
 	if velocity.length() > 0:
 		rotation = velocity.angle()
@@ -31,23 +28,38 @@ func _physics_process(delta):
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager and entity_id:
 		entity_manager.update_entity_position(entity_id, global_position)
-
-func _on_area_entered(area: Area2D):
-	# Check if we hit something hostile
-	if is_hostile_to(area):
-		# Both bullet and target die instantly
-		area.queue_free()
-		queue_free()
-
-func is_hostile_to(other: Node) -> bool:
-	if not "faction" in other:
-		return false
 	
+	# Simple collision check with all entities
+	check_collisions()
+
+func check_collisions():
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if not entity_manager:
+		return
+	
+	# Check collision with all entities
+	for entity_data in entity_manager.get_all_entities():
+		if not is_instance_valid(entity_data.node_ref):
+			continue
+			
+		if entity_data.entity_id == entity_id:
+			continue  # Don't hit ourselves
+		
+		# Only check torpedoes that are hostile to us
+		if entity_data.entity_type == "torpedo" and is_hostile_to_faction(entity_data.faction):
+			var distance = global_position.distance_to(entity_data.position)
+			if distance < 20.0:  # Simple collision radius
+				# Hit! Destroy both
+				entity_data.node_ref.queue_free()
+				queue_free()
+				return
+
+func is_hostile_to_faction(other_faction: String) -> bool:
 	# Simple faction check
 	if faction == "friendly":
-		return other.faction == "hostile"
+		return other_faction == "hostile"
 	elif faction == "hostile":
-		return other.faction == "friendly"
+		return other_faction == "friendly"
 	
 	return false
 

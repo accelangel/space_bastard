@@ -28,7 +28,8 @@ func _ready():
 		if not sensor_system:
 			print("PDCSystem: No sensor system found on parent ship!")
 	
-	print("PDCSystem initialized on ", parent_ship.name if parent_ship else "unknown")
+	var ship_name = parent_ship.name if parent_ship else "unknown"
+	print("PDCSystem initialized on ", ship_name)
 
 func _physics_process(delta):
 	fire_timer += delta
@@ -83,7 +84,6 @@ func create_bullet_wall_across_path(torpedo: Node2D):
 	
 	# Calculate spread perpendicular to line from ship to intercept
 	var to_intercept = (intercept_point - global_position).normalized()
-	var perpendicular = Vector2(-to_intercept.y, to_intercept.x)
 	
 	# Create wall of bullets
 	var angle_step = deg_to_rad(wall_spread_angle) / float(bullets_per_wall - 1)
