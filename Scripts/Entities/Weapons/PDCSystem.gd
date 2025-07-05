@@ -28,7 +28,9 @@ func _ready():
 		if not sensor_system:
 			print("PDCSystem: No sensor system found on parent ship!")
 	
-	var ship_name = parent_ship.name if parent_ship else "unknown"
+	var ship_name: String = "unknown"
+	if parent_ship:
+		ship_name = parent_ship.name
 	print("PDCSystem initialized on ", ship_name)
 
 func _physics_process(delta):
