@@ -2,6 +2,9 @@
 extends Node2D
 class_name FireControlManager
 
+# DEBUG CONTROL
+@export var debug_enabled: bool = true
+
 # System configuration
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 5.0
@@ -68,9 +71,14 @@ func _ready():
 
 func discover_pdcs():
 	# Find all PDC nodes in the ship
+	print("FCM: Discovering PDCs on ship...")
 	for child in parent_ship.get_children():
 		if child.has_method("get_capabilities"):  # PDCs have this method
 			register_pdc(child)
+			print("FCM: Found PDC: ", child.name)
+	
+	if registered_pdcs.size() == 0:
+		print("FCM WARNING: No PDCs found! Check if PDCSystem script is attached correctly.")
 
 func register_pdc(pdc_node: Node2D):
 	var pdc_id = pdc_node.pdc_id
@@ -103,7 +111,10 @@ func _physics_process(delta):
 
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
-	var current_time = Time.get_ticks_msec() / 1000.0
+	
+	# DEBUG: Log torpedo detection
+	if current_torpedoes.size() > 0 and tracked_targets.size() == 0:
+		print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
 	
 	# Update existing targets
 	var targets_to_remove = []
@@ -127,6 +138,7 @@ func update_target_tracking():
 		var torpedo_id = get_torpedo_id(torpedo)
 		if not tracked_targets.has(torpedo_id):
 			add_new_target(torpedo)
+			print("FCM: Added new target: ", torpedo_id)
 
 func add_new_target(torpedo: Node2D):
 	var target_data = TargetData.new()
@@ -347,15 +359,31 @@ func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	return rotation_score * target_data.feasibility_score
 
 func execute_fire_missions():
+	# DEBUG: Log execution status
+	if target_assignments.size() > 0:
+		print("FCM: Executing fire missions for %d targets" % target_assignments.size())
+	
 	for target_id in target_assignments:
+		if not tracked_targets.has(target_id):
+			print("FCM ERROR: Target assignment for non-existent target!")
+			continue
+			
 		var target_data = tracked_targets[target_id]
 		var assigned_pdcs = target_assignments[target_id]
+		
+		# DEBUG: Log PDC assignments
+		print("FCM: Target %s assigned to %d PDCs" % [target_id, assigned_pdcs.size()])
 		
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
 			
 			# Calculate firing solution
 			var firing_angle = calculate_firing_solution(pdc, target_data)
+			
+			# DEBUG: Log firing solution
+			var current_angle_deg = rad_to_deg(pdc.current_rotation)
+			var target_angle_deg = rad_to_deg(firing_angle)
+			print("FCM: PDC %s - Current: %.1f°, Target: %.1f°" % [pdc_id, current_angle_deg, target_angle_deg])
 			
 			# Command PDC
 			var is_emergency = target_data.is_critical
@@ -364,12 +392,40 @@ func execute_fire_missions():
 			# Start firing if PDC reports ready
 			if pdc.is_aimed():
 				pdc.start_firing()
+				print("FCM: PDC %s started firing!" % pdc_id)
 
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
-	# Simple lead calculation for now
+	# Get positions
 	var pdc_pos = pdc.get_muzzle_world_position()
-	var to_intercept = target_data.intercept_point - pdc_pos
-	return to_intercept.angle()
+	var target_pos = target_data.last_position
+	var target_vel = target_data.last_velocity
+	
+	# Calculate intercept point with proper lead
+	var to_target = target_pos - pdc_pos
+	var distance = to_target.length()
+	var distance_meters = distance * WorldSettings.meters_per_pixel
+	
+	# Time for bullet to reach target
+	var bullet_time = distance_meters / 800.0  # bullet velocity
+	
+	# Predict where target will be
+	var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
+	var predicted_pos = target_pos + target_vel_pixels * bullet_time
+	
+	# Calculate angle to predicted position
+	var to_intercept = predicted_pos - pdc_pos
+	var firing_angle = to_intercept.angle()
+	
+	# DEBUG: Log calculation details
+	if debug_enabled:
+		print("FCM Firing Solution:")
+		print("  Target at: ", target_pos)
+		print("  Target velocity: ", target_vel, " m/s")
+		print("  Bullet flight time: %.2f s" % bullet_time)
+		print("  Predicted intercept: ", predicted_pos)
+		print("  Firing angle: %.1f°" % rad_to_deg(firing_angle))
+	
+	return firing_angle
 
 func pdc_ready_to_fire(pdc_id: String):
 	# Called by PDC when it's aimed and ready

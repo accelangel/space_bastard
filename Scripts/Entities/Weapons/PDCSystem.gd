@@ -35,6 +35,10 @@ var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 var rounds_fired: int = 0
 var current_target_id: String = ""
 
+# DEBUG
+var debug_timer: float = 0.0
+var last_debug_status: String = ""
+
 func _ready():
 	parent_ship = get_parent()
 	sprite = get_node_or_null("Sprite2D")
@@ -62,6 +66,20 @@ func _physics_process(delta):
 		if fire_timer >= fire_interval:
 			fire_bullet()
 			fire_timer = 0.0
+	
+	# DEBUG: Periodic status updates
+	debug_timer += delta
+	if debug_timer >= 1.0:
+		debug_timer = 0.0
+		var new_status = "%s rot:%.1f°->%.1f° (%.1f°)" % [
+			current_status, 
+			rad_to_deg(current_rotation),
+			rad_to_deg(target_rotation),
+			rad_to_deg(get_tracking_error())
+		]
+		if new_status != last_debug_status:
+			print("PDC %s: %s" % [pdc_id, new_status])
+			last_debug_status = new_status
 
 # Called by Fire Control Manager to assign a new target
 func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
@@ -69,6 +87,13 @@ func set_target(target_id: String, target_angle: float, is_emergency: bool = fal
 	target_rotation = target_angle
 	emergency_slew = is_emergency
 	current_status = "TRACKING"
+	
+	# DEBUG: Log target assignment
+	var angle_deg = rad_to_deg(target_angle)
+	var current_deg = rad_to_deg(current_rotation)
+	print("PDC %s: New target %s at %.1f° (current: %.1f°, emergency: %s)" % [
+		pdc_id, target_id, angle_deg, current_deg, str(is_emergency)
+	])
 
 # Called by Fire Control Manager to start firing
 func start_firing():
@@ -127,8 +152,13 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# Fire in current direction
+	# Fire in current direction (world space)
 	var fire_direction = Vector2.from_angle(current_rotation)
+	
+	# DEBUG: Check firing direction
+	var angle_deg = rad_to_deg(current_rotation)
+	if rounds_fired % 18 == 0:  # Log every second
+		print("PDC %s firing at %.1f° (world angle)" % [pdc_id, angle_deg])
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
