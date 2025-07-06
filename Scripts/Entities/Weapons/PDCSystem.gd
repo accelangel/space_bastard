@@ -7,8 +7,8 @@ class_name PDCSystem
 @export var bullet_velocity_mps: float = 300.0
 @export var stream_length: int = 20  # Bullets per stream
 @export var stream_spread_degrees: float = 1.5  # Slight cone angle for the stream
-@export var engagement_range_meters: float = 8000.0  # Start engaging at 8km
-@export var min_intercept_distance_meters: float = 500.0  # Don't shoot if torpedo is too close
+@export var engagement_range_meters: float = 2000.0  # Start engaging at 8km
+@export var min_intercept_distance_meters: float = 50.0  # Don't shoot if torpedo is too close
 
 # DEBUG FLAGS
 @export var debug_enabled: bool = true
