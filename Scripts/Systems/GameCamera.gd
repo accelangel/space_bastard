@@ -1,3 +1,4 @@
+# Debug version of GameCamera.gd with enhanced logging
 extends Camera2D
 
 # Map configuration
@@ -42,6 +43,11 @@ func _ready():
 	
 	# Create selection indicator
 	create_selection_indicator()
+	
+	# Debug: List all available input actions
+	print("=== DEBUG: Available input actions ===")
+	for action in InputMap.get_actions():
+		print("Action: ", action)
 
 func _process(delta):
 	Zoom(delta)
@@ -116,8 +122,16 @@ func ClickAndDrag():
 		position = dragStartCameraPos - moveVector * (1 / zoom.x)
 
 func HandleShipSelection():
-	# Handle ship selection on double-click
+	# DEBUG: Add more comprehensive input detection
 	if Input.is_action_just_pressed("select_ship"):
+		print("=== DEBUG: select_ship action detected! ===")
+		handle_mouse_click()
+	
+	# DEBUG: Also try detecting raw mouse input
+	if Input.is_action_just_pressed("select_ship"):
+		print("=== DEBUG: Left mouse button pressed! ===")
+		var mouse_pos = get_global_mouse_position()
+		print("Mouse world position: ", mouse_pos)
 		handle_mouse_click()
 	
 	# Stop following on escape key
@@ -126,15 +140,30 @@ func HandleShipSelection():
 			stop_following_ship()
 
 func handle_mouse_click():
+	print("=== DEBUG: handle_mouse_click() called ===")
+	
 	var current_time_float = Time.get_time_dict_from_system()["hour"] * 3600.0 + Time.get_time_dict_from_system()["minute"] * 60.0 + Time.get_time_dict_from_system()["second"]
 	var current_mouse_pos = get_viewport().get_mouse_position()
+	
+	print("Current time: ", current_time_float)
+	print("Current mouse pos: ", current_mouse_pos)
+	print("Last click time: ", last_click_time)
+	print("Last click pos: ", last_click_position)
 	
 	# Check if this is a double-click
 	var time_since_last_click = current_time_float - last_click_time
 	var distance_from_last_click = current_mouse_pos.distance_to(last_click_position)
 	
+	print("Time since last click: ", time_since_last_click)
+	print("Distance from last click: ", distance_from_last_click)
+	
 	if time_since_last_click <= double_click_threshold and distance_from_last_click <= click_position_threshold:
 		# This is a double-click!
+		print("=== DEBUG: Double-click detected! ===")
+		select_ship_at_mouse()
+	else:
+		print("=== DEBUG: Single click (not double-click) ===")
+		# For debugging, let's also try selecting on single click
 		select_ship_at_mouse()
 	
 	# Update last click info
@@ -142,7 +171,11 @@ func handle_mouse_click():
 	last_click_position = current_mouse_pos
 
 func select_ship_at_mouse():
+	print("=== DEBUG: select_ship_at_mouse() called ===")
+	
 	var mouse_world_pos = get_global_mouse_position()
+	print("Mouse world position: ", mouse_world_pos)
+	
 	var space_state = get_world_2d().direct_space_state
 	
 	# Create a point query
@@ -151,20 +184,30 @@ func select_ship_at_mouse():
 	query.collision_mask = 1  # Assuming ships are on collision layer 1
 	
 	var results = space_state.intersect_point(query)
+	print("Physics query results count: ", results.size())
 	
 	# Look for ships and torpedoes in the results
-	for result in results:
+	for i in range(results.size()):
+		var result = results[i]
 		var body = result.collider
+		print("Result ", i, ": ", body.name, " (", body.get_class(), ")")
+		print("  - Groups: ", body.get_groups())
+		print("  - Has get_velocity_mps: ", body.has_method("get_velocity_mps"))
+		
 		if body.is_in_group("enemy_ships") or body.is_in_group("player_ships") or body.is_in_group("torpedoes") or body.has_method("get_velocity_mps"):
+			print("=== DEBUG: Found valid ship/torpedo to follow! ===")
 			start_following_ship(body)
 			print("Now following: ", body.name)
 			return
+	
+	print("=== DEBUG: No valid ships found at mouse position ===")
 	
 	# If no ship found, stop following current ship
 	if following_ship:
 		stop_following_ship()
 
 func start_following_ship(ship: Node2D):
+	print("=== DEBUG: start_following_ship() called for: ", ship.name, " ===")
 	following_ship = ship
 	follow_offset = Vector2.ZERO
 	was_following = true
@@ -173,6 +216,9 @@ func start_following_ship(ship: Node2D):
 	if selection_indicator:
 		selection_indicator.visible = true
 		selection_indicator.global_position = ship.global_position
+		print("Selection indicator made visible and positioned")
+	else:
+		print("WARNING: selection_indicator is null!")
 	
 	print("Camera now following: ", ship.name)
 
@@ -208,6 +254,7 @@ func FollowShip(delta):
 		selection_indicator.global_position = following_ship.global_position
 
 func create_selection_indicator():
+	print("=== DEBUG: Creating selection indicator ===")
 	selection_indicator = Node2D.new()
 	selection_indicator.name = "SelectionIndicator"
 	selection_indicator.visible = false
@@ -235,6 +282,8 @@ func create_selection_indicator():
 	tween.set_loops()
 	tween.tween_method(update_indicator_scale, 0.8, 1.2, 1.0)
 	tween.tween_method(update_indicator_scale, 1.2, 0.8, 1.0)
+	
+	print("Selection indicator created successfully")
 
 func update_indicator_scale(scale_value: float):
 	if selection_indicator and selection_indicator.visible:
