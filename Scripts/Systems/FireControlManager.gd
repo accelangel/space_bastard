@@ -1,10 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - FIXED FIRING VERSION
-# CRITICAL FIXES:
-# 1. PDCs now properly authorized to fire when conditions are met
-# 2. Fixed execute_fire_missions() to actually call authorize_firing()
-# 3. Simplified firing logic - no more complex state management blocking shots
-# 4. Better target validation and continuous firing solution updates
-
+# Scripts/Systems/FireControlManager.gd - ENHANCED WITH BATTLE TRACKING
 extends Node2D
 class_name FireControlManager
 
@@ -48,6 +42,21 @@ var ship_forward_direction: Vector2 = Vector2.UP
 var update_interval: float = 0.05
 var update_timer: float = 0.0
 
+# NEW: Battle Statistics Tracking
+var battle_stats: Dictionary = {
+	"battle_start_time": 0.0,
+	"total_torpedoes_detected": 0,
+	"total_torpedoes_intercepted": 0,
+	"total_torpedoes_missed": 0,
+	"total_rounds_fired": 0,
+	"successful_intercepts": 0,
+	"failed_intercepts": 0,
+	"battle_active": false
+}
+
+var torpedo_tracking: Dictionary = {}  # Track individual torpedo outcomes
+var intercept_log: Array = []  # Detailed log of each intercept attempt
+
 # Statistics
 var total_engagements: int = 0
 var successful_intercepts: int = 0
@@ -66,6 +75,7 @@ class TargetData:
 	var engagement_start_time: float
 	var is_critical: bool = false
 	var distance_meters: float = 0.0
+	var first_detected_time: float = 0.0  # NEW: For tracking
 
 func _ready():
 	parent_ship = get_parent()
@@ -77,7 +87,30 @@ func _ready():
 		
 		discover_pdcs()
 	
+	# Initialize battle tracking
+	start_battle_session()
+	
 	print("FireControlManager initialized with ", registered_pdcs.size(), " PDCs")
+
+func start_battle_session():
+	battle_stats.battle_start_time = Time.get_ticks_msec() / 1000.0
+	battle_stats.battle_active = true
+	battle_stats.total_torpedoes_detected = 0
+	battle_stats.total_torpedoes_intercepted = 0
+	battle_stats.total_torpedoes_missed = 0
+	battle_stats.total_rounds_fired = 0
+	battle_stats.successful_intercepts = 0
+	battle_stats.failed_intercepts = 0
+	
+	torpedo_tracking.clear()
+	intercept_log.clear()
+	
+	# Reset PDC stats
+	for pdc in registered_pdcs.values():
+		if pdc.has_method("reset_battle_stats"):
+			pdc.reset_battle_stats()
+	
+	print("=== BATTLE SESSION STARTED ===")
 
 func discover_pdcs():
 	print("FCM: Discovering PDCs on ship...")
@@ -114,7 +147,10 @@ func _physics_process(delta):
 	update_target_tracking()
 	assess_all_threats()
 	optimize_pdc_assignments()
-	execute_fire_missions()  # FIXED: This now properly authorizes firing
+	execute_fire_missions()
+	
+	# Update battle statistics
+	update_battle_stats()
 
 func print_debug_summary():
 	var active_targets = tracked_targets.size()
@@ -131,6 +167,13 @@ func print_debug_summary():
 	print("\n=== FCM STATUS ===")
 	print("Targets: %d tracked (%d critical, %d in range)" % [active_targets, critical_count, in_range_count])
 	print("PDCs: %d/%d engaged" % [engaged_pdcs, registered_pdcs.size()])
+	
+	# NEW: Battle stats in debug
+	print("Battle Stats: %d detected, %d intercepted, %d missed" % [
+		battle_stats.total_torpedoes_detected,
+		battle_stats.total_torpedoes_intercepted, 
+		battle_stats.total_torpedoes_missed
+	])
 	
 	for pdc_id in registered_pdcs:
 		var pdc = registered_pdcs[pdc_id]
@@ -191,10 +234,20 @@ func add_new_target(torpedo: Node2D):
 	target_data.target_id = get_torpedo_id(torpedo)
 	target_data.node_ref = torpedo
 	target_data.engagement_start_time = Time.get_ticks_msec() / 1000.0
+	target_data.first_detected_time = target_data.engagement_start_time  # NEW
 	
 	update_target_data(target_data)
 	tracked_targets[target_data.target_id] = target_data
 	total_engagements += 1
+	
+	# NEW: Track new torpedo detection
+	battle_stats.total_torpedoes_detected += 1
+	torpedo_tracking[target_data.target_id] = {
+		"detected_time": target_data.first_detected_time,
+		"status": "tracking",
+		"assigned_pdcs": [],
+		"outcome": "unknown"
+	}
 	
 	if debug_verbose:
 		print("FCM: Added new target: %s at %.1f km" % [target_data.target_id, target_data.distance_meters / 1000.0])
@@ -345,6 +398,11 @@ func optimize_pdc_assignments():
 		if assigned_pdcs.size() > 0:
 			target_assignments[target_id] = assigned_pdcs
 			target_data.assigned_pdcs = assigned_pdcs
+			
+			# Update torpedo tracking
+			if torpedo_tracking.has(target_id):
+				torpedo_tracking[target_id].assigned_pdcs = assigned_pdcs
+				torpedo_tracking[target_id].status = "engaged"
 	
 	for pdc_id in registered_pdcs:
 		if pdc_assignments[pdc_id] == "":
@@ -391,7 +449,6 @@ func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	
 	return rotation_score * target_data.feasibility_score
 
-# CRITICAL FIX: This function now properly authorizes PDCs to fire
 func execute_fire_missions():
 	for target_id in target_assignments:
 		if not tracked_targets.has(target_id):
@@ -400,28 +457,23 @@ func execute_fire_missions():
 		var target_data = tracked_targets[target_id]
 		var assigned_pdcs = target_assignments[target_id]
 		
-		# Skip if target is out of range
 		if target_data.distance_meters > engagement_range_meters:
 			continue
 		
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
 			
-			# Update firing solution continuously
 			var firing_angle = calculate_firing_solution(pdc, target_data)
 			
-			# Set target on PDC
 			var is_emergency = target_data.is_critical
 			pdc.set_target(target_id, firing_angle, is_emergency)
 			
-			# CRITICAL FIX: Authorize firing when PDC is aimed
 			if pdc.is_aimed():
-				pdc.authorize_firing()  # This was missing!
+				pdc.authorize_firing()
 				
 				if debug_verbose:
 					print("FCM: Authorized PDC %s to fire on %s" % [pdc_id, target_id])
 
-# In FireControlManager.gd - calculate_firing_solution()
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var target_pos = target_data.last_position
@@ -439,11 +491,9 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var to_intercept = predicted_pos - pdc_pos
 	var world_angle = to_intercept.angle()
 	
-	# FIXED: Properly convert to ship-relative angle
 	var ship_angle = parent_ship.rotation
 	var relative_angle = world_angle - ship_angle
 	
-	# Normalize to [-PI, PI]
 	while relative_angle > PI:
 		relative_angle -= TAU
 	while relative_angle < -PI:
@@ -462,6 +512,31 @@ func remove_target(target_id: String):
 		if target_data.time_to_impact > 0.5 and distance_meters > 100.0 and target_data.assigned_pdcs.size() > 0:
 			was_successful_intercept = true
 			successful_intercepts += 1
+			battle_stats.total_torpedoes_intercepted += 1
+			
+			# Log successful intercept
+			intercept_log.append({
+				"target_id": target_id,
+				"outcome": "intercepted",
+				"distance_meters": distance_meters,
+				"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
+				"engagement_time": (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+			})
+		else:
+			battle_stats.total_torpedoes_missed += 1
+			
+			# Log missed intercept
+			intercept_log.append({
+				"target_id": target_id,
+				"outcome": "missed",
+				"distance_meters": distance_meters,
+				"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
+				"engagement_time": (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+			})
+		
+		# Update torpedo tracking
+		if torpedo_tracking.has(target_id):
+			torpedo_tracking[target_id].outcome = "intercepted" if was_successful_intercept else "missed"
 		
 		# Stop all PDCs assigned to this target
 		for pdc_id in target_data.assigned_pdcs:
@@ -487,6 +562,83 @@ func remove_target(target_id: String):
 		var index = target_priorities.find(target_id)
 		if index >= 0:
 			target_priorities.remove_at(index)
+
+# NEW: Battle statistics management
+func update_battle_stats():
+	# Update total rounds fired from all PDCs
+	var total_rounds = 0
+	for pdc in registered_pdcs.values():
+		if pdc.has_method("get_battle_stats"):
+			var pdc_stats = pdc.get_battle_stats()
+			total_rounds += pdc_stats.rounds_fired
+	
+	battle_stats.total_rounds_fired = total_rounds
+
+func report_successful_intercept(pdc_id: String, target_id: String):
+	"""Called by PDCs when they successfully hit a target"""
+	battle_stats.successful_intercepts += 1
+	
+	if debug_enabled:
+		print("FCM: PDC %s reported successful hit on %s" % [pdc_id, target_id])
+
+func print_battle_summary():
+	"""Print comprehensive battle results"""
+	var battle_duration = (Time.get_ticks_msec() / 1000.0) - battle_stats.battle_start_time
+	
+	print("\n" + "="*50)
+	print("         BATTLE SESSION SUMMARY")
+	print("="*50)
+	print("Duration: %.1f seconds" % battle_duration)
+	print("Torpedoes Detected: %d" % battle_stats.total_torpedoes_detected)
+	print("Torpedoes Intercepted: %d" % battle_stats.total_torpedoes_intercepted)
+	print("Torpedoes Missed: %d" % battle_stats.total_torpedoes_missed)
+	print("Total Rounds Fired: %d" % battle_stats.total_rounds_fired)
+	
+	var intercept_rate = 0.0
+	if battle_stats.total_torpedoes_detected > 0:
+		intercept_rate = (float(battle_stats.total_torpedoes_intercepted) / float(battle_stats.total_torpedoes_detected)) * 100.0
+	print("Intercept Success Rate: %.1f%%" % intercept_rate)
+	
+	print("\nPDC Performance:")
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.has_method("get_battle_stats"):
+			var stats = pdc.get_battle_stats()
+			print("  %s: %d rounds, %d hits (%.1f%% hit rate)" % [
+				pdc_id,
+				stats.rounds_fired,
+				stats.targets_hit,
+				stats.hit_rate
+			])
+	
+	print("\nDetailed Intercept Log:")
+	for i in range(intercept_log.size()):
+		var log_entry = intercept_log[i]
+		print("  %d. %s: %s (%.1fkm, %.1fs, %d PDCs)" % [
+			i + 1,
+			log_entry.target_id.substr(8, 7),
+			log_entry.outcome.to_upper(),
+			log_entry.distance_meters / 1000.0,
+			log_entry.engagement_time,
+			log_entry.assigned_pdcs.size()
+		])
+	
+	print("="*50)
+
+func end_battle_session():
+	"""Call this when the battle is over"""
+	battle_stats.battle_active = false
+	print_battle_summary()
+
+# Check if battle should auto-end (no more torpedoes and none in transit)
+func check_battle_end():
+	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
+	if current_torpedoes.size() == 0 and tracked_targets.size() == 0:
+		if battle_stats.battle_active and battle_stats.total_torpedoes_detected > 0:
+			# Wait a moment to ensure all torpedoes are processed
+			await get_tree().create_timer(2.0).timeout
+			if sensor_system.get_all_enemy_torpedoes().size() == 0:
+				end_battle_session()
 
 # Utility functions
 func get_available_pdc_count() -> int:
@@ -542,7 +694,16 @@ func get_debug_info() -> String:
 	var engaged_targets = target_assignments.size()
 	var busy_pdcs = get_busy_pdc_count()
 	
-	return "Fire Control: %d targets tracked, %d engaged | PDCs: %d/%d active | Intercepts: %d/%d" % [
+	return "Fire Control: %d targets tracked, %d engaged | PDCs: %d/%d active | Intercepts: %d/%d (%.1f%%)" % [
 		active_targets, engaged_targets, busy_pdcs, registered_pdcs.size(), 
-		successful_intercepts, total_engagements
+		battle_stats.total_torpedoes_intercepted, battle_stats.total_torpedoes_detected,
+		(float(battle_stats.total_torpedoes_intercepted) / float(max(battle_stats.total_torpedoes_detected, 1))) * 100.0
 	]
+
+# NEW: Public method to get current battle stats
+func get_battle_stats() -> Dictionary:
+	return battle_stats.duplicate()
+
+# NEW: Reset everything for a new battle
+func reset_for_new_battle():
+	start_battle_session()
