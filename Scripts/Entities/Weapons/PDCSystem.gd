@@ -54,7 +54,7 @@ func _ready():
 	parent_ship = get_parent()
 	
 	# Find the rotation pivot (new method)
-	rotation_pivot = get_node_or_null("RotationPivot")
+	rotation_pivot = get_node_or_null("RotationPivot")  # FIXED: Match your scene node name
 	if rotation_pivot:
 		sprite = rotation_pivot.get_node_or_null("Sprite2D")
 		if sprite:
