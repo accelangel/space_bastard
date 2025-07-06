@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION WITH SMART BURST FIRING
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION WITH IMPROVED TARGET MANAGEMENT
 extends Node2D
 class_name PDCSystem
 
@@ -8,7 +8,7 @@ class_name PDCSystem
 @export var burst_fire_rate: float = 80.0  # Bullets per second DURING a burst
 @export var burst_cooldown: float = 0.2  # Seconds between bursts
 @export var engagement_range_meters: float = 15000.0
-@export var min_intercept_distance_meters: float = 50.0
+@export var min_intercept_distance_meters: float = 200.0  # Increased minimum distance
 @export var turret_rotation_speed: float = 5.0  # Radians per second
 
 # Firing modes
@@ -17,9 +17,15 @@ var current_state: FiringState = FiringState.IDLE
 
 # Current target
 var current_target: Node2D = null
+var target_locked_at: float = 0.0  # When we locked onto current target
 var burst_bullets_fired: int = 0
 var cooldown_timer: float = 0.0
 var fire_timer: float = 0.0
+
+# Target management
+var target_lock_duration: float = 2.0  # Minimum time to stick with a target
+var last_target_check: float = 0.0
+var target_check_interval: float = 0.1  # Check for new targets every 100ms
 
 # Turret rotation
 var current_rotation: float = 0.0
@@ -37,6 +43,10 @@ var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 var total_shots_fired: int = 0
 var torpedoes_destroyed: int = 0
 
+# Debug
+var debug_intercept_pos: Vector2
+var debug_current_target_pos: Vector2
+
 func _ready():
 	parent_ship = get_parent()
 	sprite = get_node_or_null("Sprite2D")
@@ -45,7 +55,7 @@ func _ready():
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
 	
-	print("PDC turret initialized with smart burst firing")
+	print("PDC turret initialized with improved target management")
 
 func _physics_process(delta):
 	if not sensor_system:
@@ -54,6 +64,7 @@ func _physics_process(delta):
 	# Update timers
 	cooldown_timer = max(0.0, cooldown_timer - delta)
 	fire_timer += delta
+	last_target_check += delta
 	
 	# State machine
 	match current_state:
@@ -89,53 +100,127 @@ func find_new_target():
 	
 	if best_target:
 		current_target = best_target
+		target_locked_at = Time.get_time_dict_from_system()["unix"]
 		current_state = FiringState.TRACKING
 		burst_bullets_fired = 0
+		var distance_m = global_position.distance_to(best_target.global_position) * WorldSettings.meters_per_pixel
+		print("PDC acquired target at distance: %.0f meters" % distance_m)
 
 func is_valid_target(torpedo: Node2D) -> bool:
 	if not torpedo or not is_instance_valid(torpedo):
 		return false
 	
-	# Additional safety check - make sure the torpedo wasn't just freed
+	# Safety check - make sure torpedo wasn't just freed
 	if torpedo.is_queued_for_deletion():
 		return false
-		
-	var distance = global_position.distance_to(torpedo.global_position)
+	
+	var torpedo_pos = torpedo.global_position
+	var distance = global_position.distance_to(torpedo_pos)
 	var distance_meters = distance * WorldSettings.meters_per_pixel
 	
+	# Basic range check
 	if distance_meters > engagement_range_meters or distance_meters < min_intercept_distance_meters:
 		return false
 	
-	# Check if approaching
+	# Check if torpedo is approaching (not moving away or already passed)
 	var torpedo_vel = get_torpedo_velocity(torpedo)
-	var to_torpedo = torpedo.global_position - global_position
+	var to_torpedo = torpedo_pos - global_position
 	var closing_speed = -torpedo_vel.dot(to_torpedo.normalized())
 	
-	return closing_speed > 10.0
+	# Reject if torpedo is moving away or too slow
+	if closing_speed < 10.0:
+		return false
+	
+	# CRITICAL: Check if torpedo is behind us or at extreme angles
+	var ship_forward = Vector2.from_angle(parent_ship.rotation) if parent_ship else Vector2.RIGHT
+	var to_torpedo_normalized = to_torpedo.normalized()
+	var angle_to_torpedo = ship_forward.angle_to(to_torpedo_normalized)
+	
+	# Reject targets that are more than 160 degrees off our front arc
+	if abs(angle_to_torpedo) > deg_to_rad(160):
+		return false
+	
+	# Extra check: Don't target torpedoes that are very close and moving perpendicular
+	if distance_meters < 500.0:
+		var perpendicular_speed = abs(torpedo_vel.dot(to_torpedo.normalized().orthogonal()))
+		if perpendicular_speed > closing_speed * 2.0:
+			return false  # Torpedo is mostly moving sideways, probably already past us
+	
+	return true
 
 func calculate_target_priority(torpedo: Node2D) -> float:
-	var distance = global_position.distance_to(torpedo.global_position)
+	var torpedo_pos = torpedo.global_position
+	var distance = global_position.distance_to(torpedo_pos)
 	var distance_meters = distance * WorldSettings.meters_per_pixel
 	
-	# Prioritize closer targets
+	# Base priority on distance (closer = higher priority)
 	var distance_factor = 1.0 - (distance_meters / engagement_range_meters)
 	
-	# Prioritize faster approaching targets
+	# Factor in approach speed
 	var torpedo_vel = get_torpedo_velocity(torpedo)
-	var to_torpedo = torpedo.global_position - global_position
+	var to_torpedo = torpedo_pos - global_position
 	var closing_speed = -torpedo_vel.dot(to_torpedo.normalized())
 	var speed_factor = clamp(closing_speed / 200.0, 0.0, 1.0)
 	
-	return distance_factor * 2.0 + speed_factor
+	# Factor in angle - prefer targets in front
+	var ship_forward = Vector2.from_angle(parent_ship.rotation) if parent_ship else Vector2.RIGHT
+	var angle_factor = max(0.0, ship_forward.dot(to_torpedo.normalized()))
+	
+	# Factor in intercept feasibility
+	var intercept_factor = 1.0
+	var intercept_time = estimate_intercept_time(torpedo)
+	if intercept_time > 5.0 or intercept_time < 0.1:
+		intercept_factor = 0.1  # Very hard to intercept
+	
+	return distance_factor * 3.0 + speed_factor * 2.0 + angle_factor * 1.0 + intercept_factor * 2.0
 
-func update_tracking(_delta):
+func estimate_intercept_time(torpedo: Node2D) -> float:
+	var torpedo_pos = torpedo.global_position
+	var torpedo_vel = get_torpedo_velocity(torpedo) / WorldSettings.meters_per_pixel
+	var distance = global_position.distance_to(torpedo_pos)
+	var bullet_speed = bullet_velocity_mps / WorldSettings.meters_per_pixel
+	
+	# Simple estimate based on closing speed
+	var closing_speed = torpedo_vel.dot((global_position - torpedo_pos).normalized())
+	var net_approach_speed = bullet_speed + closing_speed
+	
+	if net_approach_speed <= 0:
+		return 999.0  # Can't intercept
+	
+	return distance / net_approach_speed
+
+func update_tracking(delta):
+	# Check if current target is still valid
 	if not is_valid_target(current_target):
+		print("PDC lost target - invalid")
 		current_state = FiringState.IDLE
 		current_target = null
 		return
 	
-	# Calculate lead angle using the CORRECT method from original code
-	var lead_angle = calculate_lead_angle(current_target)
+	# Periodically check for better targets, but only if we haven't been locked long
+	var current_time = Time.get_time_dict_from_system()["unix"]
+	var time_locked = current_time - target_locked_at
+	
+	if time_locked > target_lock_duration and last_target_check > target_check_interval:
+		last_target_check = 0.0
+		
+		# Only switch if we find a MUCH better target
+		var current_priority = calculate_target_priority(current_target)
+		var torpedoes = sensor_system.get_all_enemy_torpedoes()
+		
+		for torpedo in torpedoes:
+			if torpedo == current_target or not is_valid_target(torpedo):
+				continue
+			
+			var priority = calculate_target_priority(torpedo)
+			if priority > current_priority * 1.5:  # Must be 50% better to switch
+				print("PDC switching to higher priority target")
+				current_target = torpedo
+				target_locked_at = current_time
+				break
+	
+	# Calculate lead angle
+	var lead_angle = calculate_lead_angle_simple(current_target)
 	target_rotation = lead_angle
 	
 	# Check if we're aimed close enough to start firing
@@ -144,15 +229,17 @@ func update_tracking(_delta):
 		current_state = FiringState.FIRING
 		fire_timer = 0.0
 
-func fire_burst(_delta):
+func fire_burst(delta):
+	# Continuously validate target during burst
 	if not is_valid_target(current_target):
+		print("PDC target lost during burst")
 		current_state = FiringState.COOLDOWN
 		cooldown_timer = burst_cooldown
 		current_target = null
 		return
 	
-	# Update aim during burst
-	var lead_angle = calculate_lead_angle(current_target)
+	# Update aim during burst (but don't switch targets)
+	var lead_angle = calculate_lead_angle_simple(current_target)
 	target_rotation = lead_angle
 	
 	# Fire bullets at the burst rate
@@ -201,51 +288,40 @@ func fire_bullet():
 	
 	total_shots_fired += 1
 
-# THIS IS THE CORRECT LEAD CALCULATION FROM YOUR ORIGINAL CODE
-func calculate_lead_angle(torpedo: Node2D) -> float:
+func calculate_lead_angle_simple(torpedo: Node2D) -> float:
 	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = get_torpedo_velocity(torpedo)
+	var torpedo_vel_mps = get_torpedo_velocity(torpedo)
 	
-	# Direct angle to current torpedo position
-	var to_torpedo = torpedo_pos - global_position
+	# If torpedo is barely moving, aim directly at it
+	if torpedo_vel_mps.length() < 5.0:
+		return (torpedo_pos - global_position).angle()
 	
-	# If torpedo is moving slowly, just aim directly at it
-	if torpedo_vel.length() < 10.0:
-		return to_torpedo.angle()
+	# Convert to pixels/second for consistency
+	var torpedo_vel_pixels = torpedo_vel_mps / WorldSettings.meters_per_pixel
+	var ship_vel_pixels = get_ship_velocity() / WorldSettings.meters_per_pixel
+	var bullet_speed_pixels = bullet_velocity_mps / WorldSettings.meters_per_pixel
 	
-	# Calculate intercept point using proper physics
-	var relative_pos = torpedo_pos - global_position
-	var relative_vel = torpedo_vel - get_ship_velocity()
+	# Simple time-to-intercept estimation
+	var initial_distance = global_position.distance_to(torpedo_pos)
+	var closing_speed = torpedo_vel_pixels.dot((global_position - torpedo_pos).normalized())
+	var net_approach_speed = bullet_speed_pixels + closing_speed
 	
-	# Solve quadratic equation for intercept time
-	var a = relative_vel.dot(relative_vel) - (bullet_velocity_mps * bullet_velocity_mps) / (WorldSettings.meters_per_pixel * WorldSettings.meters_per_pixel)
-	var b = 2.0 * relative_pos.dot(relative_vel)
-	var c = relative_pos.dot(relative_pos)
+	# Prevent division by zero
+	if net_approach_speed <= 0:
+		return (torpedo_pos - global_position).angle()
 	
-	var discriminant = b * b - 4.0 * a * c
+	# Estimate intercept time
+	var estimated_time = initial_distance / net_approach_speed
 	
-	if discriminant < 0 or abs(a) < 0.001:
-		# No intercept solution, aim at current position
-		return to_torpedo.angle()
+	# Clamp time to reasonable values
+	estimated_time = clamp(estimated_time, 0.1, 8.0)
 	
-	# Take the smaller positive root (earliest intercept time)
-	var t1 = (-b - sqrt(discriminant)) / (2.0 * a)
-	var t2 = (-b + sqrt(discriminant)) / (2.0 * a)
+	# Calculate predicted intercept position
+	var predicted_torpedo_pos = torpedo_pos + torpedo_vel_pixels * estimated_time
+	var predicted_ship_pos = global_position + ship_vel_pixels * estimated_time
 	
-	var intercept_time = t1
-	if t1 <= 0:
-		intercept_time = t2
-	if t2 > 0 and t2 < t1:
-		intercept_time = t2
-	
-	if intercept_time <= 0:
-		# No valid intercept, aim at current position
-		return to_torpedo.angle()
-	
-	# Calculate intercept position
-	var intercept_pos = torpedo_pos + torpedo_vel * intercept_time
-	var to_intercept = intercept_pos - global_position
-	
+	# Aim at predicted position
+	var to_intercept = predicted_torpedo_pos - predicted_ship_pos
 	return to_intercept.angle()
 
 func update_turret_rotation(delta):
@@ -285,11 +361,13 @@ func _on_torpedo_intercepted():
 	torpedoes_destroyed += 1
 	print("PDC destroyed torpedo! Total: ", torpedoes_destroyed)
 	
-	# Clear current target if it was just destroyed
-	if current_target and not is_instance_valid(current_target):
-		current_target = null
-		current_state = FiringState.IDLE
+	# Don't immediately clear target - let normal validation handle it
+	# This prevents the "shooting backwards" issue
 
 func get_debug_info() -> String:
 	var state_name = ["IDLE", "TRACKING", "FIRING", "COOLDOWN"][current_state]
-	return "PDC: %s | Shots: %d | Kills: %d" % [state_name, total_shots_fired, torpedoes_destroyed]
+	var target_info = "None"
+	if current_target:
+		var dist = global_position.distance_to(current_target.global_position) * WorldSettings.meters_per_pixel
+		target_info = "%.0fm" % dist
+	return "PDC: %s | Target: %s | Shots: %d | Kills: %d" % [state_name, target_info, total_shots_fired, torpedoes_destroyed]
