@@ -130,9 +130,18 @@ func update_tracking(_delta):
 		current_target = null
 		return
 	
-	# Calculate lead angle
-	var lead_angle = calculate_lead_angle(current_target)
-	target_rotation = lead_angle
+	# Calculate lead direction (same as fire_bullet will use)
+	var torpedo_pos = current_target.global_position
+	var torpedo_vel = get_torpedo_velocity(current_target)
+	var to_torpedo = torpedo_pos - global_position
+	var distance = to_torpedo.length()
+	var distance_meters = distance * WorldSettings.meters_per_pixel
+	
+	var bullet_travel_time = distance_meters / bullet_velocity_mps
+	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
+	var fire_direction = (predicted_pos - global_position).normalized()
+	
+	target_rotation = fire_direction.angle()
 	
 	# Check if we're aimed close enough to start firing
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
@@ -147,9 +156,18 @@ func fire_burst(_delta):
 		current_target = null
 		return
 	
-	# Update aim during burst
-	var lead_angle = calculate_lead_angle(current_target)
-	target_rotation = lead_angle
+	# Update aim during burst - use same direct calculation as update_tracking
+	var torpedo_pos = current_target.global_position
+	var torpedo_vel = get_torpedo_velocity(current_target)
+	var to_torpedo = torpedo_pos - global_position
+	var distance = to_torpedo.length()
+	var distance_meters = distance * WorldSettings.meters_per_pixel
+	
+	var bullet_travel_time = distance_meters / bullet_velocity_mps
+	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
+	var fire_direction = (predicted_pos - global_position).normalized()
+	
+	target_rotation = fire_direction.angle()
 	
 	# Fire bullets at the burst rate
 	var bullet_interval = 1.0 / burst_fire_rate
@@ -174,14 +192,30 @@ func fire_bullet():
 	# Position at turret location
 	bullet.global_position = global_position
 	
-	# Fire in turret direction with small random spread
+	# Calculate direction vector directly like the original working version
+	var torpedo_pos = current_target.global_position
+	var torpedo_vel = get_torpedo_velocity(current_target)
+	
+	# Calculate lead direction (same as original working version)
+	var to_torpedo = torpedo_pos - global_position
+	var distance = to_torpedo.length()
+	var distance_meters = distance * WorldSettings.meters_per_pixel
+	
+	# Time for bullet to reach that distance
+	var bullet_travel_time = distance_meters / bullet_velocity_mps
+	
+	# Where torpedo will be after that time
+	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
+	var fire_direction = (predicted_pos - global_position).normalized()
+	
+	# Add small random spread
 	var spread = randf_range(-0.02, 0.02)  # ~1 degree spread
-	var fire_direction = Vector2.from_angle(current_rotation + spread)
+	fire_direction = fire_direction.rotated(spread)
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
-	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
-	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
+	var bullet_velocity_world = fire_direction * bullet_velocity_mps + ship_velocity
+	var bullet_velocity_pixels = bullet_velocity_world / WorldSettings.meters_per_pixel
 	
 	if bullet.has_method("set_velocity"):
 		bullet.set_velocity(bullet_velocity_pixels)
@@ -196,33 +230,6 @@ func fire_bullet():
 		bullet.hit_target.connect(_on_torpedo_intercepted)
 	
 	total_shots_fired += 1
-
-func calculate_lead_angle(torpedo: Node2D) -> float:
-	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = get_torpedo_velocity(torpedo)
-	
-	# Direct angle to current torpedo position
-	var to_torpedo = torpedo_pos - global_position
-	
-	# If torpedo is moving slowly, just aim directly at it
-	if torpedo_vel.length() < 10.0:
-		return to_torpedo.angle()
-	
-	# Calculate intercept point
-	var distance = to_torpedo.length()
-	var distance_meters = distance * WorldSettings.meters_per_pixel
-	
-	# Time for bullet to reach that distance
-	var bullet_travel_time = distance_meters / bullet_velocity_mps
-	
-	# Where torpedo will be after that time (in pixels)
-	var predicted_offset = torpedo_vel * bullet_travel_time
-	var predicted_pos = torpedo_pos + predicted_offset
-	
-	# Angle to predicted position
-	var to_predicted = predicted_pos - global_position
-	
-	return to_predicted.angle()
 
 func update_turret_rotation(delta):
 	if sprite:
