@@ -7,7 +7,6 @@
 radius = 1.0
 
 [node name="PDCBullet" type="Area2D"]
-rotation = 3.14159
 script = ExtResource("1_s6vo5")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
