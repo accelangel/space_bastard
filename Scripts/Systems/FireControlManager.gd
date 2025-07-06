@@ -421,6 +421,7 @@ func execute_fire_missions():
 				if debug_verbose:
 					print("FCM: Authorized PDC %s to fire on %s" % [pdc_id, target_id])
 
+# In FireControlManager.gd - calculate_firing_solution()
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var target_pos = target_data.last_position
@@ -438,15 +439,8 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var to_intercept = predicted_pos - pdc_pos
 	var world_angle = to_intercept.angle()
 	
-	var ship_angle = parent_ship.rotation
-	var relative_angle = world_angle - ship_angle
-	
-	while relative_angle > PI:
-		relative_angle -= TAU
-	while relative_angle < -PI:
-		relative_angle += TAU
-	
-	return relative_angle
+	# FIXED: Return world angle directly - no ship rotation adjustment
+	return world_angle
 
 func remove_target(target_id: String):
 	if tracked_targets.has(target_id):

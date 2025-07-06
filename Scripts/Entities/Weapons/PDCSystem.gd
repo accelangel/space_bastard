@@ -76,7 +76,8 @@ func _physics_process(delta):
 					pdc_id.substr(4, 8), current_status, current_target_id.substr(8, 7), 
 					fire_authorized, is_aimed()
 				])
-
+				
+# In PDCSystem.gd - update_turret_rotation()
 func update_turret_rotation(delta):
 	if sprite:
 		var angle_diff = angle_difference(current_rotation, target_rotation)
@@ -92,9 +93,9 @@ func update_turret_rotation(delta):
 		else:
 			current_rotation = target_rotation
 		
-		# Apply rotation relative to ship
-		sprite.rotation = current_rotation - parent_ship.rotation
-
+		# FIXED: Use world angle directly - don't subtract ship rotation
+		sprite.rotation = current_rotation
+		
 func handle_firing(delta):
 	# SIMPLIFIED FIRING LOGIC:
 	# 1. If we have a target and are authorized to fire and aimed -> FIRE
@@ -187,6 +188,7 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
+# In PDCSystem.gd - fire_bullet()
 func fire_bullet():
 	if not bullet_scene:
 		print("PDC %s: No bullet scene loaded!" % pdc_id)
@@ -198,11 +200,11 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# Calculate world firing angle
-	var world_angle = current_rotation + parent_ship.rotation
+	# FIXED: Use world angle directly - current_rotation is already world angle
+	var world_angle = current_rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	
-	# Add ship velocity to bullet
+	# Rest of the firing logic remains the same...
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
