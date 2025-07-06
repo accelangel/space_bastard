@@ -1,6 +1,5 @@
 # Scripts/Entities/Ships/PlayerShip.gd
 extends Area2D
-class_name PlayerShip
 
 # Ship properties
 @export var acceleration_gs: float = 0.05
@@ -15,9 +14,9 @@ var movement_direction: Vector2 = Vector2.ZERO
 # Entity tracking
 var entity_id: String
 
-# Child nodes
+# Child nodes - FIXED: Use Node2D type instead of specific class
 @onready var sensor_system: SensorSystem = $SensorSystem
-@onready var torpedo_launcher: TorpedoLauncher = $TorpedoLauncher
+@onready var torpedo_launcher: Node2D = $TorpedoLauncher
 
 # Test movement (keep from original)
 var test_acceleration: bool = true
@@ -49,12 +48,6 @@ func _physics_process(delta):
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager and entity_id:
 		entity_manager.update_entity_position(entity_id, global_position)
-	
-	# Debug output
-	#if Engine.get_process_frames() % 60 == 0:
-		#var speed_mps = velocity_mps.length()
-		#var speed_kmh = speed_mps * 3.6
-		#print("PlayerShip - Speed: %.1f m/s (%.1f km/h)" % [speed_mps, speed_kmh])
 
 func set_movement_direction(new_direction: Vector2):
 	movement_direction = new_direction.normalized()
