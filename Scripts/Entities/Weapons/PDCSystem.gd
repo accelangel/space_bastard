@@ -47,8 +47,8 @@ var debug_timer: float = 0.0
 
 # SPRITE ORIENTATION CONSTANTS
 # These define how your sprite is oriented in the art file
-const SPRITE_FORWARD_ANGLE: float = PI/2  # 90 degrees - sprite points "up" in art
-const IDLE_ANGLE_OFFSET: float = 0.0      # Ship-relative angle when idle
+const SPRITE_FORWARD_ANGLE: float = -PI/2  # -90 degrees - sprite points "down" in art
+const IDLE_ANGLE_OFFSET: float = PI/2       # FIXED: +90° offset to make idle face ship direction
 
 func _ready():
 	parent_ship = get_parent()
@@ -115,7 +115,7 @@ func update_turret_rotation(delta):
 	# Apply rotation - NEW METHOD with proper pivot
 	if rotation_pivot:
 		# FIXED: Proper sprite orientation handling
-		# The sprite is drawn pointing "up" (+Y), so we need to account for that
+		# The sprite is drawn pointing "down" (-Y), so we need to account for that
 		var sprite_rotation = current_rotation - parent_ship.rotation - SPRITE_FORWARD_ANGLE
 		rotation_pivot.rotation = sprite_rotation
 	else:
@@ -211,13 +211,19 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# FIXED: Use the rotation framework for consistent angle handling
-	var world_angle = RotationFramework.ship_relative_to_world_angle(parent_ship.rotation, current_rotation)
-	var fire_direction = RotationFramework.world_angle_to_direction(world_angle)
+	# FIXED: Direct angle calculation instead of RotationFramework
+	# current_rotation is ship-relative, convert to world angle
+	var world_angle = current_rotation + parent_ship.rotation
+	var fire_direction = Vector2.from_angle(world_angle)
 	
-	# Debug every 2 seconds of firing
-	if rounds_fired % 36 == 0:
-		RotationFramework.debug_angles("PDC_" + pdc_id.substr(4, 8), parent_ship.rotation, current_rotation, world_angle)
+	# Debug EVERY bullet for first few shots
+	if rounds_fired < 5:
+		print("PDC %s BULLET DEBUG #%d:" % [pdc_id.substr(4, 8), rounds_fired + 1])
+		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+		print("  PDC current_rotation: %.1f°" % rad_to_deg(current_rotation))
+		print("  World angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Fire direction: (%.2f, %.2f)" % [fire_direction.x, fire_direction.y])
+		print("  Should be firing toward: ~105.5°")
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
