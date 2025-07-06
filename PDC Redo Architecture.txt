@@ -1,0 +1,160 @@
+# Advanced Point Defense Control System (PDCS) Architecture
+
+## Core Philosophy & Design Goals
+
+### Central Fire Control Paradigm
+The system operates as a **unified fire control intelligence** rather than individual PDC brains. Think of it as the ship's defensive nervous system - one brain coordinating multiple gun arms. Each PDC is a dumb actuator that receives targeting commands from the central system.
+
+### Perfect Information Advantage
+We leverage the EntityManager's perfect radar data to achieve precise intercept calculations. With complete knowledge of torpedo position, velocity, acceleration, and our own ship state, **we should always know exactly WHERE to put bullets WHERE torpedoes WILL be - regardless of whether they are 10km away, 1km away, or 100m away**. The challenge is purely in intelligent target allocation and priority management, not in ballistics calculations.
+
+### Geometric Sanity Constraints
+The system enforces fundamental geometric logic: **PDCs should never be asked to fire at intercept points that are beyond the ship itself**. Any torpedo whose calculated intercept point lies behind the ship's position represents either an impossible geometry or a torpedo that has already passed the interception window. For computational efficiency, the predictive algorithms should not even calculate intercept solutions for entities whose trajectory would place the intercept point in the space behind the ship - these represent fundamentally flawed engagement scenarios that waste processing cycles.
+
+### High-Stress Performance Design
+The system is explicitly designed to maintain coherent behavior under overwhelming threat loads. When 25 torpedoes are incoming simultaneously, we want to see aggressive, continuous engagement with smooth target transitions - the classic "curve of bullets" as PDCs rapidly slew between targets without stopping fire. No choking, no paralysis, no wasted shots on impossible targets.
+
+## System Architecture
+
+### 1. Central Fire Control Manager
+**Location**: Ship-local system managing all PDCs on that specific vessel
+**Responsibilities**:
+- Maintains real-time catalog of all PDCs (position, orientation, capabilities)
+- Receives torpedo contact data from EntityManager via SensorSystem
+- Performs global target allocation optimization
+- Commands individual PDCs with specific target assignments
+- Monitors engagement effectiveness and reallocates as needed
+
+### 2. PDC Registration & Discovery
+**Node Tree Integration**: When the ship scene loads, the Fire Control Manager automatically discovers all PDC nodes in the ship's scene tree
+**PDC Metadata Tracked**:
+- World position relative to ship center
+- Current orientation and rotation rate
+- Engagement status (firing/tracking/available)
+- Ammunition expenditure rate (18 rounds/second constant)
+- Current target assignment (if any)
+
+### 3. Target Assessment Engine
+**Threat Classification by Time-to-Impact**:
+- **Long Lead Time (>15 seconds)**: Saturation fire candidates - predictable intercepts with generous lead time
+- **Medium Lead Time (5-15 seconds)**: Precision targeting - calculated intercepts requiring moderate PDC rotation
+- **Short Lead Time (2-5 seconds)**: Point defense - rapid engagement, minimal calculation time
+- **Critical Lead Time (<2 seconds)**: Emergency intercept - absolute priority requiring immediate response
+
+**Time-Based Priority Logic**: Distance alone is meaningless - a torpedo at 5km that had time to accelerate in a large-scale engagement may be far more dangerous than a torpedo at 1km in a close-quarters battle. **Time-to-impact accounts for actual torpedo velocity regardless of map scale or engagement distance**, making the system universally applicable.
+
+**Intercept Feasibility Analysis**:
+For each torpedo, calculate:
+- Time to ship impact based on current trajectory and velocity
+- Intercept point geometry (where torpedo will be when our bullets arrive)
+- Required PDC slew time to reach firing position
+- Bullet time-of-flight to intercept point
+- **Feasibility Score**: Can we physically get bullets to the intercept point in time?
+
+**Impossible Target Filtering**:
+- Torpedoes whose intercept points lie behind the ship (geometric impossibility)
+- Torpedoes moving parallel to ship (not approaching)
+- Torpedoes outside all PDC firing arcs
+- Torpedoes whose time-to-impact is less than our minimum engagement time
+
+### 4. Dynamic Role Assignment System
+**Adaptive PDC Allocation**:
+- **Not Fixed Roles**: PDCs don't have permanent "long range" vs "short range" assignments
+- **Threat-Responsive**: System dynamically assigns PDCs based on current threat picture
+- **Optimal Geometry**: Assigns PDCs that have the best firing geometry for each torpedo
+
+**Assignment Logic**:
+1. **Critical Time Threats First**: Any torpedo <2 seconds to impact gets absolute priority
+2. **Resource Availability Assessment**: Considers how many PDCs are currently engaged with other critical threats
+3. **Geometric Optimization**: Assign PDCs with best intercept angles
+4. **Load Balancing**: Distribute targets across PDCs to prevent overload
+5. **Difficulty Scaling**: Difficult intercepts get multiple PDC assignments
+
+### 5. Intelligent Priority Weighting
+**Context-Aware Threat Assessment**: A torpedo's danger level is determined not just by proximity or time-to-impact, but by **the system's current capacity to respond**. A 3-second torpedo becomes exponentially more dangerous if 5 out of 6 PDCs are already engaged with other critical threats.
+
+**Dynamic Threat Escalation**: 
+- **Available PDC Ratio**: Threat priority increases as fewer PDCs are available
+- **Engagement Success Rate**: System tracks which intercepts are succeeding and prioritizes accordingly
+- **Cascade Failure Prevention**: Prevents scenarios where all PDCs chase one difficult target while easier threats slip through
+
+### 6. Continuous Fire Control
+**18 Rounds/Second Constant**: Each PDC fires continuously while assigned to valid targets
+**Seamless Target Transitions**: When PDC completes current target (kill or miss), immediately transitions to next assigned target with smooth rotation curve
+**No Burst Delays**: Eliminates the old burst/cooldown cycle that caused gaps in coverage
+
+**Target Transition Behavior**:
+- PDC receives new target assignment while still engaging current target
+- Begins rotation toward new target position
+- Continues firing at current target until rotation makes it impossible
+- Seamlessly transitions fire to new target as soon as geometry allows
+- Creates the desired "curve of bullets" effect during high-stress scenarios
+
+### 7. Intelligent Target Switching
+**Commitment Logic**:
+- Once assigned, PDC commits to target until kill, miss, or target becomes impossible
+- **No Mid-Engagement Switching**: Prevents the old "target lost during burst" problem
+- Target is only reassigned if it becomes geometrically impossible or a higher-priority critical threat appears
+
+**Priority Override Conditions**:
+- Critical threat (<2 seconds) appears while engaging medium-priority target
+- Current target becomes impossible to intercept (intercept point behind ship)
+- Current target is destroyed (confirmed kill)
+- Multiple PDCs assigned to same target and one should be reassigned for better system coverage
+
+### 8. Multi-PDC Coordination
+**Global Situational Awareness**: All PDCs know what all other PDCs are doing
+**Target Deconfliction**: Prevents multiple PDCs from engaging the same torpedo (unless specifically assigned for difficult intercepts)
+**Dynamic Reallocation**: If one PDC can't reach its assigned target due to rotation limits, system immediately reassigns both PDCs
+
+**Coordination Scenarios**:
+- **6 PDCs vs 25 Torpedoes**: System assigns optimal geometry targets, reassigns as targets are destroyed
+- **2 PDCs vs 3 Critical Threats**: Both PDCs get reassigned to most time-critical targets
+- **PDC Overload**: When more targets than PDCs, system prioritizes by time-to-impact and available response capacity
+
+### 9. Mathematical Precision
+**Perfect Intercept Calculations**: 
+- Use EntityManager data for exact torpedo position/velocity
+- Account for ship movement during bullet flight time
+- Calculate exact intercept point in space and time
+- Account for PDC position relative to ship center
+- **Enforce geometric sanity**: Never calculate intercepts behind the ship
+
+**No Approximations**: With perfect data, we solve the exact geometric interception problem
+**Rotation Path Optimization**: Calculate optimal PDC rotation path to minimize transition time
+
+### 10. Performance Under Stress
+**High Threat Load Behavior**:
+- System remains coherent even with 25+ simultaneous threats
+- Aggressive target switching creates continuous fire arcs
+- No hesitation or paralysis when overwhelmed
+- Clear visual feedback of system working at maximum capacity
+
+**Graceful Degradation**:
+- When truly outnumbered, system focuses on highest-priority threats based on time and available PDC capacity
+- Maintains intelligent target selection even when some threats must be ignored
+- Never wastes ammunition on impossible targets or geometric impossibilities
+
+### 11. Emergency Protocols
+**Critical Defense Mode**: When torpedo <1 second to impact, PDC gets absolute priority and maximum slew rate
+**Last-Ditch Intercept**: Calculate intercept even with minimal lead time, but only if geometry is physically possible
+**Multiple Critical Threats**: Dynamically assess which threats can realistically be engaged given current PDC availability and assign accordingly
+
+## Implementation Strategy
+
+### Phase 1: Central Fire Control Manager
+Create ship-local system that discovers and manages all PDCs, receives torpedo data from SensorSystem
+
+### Phase 2: Target Assessment
+Implement feasibility analysis and time-based priority scoring for all detected torpedoes
+
+### Phase 3: Assignment Algorithm
+Develop optimal PDC-to-torpedo assignment logic with geometric optimization and sanity constraints
+
+### Phase 4: Continuous Fire Control
+Remove burst/cooldown mechanics, implement 18 rounds/second constant fire with smooth target transitions
+
+### Phase 5: Multi-PDC Coordination
+Implement target deconfliction and dynamic reallocation with context-aware priority weighting
+
+This architecture transforms individual confused PDCs into a coherent ship defense system that scales from 2 to 6+ PDCs while maintaining intelligent behavior under any threat load, with universal applicability across different map scales and engagement ranges.

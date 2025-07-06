@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - SIMPLIFIED VERSION
+# Scripts/Systems/SensorSystem.gd - CLEAN VERSION
 extends Node2D
 class_name SensorSystem
 

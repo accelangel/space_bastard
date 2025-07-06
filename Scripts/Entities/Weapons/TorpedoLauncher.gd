@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - FIXED VERSION
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - CLEAN VERSION
 extends Node2D
 class_name TorpedoLauncher
 
@@ -34,7 +34,6 @@ func _ready():
 	# Load torpedo scene if not assigned
 	if not torpedo_scene:
 		torpedo_scene = preload("res://Scenes/Torpedo.tscn")
-		print("TorpedoLauncher: Loaded default torpedo scene")
 
 func _process(delta):
 	# Clean up destroyed torpedoes
@@ -51,41 +50,33 @@ func _process(delta):
 			launch_at_best_target()
 			auto_launch_timer = 0.0
 	
-	# Manual launch - check if space key is pressed
-	if Input.is_action_just_pressed("ui_accept") or Input.is_key_just_pressed(KEY_SPACE):
-		print("Manual torpedo launch triggered")
+	# Manual launch - Use only the input action
+	if Input.is_action_just_pressed("ui_accept"):
 		launch_at_best_target()
 
 func launch_at_best_target() -> Torpedo:
 	if not sensor_system:
-		print("TorpedoLauncher: No sensor system available")
 		return null
 	
 	var target = sensor_system.get_closest_enemy_ship()
 	if target:
 		return launch_torpedo(target)
-	else:
-		print("TorpedoLauncher: No enemy target found")
 	
 	return null
 
 func launch_torpedo(target: Node2D) -> Torpedo:
 	if not can_launch():
-		print("TorpedoLauncher: Cannot launch - cooldown or max torpedoes reached")
 		return null
 	
 	if not torpedo_scene:
-		print("TorpedoLauncher: No torpedo scene assigned!")
 		return null
 		
 	if not target or not is_instance_valid(target):
-		print("TorpedoLauncher: Invalid target")
 		return null
 	
 	# Create torpedo
 	var torpedo = torpedo_scene.instantiate() as Torpedo
 	if not torpedo:
-		print("TorpedoLauncher: Failed to instantiate torpedo")
 		return null
 	
 	# Alternate launch sides
@@ -120,17 +111,10 @@ func can_launch() -> bool:
 	var current_time = Time.get_ticks_msec() / 1000.0
 	var time_since_last = current_time - last_launch_time
 	
-	var can_launch_result = (active_torpedoes.size() < max_torpedoes and 
+	return (active_torpedoes.size() < max_torpedoes and 
 			time_since_last >= launch_cooldown)
-	
-	if not can_launch_result:
-		print("Cannot launch: active=%d, max=%d, time_since_last=%.2f, cooldown=%.2f" % [
-			active_torpedoes.size(), max_torpedoes, time_since_last, launch_cooldown
-		])
-	
-	return can_launch_result
 
-# NEW: Function to reset the volley system (useful for testing or restarting)
+# Function to reset the volley system (useful for testing or restarting)
 func reset_volley():
 	volley_fired = false
 	print("Volley system reset - can fire again")

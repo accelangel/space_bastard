@@ -1,10 +1,10 @@
-# Scripts/Entities/Ships/PlayerShip.gd
+# Scripts/Entities/Ships/EnemyShip.gd - FIXED VERSION
 extends Area2D
 
 # Ship properties
-@export var acceleration_gs: float = 0.05
+@export var acceleration_gs: float = 1.5
 @export var rotation_speed: float = 2.0
-@export var faction: String = "friendly"
+@export var faction: String = "hostile"  # FIXED: Changed from "friendly" to "hostile"
 
 # Movement
 var acceleration_mps2: float
@@ -16,26 +16,31 @@ var entity_id: String
 
 # Child nodes - FIXED: Use Node2D type instead of specific class
 @onready var sensor_system: SensorSystem = $SensorSystem
-@onready var torpedo_launcher: Node2D = $TorpedoLauncher
+@onready var pdc_systems: Array = []  # Will find PDC systems in _ready
 
 # Test movement (keep from original)
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(1, -1).normalized()
-var test_gs: float = 1.0
+var test_gs: float = 0.02  # FIXED: Much slower so it doesn't fly off the map
 
 func _ready():
 	acceleration_mps2 = acceleration_gs * 9.81
 	
+	# Find all PDC systems
+	for child in get_children():
+		if child.has_method("get_debug_info"):  # PDCs have this method
+			pdc_systems.append(child)
+	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
-		entity_id = entity_manager.register_entity(self, "player_ship", faction)
+		entity_id = entity_manager.register_entity(self, "enemy_ship", faction)
 	
 	# Set up test acceleration
 	if test_acceleration:
 		set_acceleration(test_gs)
 		set_movement_direction(test_direction)
-		print("PlayerShip starting test acceleration at ", test_gs, "G")
+		print("EnemyShip starting test acceleration at ", test_gs, "G with faction: ", faction)
 
 func _physics_process(delta):
 	# Update movement

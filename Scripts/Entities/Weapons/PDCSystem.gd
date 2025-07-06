@@ -1,11 +1,11 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION - NO BACKWARDS FIRING
+# Scripts/Entities/Weapons/PDCSystem.gd - FOCUSED PDC DEBUG VERSION
 extends Node2D
 
 # PDC Configuration
 @export var bullet_velocity_mps: float = 800.0
-@export var bullets_per_burst: int = 150
+@export var bullets_per_burst: int = 18
 @export var burst_fire_rate: float = 60.0
-@export var burst_cooldown: float = 0.05
+@export var burst_cooldown: float = 0.00001
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 5.0
 @export var turret_rotation_speed: float = 45.0
@@ -39,10 +39,10 @@ var target_switch_cooldown: float = 0.5
 var last_target_switch: float = 0.0
 var high_threat_mode: bool = false
 
-# Turret rotation and positioning - FIXED
+# Turret rotation and positioning
 var current_rotation: float = 0.0
 var target_rotation: float = 0.0
-var default_rotation: float = 0.0  # PDC's default facing direction relative to ship
+var default_rotation: float = 0.0
 
 # References and positioning
 var parent_ship: Node2D
@@ -60,6 +60,12 @@ var torpedoes_destroyed: int = 0
 # Area saturation variables
 var saturation_spread: float = 0.05
 
+# DEBUG VARIABLES
+var debug_timer: float = 0.0
+var debug_interval: float = 2.0
+var last_debug_state: FiringState = FiringState.IDLE
+var debug_enabled: bool = true
+
 func _ready():
 	parent_ship = get_parent()
 	sprite = get_node_or_null("Sprite2D")
@@ -67,15 +73,14 @@ func _ready():
 	# Find muzzle point properly
 	if sprite:
 		muzzle_point = sprite.get_node_or_null("MuzzlePoint")
-		# FIXED: Store the PDC's default rotation relative to ship (not absolute)
-		default_rotation = 0.0  # PDCs should face forward by default
+		default_rotation = 0.0
 		current_rotation = default_rotation
 	
 	# Find sensor system on parent ship
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
 	
-	print("PDC turret initialized with forward-only firing")
+	print("PDC turret initialized - DEBUG MODE ENABLED")
 
 func _physics_process(delta):
 	if not sensor_system or not parent_ship:
@@ -87,6 +92,17 @@ func _physics_process(delta):
 	game_time += delta
 	cooldown_timer = max(0.0, cooldown_timer - delta)
 	fire_timer += delta
+	
+	# DEBUG: Track state changes
+	if current_state != last_debug_state:
+		debug_state_change(last_debug_state, current_state)
+		last_debug_state = current_state
+	
+	# DEBUG: Periodic status updates
+	debug_timer += delta
+	if debug_timer >= debug_interval and debug_enabled:
+		debug_periodic_status()
+		debug_timer = 0.0
 	
 	# Assess threat level and choose engagement mode
 	assess_threat_level()
@@ -109,6 +125,41 @@ func _physics_process(delta):
 	# Update turret rotation
 	update_turret_rotation(delta)
 
+func debug_state_change(old_state: FiringState, new_state: FiringState):
+	if not debug_enabled:
+		return
+		
+	var old_name = ["IDLE", "TRACKING", "FIRING", "COOLDOWN"][old_state]
+	var new_name = ["IDLE", "TRACKING", "FIRING", "COOLDOWN"][new_state]
+	var target_info = "None"
+	
+	if current_target:
+		var pdc_pos = get_muzzle_world_position()
+		var dist = pdc_pos.distance_to(current_target.global_position) * WorldSettings.meters_per_pixel
+		target_info = "%.0fm" % dist
+	
+	print("PDC State: %s -> %s | Target: %s" % [old_name, new_name, target_info])
+
+func debug_periodic_status():
+	if not debug_enabled:
+		return
+		
+	var torpedoes = sensor_system.get_all_enemy_torpedoes()
+	var state_name = ["IDLE", "TRACKING", "FIRING", "COOLDOWN"][current_state]
+	var mode_name = "AREA" if current_mode == EngagementMode.AREA_SATURATION else "DIRECT"
+	var threat_status = "HIGH" if high_threat_mode else "NORMAL"
+	
+	print("PDC Status: %s | %s | %s | Torpedoes: %d | Shots: %d | Kills: %d" % [
+		state_name, mode_name, threat_status, torpedoes.size(), total_shots_fired, torpedoes_destroyed
+	])
+	
+	# Debug target information
+	if current_target:
+		var pdc_pos = get_muzzle_world_position()
+		var dist = pdc_pos.distance_to(current_target.global_position) * WorldSettings.meters_per_pixel
+		var in_arc = is_target_in_firing_arc(current_target)
+		print("  Target: %.0fm away, in_arc: %s" % [dist, in_arc])
+
 func assess_threat_level():
 	var torpedoes = sensor_system.get_all_enemy_torpedoes()
 	var close_torpedoes = 0
@@ -128,13 +179,26 @@ func assess_threat_level():
 			very_close_torpedoes += 1
 	
 	# Activate high threat mode if multiple close targets
+	var old_threat_mode = high_threat_mode
 	high_threat_mode = (close_torpedoes >= 3 or very_close_torpedoes >= 2)
 	
+	# DEBUG: Threat level changes
+	if old_threat_mode != high_threat_mode and debug_enabled:
+		print("PDC Threat Level: %s (close: %d, very_close: %d)" % [
+			"HIGH" if high_threat_mode else "NORMAL", close_torpedoes, very_close_torpedoes
+		])
+	
 	# Choose engagement mode based on threat assessment
+	var old_mode = current_mode
 	if high_threat_mode and close_torpedoes > 0:
 		current_mode = EngagementMode.DIRECT_TARGETING
 	else:
 		current_mode = EngagementMode.AREA_SATURATION
+		
+	# DEBUG: Mode changes
+	if old_mode != current_mode and debug_enabled:
+		var mode_name = "DIRECT" if current_mode == EngagementMode.DIRECT_TARGETING else "AREA"
+		print("PDC Mode: -> %s" % mode_name)
 
 func find_optimal_target():
 	var torpedoes = sensor_system.get_all_enemy_torpedoes()
@@ -143,17 +207,21 @@ func find_optimal_target():
 	
 	var pdc_world_pos = get_muzzle_world_position()
 	
+	# DEBUG: Target search
+	var valid_targets = 0
+	var in_arc_targets = 0
+	
 	for torpedo in torpedoes:
 		if not is_valid_target(torpedo):
 			continue
+		valid_targets += 1
 		
-		# CRITICAL: Check if target is in firing arc BEFORE calculating priority
 		if not is_target_in_firing_arc(torpedo):
 			continue
+		in_arc_targets += 1
 		
 		var priority = calculate_target_priority(torpedo, pdc_world_pos)
 		
-		# In high threat mode, boost priority of very close targets
 		if high_threat_mode:
 			var distance_m = pdc_world_pos.distance_to(torpedo.global_position) * WorldSettings.meters_per_pixel
 			if distance_m < saturation_range_meters * 0.3:
@@ -162,6 +230,12 @@ func find_optimal_target():
 		if priority > best_priority:
 			best_priority = priority
 			best_target = torpedo
+	
+	# DEBUG: Target selection results
+	if debug_enabled and torpedoes.size() > 0:
+		print("PDC Target Search: %d total, %d valid, %d in_arc, best_priority: %.2f" % [
+			torpedoes.size(), valid_targets, in_arc_targets, best_priority
+		])
 	
 	if best_target:
 		# Check target switching cooldown unless in high threat mode
@@ -180,7 +254,8 @@ func find_optimal_target():
 				burst_bullets_fired = 0
 				
 				var distance_m = pdc_world_pos.distance_to(best_target.global_position) * WorldSettings.meters_per_pixel
-				print("PDC acquired target at distance: %.0f meters" % distance_m)
+				if debug_enabled:
+					print("PDC New Target: %.0fm" % distance_m)
 		else:
 			current_state = FiringState.TRACKING
 
@@ -264,7 +339,8 @@ func calculate_target_priority(torpedo: Node2D, pdc_pos: Vector2) -> float:
 
 func update_tracking():
 	if not is_valid_target(current_target):
-		print("PDC lost target - invalid")
+		if debug_enabled:
+			print("PDC lost target - invalid")
 		current_state = FiringState.IDLE
 		current_target = null
 		return
@@ -276,7 +352,7 @@ func update_tracking():
 	else:
 		desired_angle = calculate_direct_intercept_angle(current_target)
 	
-	# CRITICAL: Ensure we're not trying to aim outside our firing arc
+	# Ensure we're not trying to aim outside our firing arc
 	desired_angle = clamp_angle_to_firing_arc(desired_angle)
 	target_rotation = desired_angle
 	
@@ -287,6 +363,8 @@ func update_tracking():
 	if angle_diff < max_angle_diff:
 		current_state = FiringState.FIRING
 		fire_timer = 0.0
+		if debug_enabled:
+			print("PDC Ready to fire - angle aligned (diff: %.3f)" % angle_diff)
 
 func clamp_angle_to_firing_arc(desired_angle: float) -> float:
 	# Convert ship forward direction to an angle
@@ -317,7 +395,8 @@ func clamp_angle_to_firing_arc(desired_angle: float) -> float:
 
 func execute_firing_mode():
 	if not is_valid_target(current_target):
-		print("PDC target lost during burst")
+		if debug_enabled:
+			print("PDC target lost during burst")
 		current_state = FiringState.COOLDOWN
 		cooldown_timer = burst_cooldown
 		current_target = null
@@ -347,6 +426,8 @@ func execute_firing_mode():
 	
 	# Check if burst is complete
 	if burst_bullets_fired >= bullets_per_burst:
+		if debug_enabled:
+			print("PDC burst complete - %d bullets fired" % burst_bullets_fired)
 		current_state = FiringState.COOLDOWN
 		cooldown_timer = burst_cooldown
 		burst_bullets_fired = 0
@@ -374,7 +455,8 @@ func fire_bullet():
 	# SAFETY CHECK: Ensure we're not firing backwards
 	var dot_product = fire_direction.dot(ship_forward_direction)
 	if dot_product < 0.1:  # Less than ~84 degrees from forward
-		print("WARNING: Attempted to fire backwards, skipping shot")
+		if debug_enabled:
+			print("WARNING: Attempted to fire backwards, skipping shot")
 		return
 	
 	# Add ship velocity to bullet
@@ -396,6 +478,7 @@ func fire_bullet():
 	
 	total_shots_fired += 1
 
+# Rest of the functions remain the same as the original...
 func calculate_area_saturation_angle(torpedo: Node2D) -> float:
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel_mps = get_torpedo_velocity(torpedo)
@@ -441,8 +524,7 @@ func update_turret_rotation(delta):
 		else:
 			current_rotation = target_rotation
 		
-		# FIXED: Apply rotation relative to ship's orientation, not absolute
-		# The turret sprite should rotate to show where it's aiming
+		# Apply rotation relative to ship's orientation
 		var relative_rotation = current_rotation - parent_ship.rotation
 		sprite.rotation = relative_rotation
 
@@ -450,7 +532,6 @@ func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
 		return muzzle_point.global_position
 	else:
-		# Fallback to PDC center if no muzzle point found
 		return global_position
 
 func estimate_intercept_time(torpedo: Node2D, pdc_pos: Vector2) -> float:
@@ -489,7 +570,8 @@ func get_ship_velocity() -> Vector2:
 
 func _on_torpedo_intercepted():
 	torpedoes_destroyed += 1
-	print("PDC destroyed torpedo! Total: ", torpedoes_destroyed)
+	if debug_enabled:
+		print("PDC KILL! Total destroyed: ", torpedoes_destroyed)
 
 func get_debug_info() -> String:
 	var state_name = ["IDLE", "TRACKING", "FIRING", "COOLDOWN"][current_state]
@@ -503,3 +585,16 @@ func get_debug_info() -> String:
 		target_info = "%.0fm" % dist
 	
 	return "PDC: %s | %s | %s | Target: %s | Kills: %d" % [state_name, mode_name, threat_status, target_info, torpedoes_destroyed]
+
+# DEBUG CONTROL FUNCTIONS
+func enable_debug():
+	debug_enabled = true
+	print("PDC Debug enabled")
+
+func disable_debug():
+	debug_enabled = false
+	print("PDC Debug disabled")
+
+func toggle_debug():
+	debug_enabled = !debug_enabled
+	print("PDC Debug: ", "enabled" if debug_enabled else "disabled")
