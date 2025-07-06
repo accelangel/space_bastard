@@ -13,4 +13,3 @@ texture = ExtResource("3_2iybs")
 
 [node name="MuzzlePoint" type="Marker2D" parent="Sprite2D"]
 position = Vector2(0, -125)
-scale = Vector2(1, 1)

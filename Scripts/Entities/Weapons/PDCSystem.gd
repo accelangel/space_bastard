@@ -152,13 +152,18 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# Fire in current direction (world space)
-	var fire_direction = Vector2.from_angle(current_rotation)
+	# CRITICAL: Convert ship-relative angle to world angle for firing
+	var world_angle = current_rotation + parent_ship.rotation
+	var fire_direction = Vector2.from_angle(world_angle)
 	
 	# DEBUG: Check firing direction
-	var angle_deg = rad_to_deg(current_rotation)
 	if rounds_fired % 18 == 0:  # Log every second
-		print("PDC %s firing at %.1f° (world angle)" % [pdc_id, angle_deg])
+		print("PDC %s firing - ship: %.1f°, relative: %.1f°, world: %.1f°" % [
+			pdc_id, 
+			rad_to_deg(parent_ship.rotation),
+			rad_to_deg(current_rotation),
+			rad_to_deg(world_angle)
+		])
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()

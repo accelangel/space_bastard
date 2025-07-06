@@ -41,6 +41,7 @@ var update_timer: float = 0.0
 # Statistics
 var total_engagements: int = 0
 var successful_intercepts: int = 0
+var exec_counter: int = 0  # For debug throttling
 
 # Target data structure
 class TargetData:
@@ -212,13 +213,19 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
-	var required_angle = to_intercept.angle()
+	var world_angle = to_intercept.angle()
+	
+	# Convert to ship-relative angle
+	var required_angle = world_angle - parent_ship.rotation
+	
+	# Normalize to -PI to PI
+	while required_angle > PI:
+		required_angle -= TAU
+	while required_angle < -PI:
+		required_angle += TAU
 	
 	# Check if within firing arc (simplified - assumes forward arc)
-	var pdc_forward = ship_forward_direction
-	var angle_diff = abs(pdc_forward.angle_to(to_intercept.normalized()))
-	
-	if rad_to_deg(angle_diff) > 80.0:  # Outside 160° forward arc
+	if abs(required_angle) > deg_to_rad(80.0):  # Outside 160° forward arc
 		return 0.0
 	
 	# Calculate rotation time needed
@@ -359,20 +366,22 @@ func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	return rotation_score * target_data.feasibility_score
 
 func execute_fire_missions():
-	# DEBUG: Log execution status
-	if target_assignments.size() > 0:
-		print("FCM: Executing fire missions for %d targets" % target_assignments.size())
+	# DEBUG: Log execution status only occasionally
+	exec_counter += 1
+	if debug_enabled and exec_counter % 20 == 0:  # Every second at 20Hz
+		print("FCM: Executing missions - %d targets, %d busy PDCs" % [
+			target_assignments.size(), 
+			get_busy_pdc_count()
+		])
 	
 	for target_id in target_assignments:
 		if not tracked_targets.has(target_id):
-			print("FCM ERROR: Target assignment for non-existent target!")
+			if debug_enabled:
+				print("FCM ERROR: Target assignment for non-existent target!")
 			continue
 			
 		var target_data = tracked_targets[target_id]
 		var assigned_pdcs = target_assignments[target_id]
-		
-		# DEBUG: Log PDC assignments
-		print("FCM: Target %s assigned to %d PDCs" % [target_id, assigned_pdcs.size()])
 		
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
@@ -380,10 +389,8 @@ func execute_fire_missions():
 			# Calculate firing solution
 			var firing_angle = calculate_firing_solution(pdc, target_data)
 			
-			# DEBUG: Log firing solution
-			var current_angle_deg = rad_to_deg(pdc.current_rotation)
-			var target_angle_deg = rad_to_deg(firing_angle)
-			print("FCM: PDC %s - Current: %.1f°, Target: %.1f°" % [pdc_id, current_angle_deg, target_angle_deg])
+			# Only log if PDC is changing targets
+			var old_target = pdc.current_target_id
 			
 			# Command PDC
 			var is_emergency = target_data.is_critical
@@ -392,7 +399,10 @@ func execute_fire_missions():
 			# Start firing if PDC reports ready
 			if pdc.is_aimed():
 				pdc.start_firing()
-				print("FCM: PDC %s started firing!" % pdc_id)
+				
+				# Log only new engagements
+				if debug_enabled and old_target != target_id:
+					print("FCM: PDC %s engaging new target" % pdc_id)
 
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	# Get positions
@@ -412,20 +422,29 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
 	var predicted_pos = target_pos + target_vel_pixels * bullet_time
 	
-	# Calculate angle to predicted position
+	# Calculate angle to predicted position IN WORLD SPACE
 	var to_intercept = predicted_pos - pdc_pos
-	var firing_angle = to_intercept.angle()
+	var world_angle = to_intercept.angle()
+	
+	# CRITICAL: Convert world angle to ship-relative angle
+	var ship_angle = parent_ship.rotation
+	var relative_angle = world_angle - ship_angle
+	
+	# Normalize to -PI to PI range
+	while relative_angle > PI:
+		relative_angle -= TAU
+	while relative_angle < -PI:
+		relative_angle += TAU
 	
 	# DEBUG: Log calculation details
-	if debug_enabled:
+	if debug_enabled and target_data.is_critical:  # Only log critical targets to reduce spam
 		print("FCM Firing Solution:")
-		print("  Target at: ", target_pos)
-		print("  Target velocity: ", target_vel, " m/s")
+		print("  Ship angle: %.1f°" % rad_to_deg(ship_angle))
+		print("  World angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Relative angle: %.1f°" % rad_to_deg(relative_angle))
 		print("  Bullet flight time: %.2f s" % bullet_time)
-		print("  Predicted intercept: ", predicted_pos)
-		print("  Firing angle: %.1f°" % rad_to_deg(firing_angle))
 	
-	return firing_angle
+	return relative_angle
 
 func pdc_ready_to_fire(pdc_id: String):
 	# Called by PDC when it's aimed and ready
@@ -455,6 +474,13 @@ func get_available_pdc_count() -> int:
 	var count = 0
 	for pdc_id in pdc_assignments:
 		if pdc_assignments[pdc_id] == "":
+			count += 1
+	return count
+
+func get_busy_pdc_count() -> int:
+	var count = 0
+	for pdc_id in pdc_assignments:
+		if pdc_assignments[pdc_id] != "":
 			count += 1
 	return count
 
