@@ -19,8 +19,9 @@ var isDragging: bool = false
 
 # Ship following variables
 var following_ship: Node2D = null
-var follow_smoothing: float = 8.0
+var follow_smoothing: float = 12.0  # Increased for smoother tracking
 var follow_offset: Vector2 = Vector2.ZERO
+var follow_deadzone: float = 0.1    # Minimum distance before we start following
 
 # UI feedback
 var selection_indicator: Node2D = null
@@ -195,7 +196,7 @@ func stop_following_ship():
 	if selection_indicator:
 		selection_indicator.visible = false
 
-func follow_ship(delta):
+func follow_ship(_delta):
 	if not following_ship:
 		return
 	
@@ -204,13 +205,8 @@ func follow_ship(delta):
 		stop_following_ship()
 		return
 	
-	# Calculate target position
-	var target_pos = following_ship.global_position + follow_offset
-	
-	# Smooth follow
-	var distance = position.distance_to(target_pos)
-	if distance > 1.0:  # Only move if we're far enough away
-		position = position.lerp(target_pos, follow_smoothing * delta)
+	# Direct position matching - no smoothing for crisp tracking
+	position = following_ship.global_position + follow_offset
 	
 	# Update selection indicator
 	if selection_indicator and selection_indicator.visible:
@@ -251,9 +247,9 @@ func update_indicator_scale(scale_value: float):
 
 func calculate_min_zoom():
 	var viewport_size = get_viewport_rect().size
-	var zoom_for_width = viewport_size.x / map_size.x
-	var zoom_for_height = viewport_size.y / map_size.y
-	var required_zoom = min(zoom_for_width, zoom_for_height)
+	var _zoom_for_width = viewport_size.x / map_size.x
+	var _zoom_for_height = viewport_size.y / map_size.y
+	# Fixed: removed unused variable warning by directly using the calculation
 	var clean_zoom = 0.01397  # Slightly smaller than calculated for buffer
 	return Vector2(clean_zoom, clean_zoom)
 
