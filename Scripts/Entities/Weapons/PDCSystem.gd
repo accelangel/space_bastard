@@ -3,10 +3,10 @@ extends Node2D
 class_name PDCSystem
 
 # PDC Configuration
-@export var bullet_velocity_mps: float = 2000.0
+@export var bullet_velocity_mps: float = 300.0
 @export var bullets_per_burst: int = 100  # Bullets in a burst
-@export var burst_fire_rate: float = 100.0  # Bullets per second DURING a burst
-@export var burst_cooldown: float = 0.25  # Seconds between bursts
+@export var burst_fire_rate: float = 50.0  # Bullets per second DURING a burst
+@export var burst_cooldown: float = 0.001  # Seconds between bursts
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 1.0  # Increased minimum distance
 @export var turret_rotation_speed: float = 30.0  # Radians per second
