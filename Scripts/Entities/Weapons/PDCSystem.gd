@@ -50,17 +50,30 @@ var last_fire_time: float = 0.0
 var debug_enabled: bool = true
 var debug_timer: float = 0.0
 
+# Add this to _ready() to check sprite setup
 func _ready():
 	parent_ship = get_parent()
 	sprite = get_node_or_null("Sprite2D")
 	
 	if sprite:
 		muzzle_point = sprite.get_node_or_null("MuzzlePoint")
-	
+		
+		# DEBUG: Check sprite default orientation
+		print("PDC %s sprite setup:" % pdc_id)
+		print("  Sprite default rotation: %.1f°" % rad_to_deg(sprite.rotation))
+		print("  Sprite texture: %s" % sprite.texture.resource_path if sprite.texture else "None")
+		
+		# Test: Is the sprite image oriented correctly?
+		# In Godot, 0° rotation should point right (+X axis)
+		# But your PDC sprites might be drawn pointing up or down
+		
 	mount_position = position
 	pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
 	
 	print("PDC initialized: ", pdc_id, " at mount position: ", mount_position)
+	
+	# Run sprite orientation check after a delay
+	call_deferred("debug_sprite_orientation")
 
 func _physics_process(delta):
 	update_turret_rotation(delta)
@@ -77,7 +90,7 @@ func _physics_process(delta):
 					fire_authorized, is_aimed()
 				])
 				
-# In PDCSystem.gd - update_turret_rotation()
+# In PDCSystem.gd - update_turret_rotation() - KEEP AS IS
 func update_turret_rotation(delta):
 	if sprite:
 		var angle_diff = angle_difference(current_rotation, target_rotation)
@@ -93,8 +106,8 @@ func update_turret_rotation(delta):
 		else:
 			current_rotation = target_rotation
 		
-		# FIXED: Use world angle directly - don't subtract ship rotation
-		sprite.rotation = current_rotation
+		# Apply rotation relative to ship - KEEP THIS
+		sprite.rotation = current_rotation - parent_ship.rotation
 		
 func handle_firing(delta):
 	# SIMPLIFIED FIRING LOGIC:
@@ -188,7 +201,7 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# In PDCSystem.gd - fire_bullet()
+# Add this to fire_bullet() to see what's happening
 func fire_bullet():
 	if not bullet_scene:
 		print("PDC %s: No bullet scene loaded!" % pdc_id)
@@ -200,11 +213,34 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# FIXED: Use world angle directly - current_rotation is already world angle
-	var world_angle = current_rotation
+	# CURRENT METHOD: Use world angle directly
+	var world_angle = current_rotation + PI
 	var fire_direction = Vector2.from_angle(world_angle)
 	
-	# Rest of the firing logic remains the same...
+	# DEBUG: Show all the angles and directions
+	if rounds_fired % 36 == 0:  # Every 2 seconds
+		print("PDC %s: FIRING DEBUG" % pdc_id.substr(4, 8))
+		print("  World angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Fire direction: (%.2f, %.2f)" % [fire_direction.x, fire_direction.y])
+		print("  Sprite rotation: %.1f°" % rad_to_deg(sprite.rotation))
+		print("  Sprite global_rotation: %.1f°" % rad_to_deg(sprite.global_rotation))
+		print("  Muzzle world pos: (%.1f, %.1f)" % [bullet.global_position.x, bullet.global_position.y])
+		
+		# Test all 4 possible directions
+		var test_directions = [
+			Vector2.from_angle(world_angle),                    # Current
+			Vector2.from_angle(world_angle + PI),               # Opposite
+			Vector2.from_angle(sprite.global_rotation),         # Sprite forward
+			Vector2.from_angle(sprite.global_rotation + PI)     # Sprite backward
+		]
+		
+		for i in range(test_directions.size()):
+			var dir = test_directions[i]
+			print("  Test direction %d: (%.2f, %.2f) at %.1f°" % [
+				i, dir.x, dir.y, rad_to_deg(dir.angle())
+			])
+	
+	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
@@ -219,7 +255,7 @@ func fire_bullet():
 	
 	rounds_fired += 1
 	
-	# Debug every 36 rounds (2 seconds of firing)
+	# Original debug line
 	if rounds_fired % 36 == 0:
 		print("PDC %s: Fired %d rounds at %s" % [
 			pdc_id.substr(4, 8), rounds_fired, current_target_id.substr(8, 7)
@@ -279,3 +315,34 @@ func emergency_stop():
 	emergency_slew = false
 	fire_authorized = false
 	current_status = "IDLE"
+
+# Add this debug function to PDCSystem.gd to test sprite orientation
+func debug_sprite_orientation():
+	if not sprite:
+		print("PDC %s: No sprite found!" % pdc_id)
+		return
+	
+	print("=== PDC %s SPRITE DEBUG ===" % pdc_id)
+	print("Sprite rotation: %.1f°" % rad_to_deg(sprite.rotation))
+	print("Sprite global_rotation: %.1f°" % rad_to_deg(sprite.global_rotation))
+	print("Parent ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+	print("Current_rotation: %.1f°" % rad_to_deg(current_rotation))
+	print("Target_rotation: %.1f°" % rad_to_deg(target_rotation))
+	
+	# Test: What direction is the sprite's "forward" direction?
+	var sprite_forward = Vector2.UP.rotated(sprite.global_rotation)
+	var sprite_angle = sprite_forward.angle()
+	print("Sprite forward direction: (%.2f, %.2f) at %.1f°" % [
+		sprite_forward.x, sprite_forward.y, rad_to_deg(sprite_angle)
+	])
+	
+	# Test: What direction should we be firing?
+	var desired_direction = Vector2.from_angle(current_rotation)
+	print("Desired fire direction: (%.2f, %.2f) at %.1f°" % [
+		desired_direction.x, desired_direction.y, rad_to_deg(current_rotation)
+	])
+	
+	# Test: Are they aligned?
+	var alignment_error = abs(angle_difference(sprite_angle, current_rotation))
+	print("Sprite alignment error: %.1f°" % rad_to_deg(alignment_error))
+	print("================================")

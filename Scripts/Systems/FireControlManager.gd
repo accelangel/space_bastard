@@ -439,8 +439,17 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var to_intercept = predicted_pos - pdc_pos
 	var world_angle = to_intercept.angle()
 	
-	# FIXED: Return world angle directly - no ship rotation adjustment
-	return world_angle
+	# FIXED: Properly convert to ship-relative angle
+	var ship_angle = parent_ship.rotation
+	var relative_angle = world_angle - ship_angle
+	
+	# Normalize to [-PI, PI]
+	while relative_angle > PI:
+		relative_angle -= TAU
+	while relative_angle < -PI:
+		relative_angle += TAU
+	
+	return relative_angle
 
 func remove_target(target_id: String):
 	if tracked_targets.has(target_id):
