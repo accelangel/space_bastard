@@ -8,7 +8,7 @@ var faction: String = "friendly"
 var target_node: Node2D
 
 # Torpedo specifications (KEEP ALL OF THESE)
-@export var max_acceleration: float = 5000.0    # 150 Gs in m/s²
+@export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
 @export var proximity_meters: float = 10.0       # Auto-detonate range
 
 # ENHANCED LAUNCH SYSTEM (MUST KEEP)
