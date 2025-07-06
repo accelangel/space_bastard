@@ -4,9 +4,9 @@ class_name PDCSystem
 
 # PDC Configuration
 @export var bullet_velocity_mps: float = 300.0
-@export var bullets_per_burst: int = 20  # Bullets in a burst
-@export var burst_fire_rate: float = 40.0  # Bullets per second DURING a burst
-@export var burst_cooldown: float = 0.25  # Seconds between bursts
+@export var bullets_per_burst: int = 10  # Bullets in a burst
+@export var burst_fire_rate: float = 20.0  # Bullets per second DURING a burst
+@export var burst_cooldown: float = 0.5  # Seconds between bursts
 @export var engagement_range_meters: float = 8000.0
 @export var min_intercept_distance_meters: float = 500.0
 @export var turret_rotation_speed: float = 3.0  # Radians per second
@@ -130,18 +130,9 @@ func update_tracking(_delta):
 		current_target = null
 		return
 	
-	# Calculate lead direction (same as fire_bullet will use)
-	var torpedo_pos = current_target.global_position
-	var torpedo_vel = get_torpedo_velocity(current_target)
-	var to_torpedo = torpedo_pos - global_position
-	var distance = to_torpedo.length()
-	var distance_meters = distance * WorldSettings.meters_per_pixel
-	
-	var bullet_travel_time = distance_meters / bullet_velocity_mps
-	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
-	var fire_direction = (predicted_pos - global_position).normalized()
-	
-	target_rotation = fire_direction.angle()
+	# Calculate lead angle
+	var lead_angle = calculate_lead_angle(current_target)
+	target_rotation = lead_angle
 	
 	# Check if we're aimed close enough to start firing
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
@@ -156,18 +147,9 @@ func fire_burst(_delta):
 		current_target = null
 		return
 	
-	# Update aim during burst - use same direct calculation as update_tracking
-	var torpedo_pos = current_target.global_position
-	var torpedo_vel = get_torpedo_velocity(current_target)
-	var to_torpedo = torpedo_pos - global_position
-	var distance = to_torpedo.length()
-	var distance_meters = distance * WorldSettings.meters_per_pixel
-	
-	var bullet_travel_time = distance_meters / bullet_velocity_mps
-	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
-	var fire_direction = (predicted_pos - global_position).normalized()
-	
-	target_rotation = fire_direction.angle()
+	# Update aim during burst
+	var lead_angle = calculate_lead_angle(current_target)
+	target_rotation = lead_angle
 	
 	# Fire bullets at the burst rate
 	var bullet_interval = 1.0 / burst_fire_rate
@@ -192,30 +174,24 @@ func fire_bullet():
 	# Position at turret location
 	bullet.global_position = global_position
 	
-	# Calculate direction vector directly like the original working version
-	var torpedo_pos = current_target.global_position
-	var torpedo_vel = get_torpedo_velocity(current_target)
-	
-	# Calculate lead direction (same as original working version)
-	var to_torpedo = torpedo_pos - global_position
-	var distance = to_torpedo.length()
-	var distance_meters = distance * WorldSettings.meters_per_pixel
-	
-	# Time for bullet to reach that distance
-	var bullet_travel_time = distance_meters / bullet_velocity_mps
-	
-	# Where torpedo will be after that time
-	var predicted_pos = torpedo_pos + (torpedo_vel * bullet_travel_time)
-	var fire_direction = (predicted_pos - global_position).normalized()
-	
-	# Add small random spread
+	# Fire in turret direction with small random spread
 	var spread = randf_range(-0.02, 0.02)  # ~1 degree spread
-	fire_direction = fire_direction.rotated(spread)
+	var fire_direction = Vector2.from_angle(current_rotation + spread)
+	
+	# Debug: Check if we're firing backwards
+	if current_target:
+		var to_target = current_target.global_position - global_position
+		var dot = fire_direction.dot(to_target.normalized())
+		if dot < 0:
+			print("WARNING: Firing backwards! Dot product: ", dot)
+			print("  Fire direction: ", fire_direction)
+			print("  To target: ", to_target.normalized())
+			print("  Current rotation: ", rad_to_deg(current_rotation))
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
-	var bullet_velocity_world = fire_direction * bullet_velocity_mps + ship_velocity
-	var bullet_velocity_pixels = bullet_velocity_world / WorldSettings.meters_per_pixel
+	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
+	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
 	if bullet.has_method("set_velocity"):
 		bullet.set_velocity(bullet_velocity_pixels)
@@ -231,18 +207,52 @@ func fire_bullet():
 	
 	total_shots_fired += 1
 
+func calculate_lead_angle(torpedo: Node2D) -> float:
+	var torpedo_pos = torpedo.global_position
+	var torpedo_vel = get_torpedo_velocity(torpedo)
+	
+	# Direct angle to current torpedo position
+	var to_torpedo = torpedo_pos - global_position
+	
+	# If torpedo is moving slowly, just aim directly at it
+	if torpedo_vel.length() < 10.0:
+		return to_torpedo.angle()
+	
+	# Calculate intercept point
+	var distance = to_torpedo.length()
+	var distance_meters = distance * WorldSettings.meters_per_pixel
+	
+	# Time for bullet to reach that distance
+	var bullet_travel_time = distance_meters / bullet_velocity_mps
+	
+	# Where torpedo will be after that time (in pixels)
+	var predicted_offset = torpedo_vel * bullet_travel_time
+	var predicted_pos = torpedo_pos + predicted_offset
+	
+	# Angle to predicted position
+	var to_predicted = predicted_pos - global_position
+	
+	return to_predicted.angle()
+
 func update_turret_rotation(delta):
+	# Smoothly rotate turret toward target
+	var angle_diff = angle_difference(current_rotation, target_rotation)
+	var rotation_step = turret_rotation_speed * delta
+	
+	if abs(angle_diff) > rotation_step:
+		current_rotation += sign(angle_diff) * rotation_step
+	else:
+		current_rotation = target_rotation
+	
+	# Update visual rotation if we have a sprite
 	if sprite:
-		# Smoothly rotate turret toward target
-		var angle_diff = angle_difference(current_rotation, target_rotation)
-		var rotation_step = turret_rotation_speed * delta
-		
-		if abs(angle_diff) > rotation_step:
-			current_rotation += sign(angle_diff) * rotation_step
-		else:
-			current_rotation = target_rotation
-		
+		# If your PDC sprite points up (negative Y), no adjustment needed
+		# If it points right (positive X), subtract PI/2
+		# Adjust this based on your sprite's default orientation
 		sprite.rotation = current_rotation
+		
+	# Also update the node's rotation for bullet firing
+	rotation = current_rotation
 
 func angle_difference(from: float, to: float) -> float:
 	var diff = fmod(to - from, TAU)
