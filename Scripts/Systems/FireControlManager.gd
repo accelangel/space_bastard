@@ -1,17 +1,8 @@
 # Scripts/Systems/FireControlManager.gd - CENTRAL FIRE CONTROL SYSTEM
-# This file should replace your existing Scripts/Systems/FireControlManager.gd
-# 
-# CHANGES MADE:
-# 1. Added better debug system with summary reports every 2 seconds
-# 2. Fixed PDC targeting - removed artificial arc limitations
-# 3. Fixed intercept calculations to properly track moving targets
-# 4. Added continuous firing solution updates
-# 5. Better state management for idle PDCs
-#
-# TO USE:
-# 1. Replace your entire Scripts/Systems/FireControlManager.gd with this file
-# 2. Debug output will show "=== FCM STATUS ===" every 2 seconds
-# 3. Set debug_verbose = true for detailed logging if needed
+# FIXES APPLIED:
+# 1. Fixed unused target_data variable in remove_target() - now properly uses it for intercept detection
+# 2. Fixed unused pdc_id parameter in pdc_ready_to_fire() - now properly validates the PDC
+# 3. These fixes ensure PDCs only fire when targets are in range and maintain proper target tracking
 
 extends Node2D
 class_name FireControlManager
@@ -74,6 +65,7 @@ class TargetData:
 	var assigned_pdcs: Array = []
 	var engagement_start_time: float
 	var is_critical: bool = false
+	var distance_meters: float = 0.0  # Added for range checking
 
 func _ready():
 	parent_ship = get_parent()
@@ -140,13 +132,16 @@ func print_debug_summary():
 	var active_targets = tracked_targets.size()
 	var engaged_pdcs = get_busy_pdc_count()
 	var critical_count = 0
+	var in_range_count = 0
 	
 	for target_data in tracked_targets.values():
 		if target_data.is_critical:
 			critical_count += 1
+		if target_data.distance_meters <= engagement_range_meters:
+			in_range_count += 1
 	
 	print("\n=== FCM STATUS ===")
-	print("Targets: %d tracked (%d critical)" % [active_targets, critical_count])
+	print("Targets: %d tracked (%d critical, %d in range)" % [active_targets, critical_count, in_range_count])
 	print("PDCs: %d/%d engaged" % [engaged_pdcs, registered_pdcs.size()])
 	
 	# Print PDC status
@@ -168,9 +163,10 @@ func print_debug_summary():
 		for i in range(min(3, target_priorities.size())):
 			var target_id = target_priorities[i]
 			var data = tracked_targets[target_id]
-			print("  %s: %.1fs TTI, score: %.2f" % [
+			print("  %s: %.1fs TTI, %.1fkm, score: %.2f" % [
 				target_id.substr(0, 15),
 				data.time_to_impact,
+				data.distance_meters / 1000.0,
 				data.priority_score
 			])
 	print("==================\n")
@@ -219,34 +215,37 @@ func add_new_target(torpedo: Node2D):
 	total_engagements += 1
 	
 	if debug_verbose:
-		print("FCM: Added new target: ", target_data.target_id)
+		print("FCM: Added new target: %s at %.1f km" % [target_data.target_id, target_data.distance_meters / 1000.0])
 
 func update_target_data(target_data: TargetData):
 	var torpedo = target_data.node_ref
 	target_data.last_position = torpedo.global_position
 	target_data.last_velocity = get_torpedo_velocity(torpedo)
 	
-	# Calculate time to impact
+	# Calculate distance and time to impact
 	var ship_pos = parent_ship.global_position
 	var relative_pos = target_data.last_position - ship_pos
 	var relative_vel = target_data.last_velocity - get_ship_velocity()
-	var distance_meters = relative_pos.length() * WorldSettings.meters_per_pixel
+	target_data.distance_meters = relative_pos.length() * WorldSettings.meters_per_pixel
 	
 	# Simple time-to-impact calculation
 	var closing_speed = -relative_vel.dot(relative_pos.normalized())
 	if closing_speed > 0:
-		target_data.time_to_impact = distance_meters / closing_speed
+		target_data.time_to_impact = target_data.distance_meters / closing_speed
 	else:
 		target_data.time_to_impact = 999.0
 	
 	# Calculate intercept point
 	target_data.intercept_point = calculate_intercept_point(torpedo)
 	
-	# Calculate feasibility
-	target_data.feasibility_score = calculate_intercept_feasibility(target_data)
+	# Calculate feasibility - BUT ONLY if target is in engagement range
+	if target_data.distance_meters <= engagement_range_meters:
+		target_data.feasibility_score = calculate_intercept_feasibility(target_data)
+	else:
+		target_data.feasibility_score = 0.0  # Not in range yet
 	
 	# Determine if critical
-	target_data.is_critical = target_data.time_to_impact < critical_time_threshold
+	target_data.is_critical = target_data.time_to_impact < critical_time_threshold and target_data.distance_meters <= engagement_range_meters
 
 func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	# This is a simplified calculation - the full implementation would solve
@@ -262,8 +261,12 @@ func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	# Predict where torpedo will be
 	return torpedo_pos + torpedo_vel * bullet_time
 
-# FIXED: Better feasibility calculation
+# FIXED: Better feasibility calculation with range check
 func calculate_intercept_feasibility(target_data: TargetData) -> float:
+	# First check: Is target in engagement range?
+	if target_data.distance_meters > engagement_range_meters:
+		return 0.0
+	
 	# Check if intercept point is geometrically valid
 	var ship_to_target = target_data.last_position - parent_ship.global_position
 	var closing_velocity = -target_data.last_velocity.dot(ship_to_target.normalized())
@@ -273,8 +276,7 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 		return 0.0
 	
 	# Check if target is already too close (past the ship)
-	var distance_meters = ship_to_target.length() * WorldSettings.meters_per_pixel
-	if distance_meters < min_intercept_distance_meters:
+	if target_data.distance_meters < min_intercept_distance_meters:
 		return 0.0
 	
 	# Check if any PDC can reach the target
@@ -327,7 +329,7 @@ func assess_all_threats():
 	for target_id in tracked_targets:
 		var target_data = tracked_targets[target_id]
 		
-		# Skip impossible targets
+		# Skip targets outside engagement range or impossible targets
 		if target_data.feasibility_score <= 0.0:
 			continue
 		
@@ -466,6 +468,10 @@ func execute_fire_missions():
 		var target_data = tracked_targets[target_id]
 		var assigned_pdcs = target_assignments[target_id]
 		
+		# Double-check target is still in range before firing
+		if target_data.distance_meters > engagement_range_meters:
+			continue
+		
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
 			
@@ -526,35 +532,113 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	
 	return relative_angle
 
+# FIXED: Now properly validates the PDC and uses the pdc_id parameter
 func pdc_ready_to_fire(pdc_id: String):
 	# Called by PDC when it's aimed and ready
-	if pdc_assignments.has(pdc_id) and pdc_assignments[pdc_id] != "":
-		var pdc = registered_pdcs[pdc_id]
-		pdc.start_firing()
+	if not registered_pdcs.has(pdc_id):
+		if debug_verbose:
+			print("FCM Warning: Unknown PDC %s reported ready" % pdc_id)
+		return
+	
+	if not pdc_assignments.has(pdc_id) or pdc_assignments[pdc_id] == "":
+		if debug_verbose:
+			print("FCM: PDC %s ready but no target assigned" % pdc_id)
+		return
+	
+	var target_id = pdc_assignments[pdc_id]
+	if not tracked_targets.has(target_id):
+		if debug_verbose:
+			print("FCM: PDC %s ready but target %s no longer tracked" % [pdc_id, target_id])
+		return
+	
+	var target_data = tracked_targets[target_id]
+	
+	# Final range check before allowing fire
+	if target_data.distance_meters > engagement_range_meters:
+		if debug_verbose:
+			print("FCM: PDC %s ready but target %s out of range (%.1f km)" % [pdc_id, target_id, target_data.distance_meters / 1000.0])
+		return
+	
+	# All checks passed - authorize firing
+	var pdc = registered_pdcs[pdc_id]
+	pdc.start_firing()
+	
+	if debug_verbose:
+		print("FCM: Authorized firing for PDC %s on target %s" % [pdc_id, target_id])
 
-# IMPROVED: Better target removal with debug info
+# FIXED: remove_target function with proper intercept tracking
 func remove_target(target_id: String):
 	# Clean up target
 	if tracked_targets.has(target_id):
 		var target_data = tracked_targets[target_id]
 		
-		if debug_verbose:
-			print("FCM: Removing target %s (TTI was %.1f)" % [
-				target_id.substr(0, 15), 
-				target_data.time_to_impact
-			])
+		# Determine if this was a successful intercept based on multiple factors
+		var was_successful_intercept = false
+		
+		# Check if target was destroyed before getting dangerously close
+		var distance_to_ship = target_data.last_position.distance_to(parent_ship.global_position)
+		var distance_meters = distance_to_ship * WorldSettings.meters_per_pixel
+		
+		# Consider it successful if:
+		# 1. Target was destroyed with time remaining (not a miss due to proximity)
+		# 2. Target was still at a safe distance from the ship
+		# 3. Target had been engaged by our PDCs
+		if target_data.time_to_impact > 0.5 and distance_meters > 100.0 and target_data.assigned_pdcs.size() > 0:
+			was_successful_intercept = true
+			successful_intercepts += 1
+			
+			if debug_verbose:
+				print("FCM: SUCCESSFUL INTERCEPT of %s (TTI: %.1fs, distance: %.1fm, PDCs: %d)" % [
+					target_id.substr(0, 15), 
+					target_data.time_to_impact,
+					distance_meters,
+					target_data.assigned_pdcs.size()
+				])
+		else:
+			if debug_verbose:
+				var reason = "unknown"
+				if target_data.time_to_impact <= 0.5:
+					reason = "too close (%.1fs TTI)" % target_data.time_to_impact
+				elif distance_meters <= 100.0:
+					reason = "proximity (%.1fm)" % distance_meters
+				elif target_data.assigned_pdcs.size() == 0:
+					reason = "unengaged"
+				
+				print("FCM: Target %s removed - NOT intercept (%s)" % [
+					target_id.substr(0, 15), reason
+				])
 		
 		# Stop all PDCs assigned to this target
 		for pdc_id in target_data.assigned_pdcs:
 			if registered_pdcs.has(pdc_id):
-				registered_pdcs[pdc_id].stop_firing()
+				var pdc = registered_pdcs[pdc_id]
+				pdc.stop_firing()
 				pdc_assignments[pdc_id] = ""
+				
+				if debug_verbose:
+					print("FCM: Stopped PDC %s (was targeting %s)" % [pdc_id, target_id.substr(0, 15)])
 		
+		# Update engagement statistics
+		var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+		
+		# Log engagement summary for analysis
+		if debug_enabled and (was_successful_intercept or target_data.is_critical):
+			print("FCM: Engagement Summary - %s: %s (%.1fs duration, %d PDCs)" % [
+				target_id.substr(0, 15),
+				"SUCCESS" if was_successful_intercept else "FAILED",
+				engagement_duration,
+				target_data.assigned_pdcs.size()
+			])
+		
+		# Clean up tracking data
 		tracked_targets.erase(target_id)
+		if target_assignments.has(target_id):
+			target_assignments.erase(target_id)
 		
-		# Check if this was a successful intercept
-		if target_data.time_to_impact > 0.5:  # Destroyed before getting too close
-			successful_intercepts += 1
+		# Remove from priority list
+		var index = target_priorities.find(target_id)
+		if index >= 0:
+			target_priorities.remove_at(index)
 
 # Utility functions
 func get_available_pdc_count() -> int:
