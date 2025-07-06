@@ -1,28 +1,32 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - IMPROVED VERSION WITH DUAL-MODE ENGAGEMENT
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION - NO BACKWARDS FIRING
 extends Node2D
 
 # PDC Configuration
-@export var bullet_velocity_mps: float = 800.0  # Increased from 300
-@export var bullets_per_burst: int = 150  # Increased burst size
-@export var burst_fire_rate: float = 60.0  # Bullets per second DURING a burst
-@export var burst_cooldown: float = 0.05  # Reduced cooldown between bursts
+@export var bullet_velocity_mps: float = 800.0
+@export var bullets_per_burst: int = 150
+@export var burst_fire_rate: float = 60.0
+@export var burst_cooldown: float = 0.05
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 5.0
-@export var turret_rotation_speed: float = 45.0  # Increased rotation speed
+@export var turret_rotation_speed: float = 45.0
 
-# NEW: Dual-mode engagement system
+# NEW: Field of view restrictions - PDCs can only fire forward
+@export var max_firing_angle: float = 80.0  # Degrees from forward direction (160° total arc)
+var ship_forward_direction: Vector2 = Vector2.UP  # Default ship forward direction
+
+# Dual-mode engagement system
 enum EngagementMode { AREA_SATURATION, DIRECT_TARGETING }
 var current_mode: EngagementMode = EngagementMode.AREA_SATURATION
-@export var saturation_range_meters: float = 3000.0  # Switch to direct targeting at this range
-@export var saturation_fire_rate: float = 80.0  # Higher fire rate for saturation
-@export var direct_fire_rate: float = 100.0  # Even higher for direct targeting
-@export var target_lock_duration: float = 1.5  # Stick with target longer in direct mode
+@export var saturation_range_meters: float = 3000.0
+@export var saturation_fire_rate: float = 80.0
+@export var direct_fire_rate: float = 100.0
+@export var target_lock_duration: float = 1.5
 
 # Firing state management
 enum FiringState { IDLE, TRACKING, FIRING, COOLDOWN }
 var current_state: FiringState = FiringState.IDLE
 
-# Target management - improved for rapid salvos
+# Target management
 var current_target: Node2D = null
 var target_locked_at: float = 0.0
 var burst_bullets_fired: int = 0
@@ -30,21 +34,21 @@ var cooldown_timer: float = 0.0
 var fire_timer: float = 0.0
 var game_time: float = 0.0
 
-# NEW: Target persistence for rapid salvos
-var target_switch_cooldown: float = 0.5  # Minimum time before switching targets
+# Target persistence for rapid salvos
+var target_switch_cooldown: float = 0.5
 var last_target_switch: float = 0.0
-var high_threat_mode: bool = false  # Activated when multiple close targets detected
+var high_threat_mode: bool = false
 
-# Turret rotation and positioning
+# Turret rotation and positioning - FIXED
 var current_rotation: float = 0.0
 var target_rotation: float = 0.0
-var default_rotation: float = 0.0  # PDC's default facing direction
+var default_rotation: float = 0.0  # PDC's default facing direction relative to ship
 
-# References and positioning - FIXED
+# References and positioning
 var parent_ship: Node2D
 var sensor_system: SensorSystem
 var sprite: Sprite2D
-var muzzle_point: Marker2D  # NEW: Proper muzzle point reference
+var muzzle_point: Marker2D
 
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
@@ -53,29 +57,32 @@ var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 var total_shots_fired: int = 0
 var torpedoes_destroyed: int = 0
 
-# NEW: Area saturation variables
-var saturation_target_point: Vector2
-var saturation_spread: float = 0.05  # Radians of spread for area saturation
+# Area saturation variables
+var saturation_spread: float = 0.05
 
 func _ready():
 	parent_ship = get_parent()
 	sprite = get_node_or_null("Sprite2D")
 	
-	# NEW: Find muzzle point properly
+	# Find muzzle point properly
 	if sprite:
 		muzzle_point = sprite.get_node_or_null("MuzzlePoint")
-		default_rotation = sprite.rotation  # Store default rotation
+		# FIXED: Store the PDC's default rotation relative to ship (not absolute)
+		default_rotation = 0.0  # PDCs should face forward by default
 		current_rotation = default_rotation
 	
 	# Find sensor system on parent ship
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
 	
-	print("PDC turret initialized with dual-mode engagement system")
+	print("PDC turret initialized with forward-only firing")
 
 func _physics_process(delta):
-	if not sensor_system:
+	if not sensor_system or not parent_ship:
 		return
+	
+	# Update ship forward direction
+	ship_forward_direction = Vector2.UP.rotated(parent_ship.rotation)
 	
 	game_time += delta
 	cooldown_timer = max(0.0, cooldown_timer - delta)
@@ -136,9 +143,12 @@ func find_optimal_target():
 	
 	var pdc_world_pos = get_muzzle_world_position()
 	
-	# In high threat mode, prefer closer targets and be less picky
 	for torpedo in torpedoes:
 		if not is_valid_target(torpedo):
+			continue
+		
+		# CRITICAL: Check if target is in firing arc BEFORE calculating priority
+		if not is_target_in_firing_arc(torpedo):
 			continue
 		
 		var priority = calculate_target_priority(torpedo, pdc_world_pos)
@@ -147,7 +157,7 @@ func find_optimal_target():
 		if high_threat_mode:
 			var distance_m = pdc_world_pos.distance_to(torpedo.global_position) * WorldSettings.meters_per_pixel
 			if distance_m < saturation_range_meters * 0.3:
-				priority *= 2.0  # Double priority for very close targets
+				priority *= 2.0
 		
 		if priority > best_priority:
 			best_priority = priority
@@ -159,11 +169,9 @@ func find_optimal_target():
 			var time_since_switch = game_time - last_target_switch
 			var min_switch_time = target_switch_cooldown
 			
-			# Reduce switch cooldown in high threat mode
 			if high_threat_mode:
 				min_switch_time *= 0.3
 			
-			# Only switch if enough time has passed or much better target found
 			if time_since_switch >= min_switch_time or best_priority > calculate_target_priority(current_target, pdc_world_pos) * 2.0:
 				current_target = best_target
 				target_locked_at = game_time
@@ -174,8 +182,21 @@ func find_optimal_target():
 				var distance_m = pdc_world_pos.distance_to(best_target.global_position) * WorldSettings.meters_per_pixel
 				print("PDC acquired target at distance: %.0f meters" % distance_m)
 		else:
-			# Same target, just continue
 			current_state = FiringState.TRACKING
+
+func is_target_in_firing_arc(torpedo: Node2D) -> bool:
+	if not torpedo or not parent_ship:
+		return false
+	
+	var pdc_world_pos = get_muzzle_world_position()
+	var to_torpedo = torpedo.global_position - pdc_world_pos
+	
+	# Calculate angle between ship forward direction and torpedo direction
+	var angle_to_torpedo = ship_forward_direction.angle_to(to_torpedo.normalized())
+	var angle_degrees = abs(rad_to_deg(angle_to_torpedo))
+	
+	# Only allow targeting within the forward firing arc
+	return angle_degrees <= max_firing_angle
 
 func is_valid_target(torpedo: Node2D) -> bool:
 	if not torpedo or not is_instance_valid(torpedo) or torpedo.is_queued_for_deletion():
@@ -200,13 +221,8 @@ func is_valid_target(torpedo: Node2D) -> bool:
 	if closing_speed < min_closing_speed:
 		return false
 	
-	# Less strict angle checking in high threat mode
-	var ship_forward = Vector2.from_angle(parent_ship.rotation) if parent_ship else Vector2.RIGHT
-	var to_torpedo_normalized = to_torpedo.normalized()
-	var angle_to_torpedo = ship_forward.angle_to(to_torpedo_normalized)
-	
-	var max_angle = deg_to_rad(170) if high_threat_mode else deg_to_rad(160)
-	if abs(angle_to_torpedo) > max_angle:
+	# CRITICAL: Must be in firing arc
+	if not is_target_in_firing_arc(torpedo):
 		return false
 	
 	return true
@@ -228,10 +244,13 @@ func calculate_target_priority(torpedo: Node2D, pdc_pos: Vector2) -> float:
 	var closing_speed = -torpedo_vel.dot(to_torpedo.normalized())
 	var speed_factor = clamp(closing_speed / 200.0, 0.0, 1.0)
 	
+	# Factor in how central the target is to our firing arc
+	var to_torpedo_normalized = to_torpedo.normalized()
+	var angle_factor = max(0.0, ship_forward_direction.dot(to_torpedo_normalized))
+	
 	# Factor in engagement mode
 	var mode_factor = 1.0
 	if current_mode == EngagementMode.DIRECT_TARGETING:
-		# In direct mode, heavily prioritize very close targets
 		if distance_meters < saturation_range_meters * 0.5:
 			mode_factor = 3.0
 	
@@ -241,7 +260,7 @@ func calculate_target_priority(torpedo: Node2D, pdc_pos: Vector2) -> float:
 	if intercept_time > 8.0 or intercept_time < 0.05:
 		intercept_factor = 0.1
 	
-	return distance_factor * 3.0 + speed_factor * 2.0 + mode_factor * 2.0 + intercept_factor * 1.0
+	return distance_factor * 3.0 + speed_factor * 2.0 + angle_factor * 1.5 + mode_factor * 2.0 + intercept_factor * 1.0
 
 func update_tracking():
 	if not is_valid_target(current_target):
@@ -251,14 +270,15 @@ func update_tracking():
 		return
 	
 	# Calculate aim point based on current mode
+	var desired_angle: float
 	if current_mode == EngagementMode.AREA_SATURATION:
-		# Aim at predicted intercept area with some spread
-		var lead_angle = calculate_area_saturation_angle(current_target)
-		target_rotation = lead_angle
+		desired_angle = calculate_area_saturation_angle(current_target)
 	else:
-		# Direct targeting mode - precise intercept
-		var lead_angle = calculate_direct_intercept_angle(current_target)
-		target_rotation = lead_angle
+		desired_angle = calculate_direct_intercept_angle(current_target)
+	
+	# CRITICAL: Ensure we're not trying to aim outside our firing arc
+	desired_angle = clamp_angle_to_firing_arc(desired_angle)
+	target_rotation = desired_angle
 	
 	# Check if we're aimed close enough to start firing
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
@@ -267,6 +287,33 @@ func update_tracking():
 	if angle_diff < max_angle_diff:
 		current_state = FiringState.FIRING
 		fire_timer = 0.0
+
+func clamp_angle_to_firing_arc(desired_angle: float) -> float:
+	# Convert ship forward direction to an angle
+	var ship_forward_angle = ship_forward_direction.angle()
+	
+	# Calculate the allowed angle range
+	var max_angle_rad = deg_to_rad(max_firing_angle)
+	var min_allowed = ship_forward_angle - max_angle_rad
+	var max_allowed = ship_forward_angle + max_angle_rad
+	
+	# Normalize angles to handle wraparound
+	var normalized_desired = fmod(desired_angle + PI, TAU) - PI
+	var normalized_min = fmod(min_allowed + PI, TAU) - PI
+	var normalized_max = fmod(max_allowed + PI, TAU) - PI
+	
+	# Clamp to allowed range
+	if normalized_min <= normalized_max:
+		return clamp(normalized_desired, normalized_min, normalized_max)
+	else:
+		# Handle wraparound case
+		if normalized_desired >= normalized_min or normalized_desired <= normalized_max:
+			return normalized_desired
+		else:
+			# Choose the closer boundary
+			var dist_to_min = abs(angle_difference(normalized_desired, normalized_min))
+			var dist_to_max = abs(angle_difference(normalized_desired, normalized_max))
+			return normalized_min if dist_to_min < dist_to_max else normalized_max
 
 func execute_firing_mode():
 	if not is_valid_target(current_target):
@@ -277,12 +324,14 @@ func execute_firing_mode():
 		return
 	
 	# Update aim during burst
+	var desired_angle: float
 	if current_mode == EngagementMode.AREA_SATURATION:
-		var lead_angle = calculate_area_saturation_angle(current_target)
-		target_rotation = lead_angle
+		desired_angle = calculate_area_saturation_angle(current_target)
 	else:
-		var lead_angle = calculate_direct_intercept_angle(current_target)
-		target_rotation = lead_angle
+		desired_angle = calculate_direct_intercept_angle(current_target)
+	
+	# Ensure we stay within firing arc
+	target_rotation = clamp_angle_to_firing_arc(desired_angle)
 	
 	# Choose fire rate based on mode
 	var effective_fire_rate = saturation_fire_rate
@@ -309,7 +358,7 @@ func fire_bullet():
 	var bullet = bullet_scene.instantiate()
 	get_tree().root.add_child(bullet)
 	
-	# FIXED: Position at muzzle point, not PDC origin
+	# Position at muzzle point
 	var muzzle_world_pos = get_muzzle_world_position()
 	bullet.global_position = muzzle_world_pos
 	
@@ -318,9 +367,15 @@ func fire_bullet():
 	if current_mode == EngagementMode.AREA_SATURATION:
 		spread = randf_range(-saturation_spread, saturation_spread)
 	else:
-		spread = randf_range(-0.01, 0.01)  # Tighter spread for direct targeting
+		spread = randf_range(-0.01, 0.01)
 	
 	var fire_direction = Vector2.from_angle(current_rotation + spread)
+	
+	# SAFETY CHECK: Ensure we're not firing backwards
+	var dot_product = fire_direction.dot(ship_forward_direction)
+	if dot_product < 0.1:  # Less than ~84 degrees from forward
+		print("WARNING: Attempted to fire backwards, skipping shot")
+		return
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
@@ -342,7 +397,6 @@ func fire_bullet():
 	total_shots_fired += 1
 
 func calculate_area_saturation_angle(torpedo: Node2D) -> float:
-	# Calculate where torpedo will be in near future and aim there
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel_mps = get_torpedo_velocity(torpedo)
 	var pdc_world_pos = get_muzzle_world_position()
@@ -357,7 +411,6 @@ func calculate_area_saturation_angle(torpedo: Node2D) -> float:
 	return to_predicted.angle()
 
 func calculate_direct_intercept_angle(torpedo: Node2D) -> float:
-	# More precise intercept calculation for direct targeting
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel_mps = get_torpedo_velocity(torpedo)
 	var pdc_world_pos = get_muzzle_world_position()
@@ -365,46 +418,17 @@ func calculate_direct_intercept_angle(torpedo: Node2D) -> float:
 	if torpedo_vel_mps.length() < 5.0:
 		return (torpedo_pos - pdc_world_pos).angle()
 	
+	# Simple lead calculation - aim where torpedo will be when bullet arrives
+	var to_torpedo = torpedo_pos - pdc_world_pos
+	var distance_meters = to_torpedo.length() * WorldSettings.meters_per_pixel
+	var bullet_travel_time = distance_meters / bullet_velocity_mps
+	
+	# Predict torpedo position
 	var torpedo_vel_pixels = torpedo_vel_mps / WorldSettings.meters_per_pixel
-	var ship_vel_pixels = get_ship_velocity() / WorldSettings.meters_per_pixel
-	var bullet_speed_pixels = bullet_velocity_mps / WorldSettings.meters_per_pixel
+	var predicted_pos = torpedo_pos + torpedo_vel_pixels * bullet_travel_time
 	
-	# Calculate intercept point
-	var intercept_point = calculate_intercept_point(pdc_world_pos, ship_vel_pixels, torpedo_pos, torpedo_vel_pixels, bullet_speed_pixels)
-	
-	var to_intercept = intercept_point - pdc_world_pos
+	var to_intercept = predicted_pos - pdc_world_pos
 	return to_intercept.angle()
-
-func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, target_pos: Vector2, target_vel: Vector2, bullet_speed: float) -> Vector2:
-	var relative_pos = target_pos - shooter_pos
-	var relative_vel = target_vel - shooter_vel
-	
-	if relative_vel.length() < 1.0:
-		return target_pos
-	
-	var a = relative_vel.dot(relative_vel) - bullet_speed * bullet_speed
-	var b = 2.0 * relative_pos.dot(relative_vel)
-	var c = relative_pos.dot(relative_pos)
-	
-	var discriminant = b * b - 4.0 * a * c
-	
-	if discriminant < 0.0 or abs(a) < 0.01:
-		return target_pos
-	
-	var t1 = (-b + sqrt(discriminant)) / (2.0 * a)
-	var t2 = (-b - sqrt(discriminant)) / (2.0 * a)
-	
-	var intercept_time = 0.0
-	if t1 > 0 and t2 > 0:
-		intercept_time = min(t1, t2)
-	elif t1 > 0:
-		intercept_time = t1
-	elif t2 > 0:
-		intercept_time = t2
-	else:
-		return target_pos
-	
-	return target_pos + target_vel * intercept_time
 
 func update_turret_rotation(delta):
 	if sprite:
@@ -417,11 +441,12 @@ func update_turret_rotation(delta):
 		else:
 			current_rotation = target_rotation
 		
-		# FIXED: Apply rotation to sprite correctly
-		sprite.rotation = current_rotation
+		# FIXED: Apply rotation relative to ship's orientation, not absolute
+		# The turret sprite should rotate to show where it's aiming
+		var relative_rotation = current_rotation - parent_ship.rotation
+		sprite.rotation = relative_rotation
 
 func get_muzzle_world_position() -> Vector2:
-	# FIXED: Calculate actual muzzle position in world space
 	if muzzle_point:
 		return muzzle_point.global_position
 	else:

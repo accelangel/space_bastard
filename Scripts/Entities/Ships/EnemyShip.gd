@@ -1,56 +1,46 @@
-# Scripts/Entities/Ships/EnemyShip.gd
+# Scripts/Entities/Ships/PlayerShip.gd
 extends Area2D
-class_name EnemyShip
 
-# Ship configuration
-@export var ship_config: EnemyShipConfig
-@export var faction: String = "hostile"
-
-# Default values if no config provided
-@export var default_acceleration_gs: float = 0.35
-@export var default_max_speed_mps: float = 1000.0
+# Ship properties
+@export var acceleration_gs: float = 0.05
+@export var rotation_speed: float = 2.0
+@export var faction: String = "friendly"
 
 # Movement
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
-var movement_direction: Vector2 = Vector2(0, 1)
+var movement_direction: Vector2 = Vector2.ZERO
 
 # Entity tracking
 var entity_id: String
 
-# Statistics
-var torpedoes_hit_count: int = 0
-
-# Child nodes
+# Child nodes - FIXED: Use Node2D type instead of specific class
 @onready var sensor_system: SensorSystem = $SensorSystem
-@onready var pdc_system: PDCSystem
+@onready var torpedo_launcher: Node2D = $TorpedoLauncher
+
+# Test movement (keep from original)
+var test_acceleration: bool = true
+var test_direction: Vector2 = Vector2(1, -1).normalized()
+var test_gs: float = 1.0
 
 func _ready():
-	# Load config or use defaults
-	if ship_config:
-		acceleration_mps2 = ship_config.acceleration_gs * 9.81
-	else:
-		acceleration_mps2 = default_acceleration_gs * 9.81
+	acceleration_mps2 = acceleration_gs * 9.81
 	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
-		entity_id = entity_manager.register_entity(self, "enemy_ship", faction)
+		entity_id = entity_manager.register_entity(self, "player_ship", faction)
 	
-	# Connect collision detection
-	area_entered.connect(_on_area_entered)
-	
-	print("EnemyShip initialized with faction: ", faction)
+	# Set up test acceleration
+	if test_acceleration:
+		set_acceleration(test_gs)
+		set_movement_direction(test_direction)
+		print("PlayerShip starting test acceleration at ", test_gs, "G")
 
 func _physics_process(delta):
-	# Simple movement
+	# Update movement
 	var acceleration_vector = movement_direction * acceleration_mps2
 	velocity_mps += acceleration_vector * delta
-	
-	# Cap speed if config specifies
-	if ship_config and velocity_mps.length() > ship_config.max_speed_mps:
-		velocity_mps = velocity_mps.normalized() * ship_config.max_speed_mps
-	
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
 	global_position += velocity_pixels_per_second * delta
 	
@@ -59,24 +49,19 @@ func _physics_process(delta):
 	if entity_manager and entity_id:
 		entity_manager.update_entity_position(entity_id, global_position)
 
-func _on_area_entered(area: Area2D):
-	# Check if we got hit by a torpedo
-	if area.is_in_group("torpedoes") or (area.has_method("get_class") and area.get_class() == "Torpedo"):
-		torpedoes_hit_count += 1
-		print("!!! ENEMY SHIP HIT BY TORPEDO! Total hits: ", torpedoes_hit_count, " !!!")
-		
-		# In the future, this is where damage would be applied
-		# For now, just log the hit
+func set_movement_direction(new_direction: Vector2):
+	movement_direction = new_direction.normalized()
+
+func set_acceleration(gs: float):
+	acceleration_gs = gs
+	acceleration_mps2 = acceleration_gs * 9.81
 
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
 
-func set_movement_direction(new_direction: Vector2):
-	movement_direction = new_direction.normalized()
-
-func get_status_info() -> String:
-	var pdc_info = ""
-	if pdc_system:
-		pdc_info = pdc_system.get_debug_info()
-	
-	return "EnemyShip: %d torpedo hits | %s" % [torpedoes_hit_count, pdc_info]
+func toggle_test_acceleration():
+	test_acceleration = !test_acceleration
+	if test_acceleration:
+		set_movement_direction(test_direction)
+	else:
+		set_movement_direction(Vector2.ZERO)
