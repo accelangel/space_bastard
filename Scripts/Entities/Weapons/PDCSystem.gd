@@ -1,11 +1,11 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION
+# Scripts/Entities/Weapons/PDCSystem.gd - FIRING FIXED VERSION
 extends Node2D
 
 # CRITICAL FIXES APPLIED:
-# 1. Fixed unit conversions - properly handle meters vs pixels
-# 2. Fixed engagement range logic - only fire when target is in range
-# 3. Improved target lock stability - less thrashing
-# 4. Better angle calculations and rotation handling
+# 1. Fixed firing authorization - PDCs now actually fire when conditions are met
+# 2. Simplified range checking - removed conflicting logic
+# 3. Better target tracking and engagement states
+# 4. Fixed the "never fires" bug by proper state management
 
 # PDC Hardware Configuration
 @export var turret_rotation_speed: float = 90.0  # degrees/second
@@ -13,9 +13,8 @@ extends Node2D
 @export var bullet_velocity_mps: float = 800.0
 @export var rounds_per_second: float = 18.0
 
-# FIXED: Add engagement range checking
-@export var engagement_range_meters: float = 28000.0  # 28 km
-@export var engagement_range_min_meters: float = 5000.0  # 5 km minimum
+# SIMPLIFIED: Let FCM handle range checking, PDC just fires when told
+@export var max_tracking_error: float = 5.0  # degrees - how accurate we need to be to fire
 
 # Firing state
 var is_firing: bool = false
@@ -27,13 +26,12 @@ var emergency_slew: bool = false
 # PDC Identity
 var pdc_id: String = ""
 var mount_position: Vector2
-var current_status: String = "IDLE"  # IDLE, TRACKING, FIRING
+var current_status: String = "IDLE"  # IDLE, TRACKING, FIRING, READY
 
 # Target tracking
-var current_target: Node2D = null
 var current_target_id: String = ""
-var last_target_position: Vector2 = Vector2.ZERO
 var target_distance_meters: float = 0.0
+var fire_authorized: bool = false  # NEW: FCM must authorize firing
 
 # References
 var parent_ship: Node2D
@@ -46,11 +44,11 @@ var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
 # Statistics
 var rounds_fired: int = 0
+var last_fire_time: float = 0.0
 
 # Debug
-var debug_enabled: bool = false
+var debug_enabled: bool = true
 var debug_timer: float = 0.0
-var last_debug_status: String = ""
 
 func _ready():
 	parent_ship = get_parent()
@@ -65,29 +63,19 @@ func _ready():
 	print("PDC initialized: ", pdc_id, " at mount position: ", mount_position)
 
 func _physics_process(delta):
-	update_target_tracking()
 	update_turret_rotation(delta)
 	handle_firing(delta)
 	
 	# Debug output
 	if debug_enabled:
 		debug_timer += delta
-		if debug_timer >= 1.0:
+		if debug_timer >= 2.0:
 			debug_timer = 0.0
-			print_debug_status()
-
-func update_target_tracking():
-	# FIXED: Properly track target and calculate distance in meters
-	if current_target and is_instance_valid(current_target):
-		last_target_position = current_target.global_position
-		
-		# FIXED: Convert distance to meters properly
-		var distance_pixels = global_position.distance_to(last_target_position)
-		target_distance_meters = distance_pixels * WorldSettings.meters_per_pixel
-	else:
-		target_distance_meters = 0.0
-		current_target = null
-		current_target_id = ""
+			if current_status != "IDLE":
+				print("PDC %s: %s | Target: %s | Fire Auth: %s | Aimed: %s" % [
+					pdc_id.substr(4, 8), current_status, current_target_id.substr(8, 7), 
+					fire_authorized, is_aimed()
+				])
 
 func update_turret_rotation(delta):
 	if sprite:
@@ -108,66 +96,100 @@ func update_turret_rotation(delta):
 		sprite.rotation = current_rotation - parent_ship.rotation
 
 func handle_firing(delta):
-	# FIXED: Only fire if target is in engagement range
-	var can_fire = (
-		current_target != null and 
-		is_instance_valid(current_target) and
-		target_distance_meters > 0.0 and
-		target_distance_meters <= engagement_range_meters and
-		target_distance_meters >= engagement_range_min_meters and
+	# SIMPLIFIED FIRING LOGIC:
+	# 1. If we have a target and are authorized to fire and aimed -> FIRE
+	# 2. If we don't have authorization or target -> STOP
+	
+	var should_fire = (
+		current_target_id != "" and 
+		fire_authorized and 
 		is_aimed()
 	)
 	
-	if can_fire and is_firing:
-		fire_timer += delta
-		var fire_interval = 1.0 / rounds_per_second
+	if should_fire:
+		if not is_firing:
+			start_firing()
 		
-		if fire_timer >= fire_interval:
-			fire_bullet()
-			fire_timer = 0.0
-	elif not can_fire and is_firing:
-		# Stop firing if conditions are no longer met
-		stop_firing()
+		# Handle continuous firing
+		if is_firing:
+			fire_timer += delta
+			var fire_interval = 1.0 / rounds_per_second
+			
+			if fire_timer >= fire_interval:
+				fire_bullet()
+				fire_timer = 0.0
+	else:
+		if is_firing:
+			stop_firing()
 
+# FIXED: Simplified target assignment
 func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
 	current_target_id = target_id
 	target_rotation = target_angle
 	emergency_slew = is_emergency
-	
-	# FIXED: Find the actual target node for distance checking
-	if fire_control_manager and fire_control_manager.tracked_targets.has(target_id):
-		var target_data = fire_control_manager.tracked_targets[target_id]
-		current_target = target_data.node_ref
+	fire_authorized = false  # Reset authorization, FCM will set it
 	
 	current_status = "TRACKING"
+	
+	if debug_enabled:
+		print("PDC %s: Tracking target %s at angle %.1f°" % [
+			pdc_id.substr(4, 8), target_id.substr(8, 7), rad_to_deg(target_angle)
+		])
 
-func start_firing():
-	# FIXED: Only start firing if target is in engagement range
-	if (current_status == "TRACKING" and 
-		is_aimed() and 
-		target_distance_meters > 0.0 and
-		target_distance_meters <= engagement_range_meters and
-		target_distance_meters >= engagement_range_min_meters):
+# NEW: FCM calls this to authorize firing
+func authorize_firing():
+	if current_target_id != "" and is_aimed():
+		fire_authorized = true
+		current_status = "READY"
 		
-		is_firing = true
-		current_status = "FIRING"
-		fire_timer = 0.0
+		if debug_enabled:
+			print("PDC %s: AUTHORIZED to fire on %s" % [
+				pdc_id.substr(4, 8), current_target_id.substr(8, 7)
+			])
+
+# FIXED: Proper firing start
+func start_firing():
+	if not fire_authorized:
+		if debug_enabled:
+			print("PDC %s: Cannot fire - not authorized" % pdc_id.substr(4, 8))
+		return
+	
+	if not is_aimed():
+		if debug_enabled:
+			print("PDC %s: Cannot fire - not aimed" % pdc_id.substr(4, 8))
+		return
+	
+	is_firing = true
+	current_status = "FIRING"
+	fire_timer = 0.0
+	last_fire_time = Time.get_ticks_msec() / 1000.0
+	
+	if debug_enabled:
+		print("PDC %s: FIRING STARTED on target %s" % [
+			pdc_id.substr(4, 8), current_target_id.substr(8, 7)
+		])
 
 func stop_firing():
 	is_firing = false
+	fire_authorized = false
 	current_status = "IDLE"
-	current_target = null
 	current_target_id = ""
+	
+	if debug_enabled and rounds_fired > 0:
+		print("PDC %s: FIRING STOPPED (fired %d rounds)" % [
+			pdc_id.substr(4, 8), rounds_fired
+		])
 
 func is_aimed() -> bool:
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
-	return angle_diff < deg_to_rad(5.0)
+	return angle_diff < deg_to_rad(max_tracking_error)
 
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
 func fire_bullet():
 	if not bullet_scene:
+		print("PDC %s: No bullet scene loaded!" % pdc_id)
 		return
 	
 	var bullet = bullet_scene.instantiate()
@@ -195,28 +217,11 @@ func fire_bullet():
 	
 	rounds_fired += 1
 	
-	# Debug firing
-	if debug_enabled and rounds_fired % 36 == 0:  # Every 2 seconds
-		print("PDC %s: Fired at target %.1f km away" % [
-			pdc_id, 
-			target_distance_meters / 1000.0
+	# Debug every 36 rounds (2 seconds of firing)
+	if rounds_fired % 36 == 0:
+		print("PDC %s: Fired %d rounds at %s" % [
+			pdc_id.substr(4, 8), rounds_fired, current_target_id.substr(8, 7)
 		])
-
-func print_debug_status():
-	var new_status = ""
-	if current_target_id != "":
-		new_status = "%s -> %s (%.1f km, %.1f° error)" % [
-			current_status,
-			current_target_id.substr(0, 15),
-			target_distance_meters / 1000.0,
-			rad_to_deg(get_tracking_error())
-		]
-	else:
-		new_status = current_status
-	
-	if new_status != last_debug_status:
-		print("PDC %s: %s" % [pdc_id, new_status])
-		last_debug_status = new_status
 
 func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
@@ -245,6 +250,8 @@ func get_status() -> Dictionary:
 		"target_rotation": target_rotation,
 		"tracking_error": get_tracking_error(),
 		"is_aimed": is_aimed(),
+		"fire_authorized": fire_authorized,
+		"is_firing": is_firing,
 		"rounds_fired": rounds_fired,
 		"current_target": current_target_id,
 		"mount_position": mount_position
@@ -256,7 +263,8 @@ func get_capabilities() -> Dictionary:
 		"rotation_speed": turret_rotation_speed,
 		"max_rotation_speed": turret_rotation_speed * max_rotation_speed_multiplier,
 		"bullet_velocity": bullet_velocity_mps,
-		"fire_rate": rounds_per_second
+		"fire_rate": rounds_per_second,
+		"max_tracking_error": max_tracking_error
 	}
 
 # Set Fire Control Manager reference
@@ -267,4 +275,5 @@ func set_fire_control_manager(manager: Node):
 func emergency_stop():
 	stop_firing()
 	emergency_slew = false
+	fire_authorized = false
 	current_status = "IDLE"
