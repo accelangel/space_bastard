@@ -4,9 +4,9 @@ class_name PDCSystem
 
 # PDC Configuration
 @export var bullet_velocity_mps: float = 300.0
-@export var bullets_per_burst: int = 10  # Bullets in a burst
-@export var burst_fire_rate: float = 20.0  # Bullets per second DURING a burst
-@export var burst_cooldown: float = 0.5  # Seconds between bursts
+@export var bullets_per_burst: int = 20  # Bullets in a burst
+@export var burst_fire_rate: float = 40.0  # Bullets per second DURING a burst
+@export var burst_cooldown: float = 0.25  # Seconds between bursts
 @export var engagement_range_meters: float = 8000.0
 @export var min_intercept_distance_meters: float = 500.0
 @export var turret_rotation_speed: float = 3.0  # Radians per second

@@ -8,7 +8,8 @@ scale = Vector2(0.025, 0.025)
 script = ExtResource("1_3abb1")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
+position = Vector2(0, 128)
 texture = ExtResource("3_2iybs")
 
 [node name="MuzzlePoint" type="Marker2D" parent="."]
-position = Vector2(-0.000463359, -128)
+position = Vector2(0, 3)

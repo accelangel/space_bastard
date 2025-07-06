@@ -26,4 +26,4 @@ texture = ExtResource("1_pf77x")
 script = ExtResource("4_8qbgp")
 
 [node name="PDC1" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(-2, -75)
+position = Vector2(-2, -78)
