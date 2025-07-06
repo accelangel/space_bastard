@@ -1,13 +1,14 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED VERSION
+# Scripts/Entities/Weapons/PDCSystem.gd - COMPLETE FIRE CONTROL REWRITE
 extends Node2D
+
+# This PDC is now a "dumb actuator" - it receives commands from the ship's Fire Control Manager
+# It focuses purely on mechanical operation: rotation, firing, and reporting status
 
 # PDC Hardware Configuration
 @export var turret_rotation_speed: float = 90.0  # degrees/second
 @export var max_rotation_speed_multiplier: float = 2.0  # Emergency slew rate multiplier
 @export var bullet_velocity_mps: float = 800.0
-@export var rounds_per_second: float = 18.0
-@export var max_effective_range_meters: float = 3000.0  # Don't engage beyond this range
-@export var min_engagement_range_meters: float = 100.0   # Don't engage closer than this
+@export var rounds_per_second: float = 18.0  # Constant fire rate as per architecture
 
 # Firing state
 var is_firing: bool = false
@@ -18,30 +19,27 @@ var emergency_slew: bool = false
 
 # PDC Identity
 var pdc_id: String = ""
-var mount_position: Vector2
+var mount_position: Vector2  # Position relative to ship center
 var current_status: String = "IDLE"  # IDLE, TRACKING, FIRING
 
 # References
 var parent_ship: Node2D
-var fire_control_manager: Node
+var fire_control_manager: Node  # Will be set by the manager
 var sprite: Sprite2D
 var muzzle_point: Marker2D
-
-# Current target info
-var current_target_id: String = ""
-var current_target_position: Vector2
-var current_target_range: float = 0.0
 
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
-# Statistics
+# Statistics for reporting
 var rounds_fired: int = 0
+var current_target_id: String = ""
 
-# DEBUG
-var debug_enabled: bool = false
+# DEBUG - Now properly controlled
+var debug_enabled: bool = false  # Set to true for individual PDC debugging
 var debug_timer: float = 0.0
 var last_debug_status: String = ""
+var last_target_id: String = ""
 
 func _ready():
 	parent_ship = get_parent()
@@ -50,16 +48,20 @@ func _ready():
 	if sprite:
 		muzzle_point = sprite.get_node_or_null("MuzzlePoint")
 	
+	# Record mount position relative to ship
 	mount_position = position
+	
+	# Generate unique ID based on position
 	pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
 	
 	print("PDC initialized: ", pdc_id, " at mount position: ", mount_position)
 
 func _physics_process(delta):
+	# Update turret rotation
 	update_turret_rotation(delta)
 	
-	# Only fire if we're supposed to AND target is in range
-	if is_firing and is_target_in_range():
+	# Handle firing if commanded
+	if is_firing:
 		fire_timer += delta
 		var fire_interval = 1.0 / rounds_per_second
 		
@@ -67,83 +69,51 @@ func _physics_process(delta):
 			fire_bullet()
 			fire_timer = 0.0
 	
-	# DEBUG: Less frequent status updates
+	# DEBUG: Periodic status updates
 	debug_timer += delta
-	if debug_timer >= 2.0:  # Every 2 seconds
+	if debug_timer >= 1.0:
 		debug_timer = 0.0
-		var new_status = "%s rot:%.1f°->%.1f° (%.1f°) range:%.0fm" % [
+		var new_status = "%s rot:%.1f°->%.1f° (%.1f°)" % [
 			current_status, 
 			rad_to_deg(current_rotation),
 			rad_to_deg(target_rotation),
-			rad_to_deg(get_tracking_error()),
-			current_target_range
+			rad_to_deg(get_tracking_error())
 		]
 		if new_status != last_debug_status:
 			print("PDC %s: %s" % [pdc_id, new_status])
 			last_debug_status = new_status
 
 # Called by Fire Control Manager to assign a new target
-func set_target(target_id: String, target_position: Vector2, target_angle: float, is_emergency: bool = false):
+func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
 	current_target_id = target_id
-	current_target_position = target_position
 	target_rotation = target_angle
 	emergency_slew = is_emergency
 	current_status = "TRACKING"
 	
-	# Calculate range to target
-	var distance_pixels = global_position.distance_to(target_position)
-	current_target_range = distance_pixels * WorldSettings.meters_per_pixel
-	
-	# DEBUG: Log target assignment with range check
+	# DEBUG: Log target assignment
 	var angle_deg = rad_to_deg(target_angle)
 	var current_deg = rad_to_deg(current_rotation)
-	var in_range = is_target_in_range()
-	
-	print("PDC %s: New target %s at %.1f° (current: %.1f°, emergency: %s, range: %.0fm, in_range: %s)" % [
-		pdc_id, target_id.substr(0, 15), angle_deg, current_deg, str(is_emergency), current_target_range, str(in_range)
+	print("PDC %s: New target %s at %.1f° (current: %.1f°, emergency: %s)" % [
+		pdc_id, target_id, angle_deg, current_deg, str(is_emergency)
 	])
-
-# Check if current target is within engagement range
-func is_target_in_range() -> bool:
-	if current_target_id == "":
-		return false
-	
-	return current_target_range >= min_engagement_range_meters and current_target_range <= max_effective_range_meters
 
 # Called by Fire Control Manager to start firing
 func start_firing():
-	# Only start firing if we're tracking, aimed, and target is in range
-	if current_status == "TRACKING" and is_aimed() and is_target_in_range():
+	if current_status == "TRACKING" and is_aimed():
 		is_firing = true
 		current_status = "FIRING"
 		fire_timer = 0.0
-		print("PDC %s: Starting to fire at target %s (range: %.0fm)" % [
-			pdc_id, current_target_id.substr(0, 15), current_target_range
-		])
-	else:
-		# Log why we're not firing
-		var reason = ""
-		if current_status != "TRACKING":
-			reason = "not tracking"
-		elif not is_aimed():
-			reason = "not aimed"
-		elif not is_target_in_range():
-			reason = "out of range"
-		
-		print("PDC %s: Cannot fire - %s" % [pdc_id, reason])
 
 # Called by Fire Control Manager to stop firing
 func stop_firing():
 	is_firing = false
 	current_status = "IDLE"
 	current_target_id = ""
-	current_target_position = Vector2.ZERO
-	current_target_range = 0.0
 
-# Check if turret is aimed at target (tighter tolerance)
+# Check if turret is aimed at target
 func is_aimed() -> bool:
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
-	return angle_diff < deg_to_rad(2.0)  # Within 2 degrees (tighter than before)
+	return angle_diff < deg_to_rad(5.0)  # Within 5 degrees
 
 # Get current tracking error in radians
 func get_tracking_error() -> float:
@@ -155,6 +125,7 @@ func update_turret_rotation(delta):
 		var angle_diff = angle_difference(current_rotation, target_rotation)
 		var rotation_speed = deg_to_rad(turret_rotation_speed)
 		
+		# Apply emergency slew rate if needed
 		if emergency_slew:
 			rotation_speed *= max_rotation_speed_multiplier
 		
@@ -165,12 +136,12 @@ func update_turret_rotation(delta):
 		else:
 			current_rotation = target_rotation
 			
-			# Report ready to fire if tracking and in range
-			if current_status == "TRACKING" and is_target_in_range():
+			# Report ready to fire if tracking
+			if current_status == "TRACKING":
 				report_ready_to_fire()
 		
 		# Apply rotation relative to ship
-		sprite.rotation = current_rotation
+		sprite.rotation = current_rotation - parent_ship.rotation
 
 # Fire a single bullet
 func fire_bullet():
@@ -183,9 +154,18 @@ func fire_bullet():
 	# Position at muzzle
 	bullet.global_position = get_muzzle_world_position()
 	
-	# Calculate world firing angle
+	# CRITICAL: Convert ship-relative angle to world angle for firing
 	var world_angle = current_rotation + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
+	
+	# DEBUG: Check firing direction
+	if rounds_fired % 18 == 0:  # Log every second
+		print("PDC %s firing - ship: %.1f°, relative: %.1f°, world: %.1f°" % [
+			pdc_id, 
+			rad_to_deg(parent_ship.rotation),
+			rad_to_deg(current_rotation),
+			rad_to_deg(world_angle)
+		])
 	
 	# Add ship velocity to bullet
 	var ship_velocity = get_ship_velocity()
@@ -201,16 +181,6 @@ func fire_bullet():
 			bullet.set_faction(parent_ship.faction)
 	
 	rounds_fired += 1
-	
-	# DEBUG: Log firing less frequently
-	if rounds_fired % 36 == 0:  # Every 2 seconds at 18 RPS
-		print("PDC %s firing - ship: %.1f°, relative: %.1f°, world: %.1f°, range: %.0fm" % [
-			pdc_id, 
-			rad_to_deg(parent_ship.rotation),
-			rad_to_deg(current_rotation),
-			rad_to_deg(world_angle),
-			current_target_range
-		])
 
 # Report to Fire Control Manager that we're ready to fire
 func report_ready_to_fire():
@@ -249,9 +219,7 @@ func get_status() -> Dictionary:
 		"is_aimed": is_aimed(),
 		"rounds_fired": rounds_fired,
 		"current_target": current_target_id,
-		"mount_position": mount_position,
-		"target_range": current_target_range,
-		"in_range": is_target_in_range()
+		"mount_position": mount_position
 	}
 
 # Get capabilities for Fire Control Manager
@@ -260,9 +228,7 @@ func get_capabilities() -> Dictionary:
 		"rotation_speed": turret_rotation_speed,
 		"max_rotation_speed": turret_rotation_speed * max_rotation_speed_multiplier,
 		"bullet_velocity": bullet_velocity_mps,
-		"fire_rate": rounds_per_second,
-		"max_range": max_effective_range_meters,
-		"min_range": min_engagement_range_meters
+		"fire_rate": rounds_per_second
 	}
 
 # Set Fire Control Manager reference
@@ -274,6 +240,3 @@ func emergency_stop():
 	stop_firing()
 	emergency_slew = false
 	current_status = "IDLE"
-	current_target_id = ""
-	current_target_position = Vector2.ZERO
-	current_target_range = 0.0
