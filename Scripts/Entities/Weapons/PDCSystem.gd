@@ -35,9 +35,11 @@ var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 var rounds_fired: int = 0
 var current_target_id: String = ""
 
-# DEBUG
+# DEBUG - Now properly controlled
+var debug_enabled: bool = false  # Set to true for individual PDC debugging
 var debug_timer: float = 0.0
 var last_debug_status: String = ""
+var last_target_id: String = ""
 
 func _ready():
 	parent_ship = get_parent()

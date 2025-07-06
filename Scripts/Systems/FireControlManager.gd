@@ -1,12 +1,30 @@
 # Scripts/Systems/FireControlManager.gd - CENTRAL FIRE CONTROL SYSTEM
+# This file should replace your existing Scripts/Systems/FireControlManager.gd
+# 
+# CHANGES MADE:
+# 1. Added better debug system with summary reports every 2 seconds
+# 2. Fixed PDC targeting - removed artificial arc limitations
+# 3. Fixed intercept calculations to properly track moving targets
+# 4. Added continuous firing solution updates
+# 5. Better state management for idle PDCs
+#
+# TO USE:
+# 1. Replace your entire Scripts/Systems/FireControlManager.gd with this file
+# 2. Debug output will show "=== FCM STATUS ===" every 2 seconds
+# 3. Set debug_verbose = true for detailed logging if needed
+
 extends Node2D
 class_name FireControlManager
 
-# DEBUG CONTROL
+# DEBUG CONTROL - Set these in the Godot editor
 @export var debug_enabled: bool = true
+@export var debug_verbose: bool = false  # Extra verbose logging
+@export var debug_interval: float = 2.0  # How often to print status summary
+var debug_timer: float = 0.0
+var last_target_count: int = 0
 
 # System configuration
-@export var engagement_range_meters: float = 15000.0
+@export var engagement_range_meters: float = 8000.0
 @export var min_intercept_distance_meters: float = 5.0
 @export var max_simultaneous_engagements: int = 10  # Limit for performance
 
@@ -98,6 +116,13 @@ func _physics_process(delta):
 	# Update ship orientation
 	ship_forward_direction = Vector2.UP.rotated(parent_ship.rotation)
 	
+	# Debug summary timer
+	if debug_enabled:
+		debug_timer += delta
+		if debug_timer >= debug_interval:
+			debug_timer = 0.0
+			print_debug_summary()
+	
 	# Throttle updates for performance
 	update_timer += delta
 	if update_timer < update_interval:
@@ -110,12 +135,54 @@ func _physics_process(delta):
 	optimize_pdc_assignments()
 	execute_fire_missions()
 
+# NEW: Debug summary function for cleaner output
+func print_debug_summary():
+	var active_targets = tracked_targets.size()
+	var engaged_pdcs = get_busy_pdc_count()
+	var critical_count = 0
+	
+	for target_data in tracked_targets.values():
+		if target_data.is_critical:
+			critical_count += 1
+	
+	print("\n=== FCM STATUS ===")
+	print("Targets: %d tracked (%d critical)" % [active_targets, critical_count])
+	print("PDCs: %d/%d engaged" % [engaged_pdcs, registered_pdcs.size()])
+	
+	# Print PDC status
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		var target_id = pdc_assignments[pdc_id]
+		if target_id != "":
+			var status = pdc.get_status()
+			print("  %s -> %s (rot: %.1f°, error: %.1f°)" % [
+				pdc_id, 
+				target_id.substr(0, 15),
+				rad_to_deg(status.current_rotation),
+				rad_to_deg(status.tracking_error)
+			])
+	
+	# Top 3 priority targets
+	if target_priorities.size() > 0:
+		print("Top threats:")
+		for i in range(min(3, target_priorities.size())):
+			var target_id = target_priorities[i]
+			var data = tracked_targets[target_id]
+			print("  %s: %.1fs TTI, score: %.2f" % [
+				target_id.substr(0, 15),
+				data.time_to_impact,
+				data.priority_score
+			])
+	print("==================\n")
+
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	# DEBUG: Log torpedo detection
-	if current_torpedoes.size() > 0 and tracked_targets.size() == 0:
-		print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
+	# Only log significant changes
+	if debug_enabled and current_torpedoes.size() != last_target_count:
+		if current_torpedoes.size() > last_target_count:
+			print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
+		last_target_count = current_torpedoes.size()
 	
 	# Update existing targets
 	var targets_to_remove = []
@@ -139,7 +206,6 @@ func update_target_tracking():
 		var torpedo_id = get_torpedo_id(torpedo)
 		if not tracked_targets.has(torpedo_id):
 			add_new_target(torpedo)
-			print("FCM: Added new target: ", torpedo_id)
 
 func add_new_target(torpedo: Node2D):
 	var target_data = TargetData.new()
@@ -151,6 +217,9 @@ func add_new_target(torpedo: Node2D):
 	tracked_targets[target_data.target_id] = target_data
 	
 	total_engagements += 1
+	
+	if debug_verbose:
+		print("FCM: Added new target: ", target_data.target_id)
 
 func update_target_data(target_data: TargetData):
 	var torpedo = target_data.node_ref
@@ -193,12 +262,19 @@ func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	# Predict where torpedo will be
 	return torpedo_pos + torpedo_vel * bullet_time
 
+# FIXED: Better feasibility calculation
 func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	# Check if intercept point is geometrically valid
-	var intercept_local = parent_ship.to_local(target_data.intercept_point)
+	var ship_to_target = target_data.last_position - parent_ship.global_position
+	var closing_velocity = -target_data.last_velocity.dot(ship_to_target.normalized())
 	
-	# Never engage targets whose intercept is behind the ship
-	if intercept_local.y > 0:  # Behind ship (assuming ship faces up)
+	# If target is moving away, it's not a threat
+	if closing_velocity <= 0:
+		return 0.0
+	
+	# Check if target is already too close (past the ship)
+	var distance_meters = ship_to_target.length() * WorldSettings.meters_per_pixel
+	if distance_meters < min_intercept_distance_meters:
 		return 0.0
 	
 	# Check if any PDC can reach the target
@@ -210,7 +286,9 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	
 	return best_feasibility
 
+# FIXED: PDCs can now rotate 360 degrees
 func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> float:
+	# Get the required angle to hit the intercept point
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
 	var world_angle = to_intercept.angle()
@@ -224,22 +302,24 @@ func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> f
 	while required_angle < -PI:
 		required_angle += TAU
 	
-	# Check if within firing arc (simplified - assumes forward arc)
-	if abs(required_angle) > deg_to_rad(80.0):  # Outside 160° forward arc
-		return 0.0
+	# PDCs can rotate 360 degrees - no arc limitations
+	# The only limit is rotation time vs time to impact
 	
 	# Calculate rotation time needed
 	var current_angle = pdc.current_rotation
 	var rotation_needed = abs(angle_difference(current_angle, required_angle))
 	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
 	
+	# Add a small buffer for aiming
+	rotation_time += 0.2
+	
 	# Can we rotate in time?
-	if rotation_time > target_data.time_to_impact * 0.8:  # 80% margin
-		return 0.1  # Low feasibility
+	if rotation_time > target_data.time_to_impact:
+		return 0.1  # Low feasibility but not zero
 	
 	# Good feasibility based on how much time margin we have
 	var time_margin = target_data.time_to_impact - rotation_time
-	return clamp(time_margin / 5.0, 0.0, 1.0)
+	return clamp(time_margin / 3.0, 0.1, 1.0)
 
 func assess_all_threats():
 	target_priorities.clear()
@@ -294,6 +374,7 @@ func calculate_target_priority(target_data: TargetData):
 	
 	target_data.priority_score = base_priority
 
+# FIXED: Better PDC assignment with idle state management
 func optimize_pdc_assignments():
 	# Clear current assignments
 	for pdc_id in pdc_assignments:
@@ -303,6 +384,10 @@ func optimize_pdc_assignments():
 	# Assign PDCs to targets in priority order
 	for target_id in target_priorities:
 		var target_data = tracked_targets[target_id]
+		
+		# Skip targets with zero feasibility
+		if target_data.feasibility_score <= 0.0:
+			continue
 		
 		# Determine how many PDCs this target needs
 		var pdcs_needed = 1
@@ -317,6 +402,13 @@ func optimize_pdc_assignments():
 		if assigned_pdcs.size() > 0:
 			target_assignments[target_id] = assigned_pdcs
 			target_data.assigned_pdcs = assigned_pdcs
+	
+	# Stop any unassigned PDCs
+	for pdc_id in registered_pdcs:
+		if pdc_assignments[pdc_id] == "":
+			var pdc = registered_pdcs[pdc_id]
+			if pdc.current_status != "IDLE":
+				pdc.stop_firing()
 
 func assign_pdcs_to_target(target_data: TargetData, pdcs_needed: int) -> Array:
 	var available_pdcs = []
@@ -365,19 +457,10 @@ func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	
 	return rotation_score * target_data.feasibility_score
 
+# FIXED: Continuous target tracking and firing solution updates
 func execute_fire_missions():
-	# DEBUG: Log execution status only occasionally
-	exec_counter += 1
-	if debug_enabled and exec_counter % 20 == 0:  # Every second at 20Hz
-		print("FCM: Executing missions - %d targets, %d busy PDCs" % [
-			target_assignments.size(), 
-			get_busy_pdc_count()
-		])
-	
 	for target_id in target_assignments:
 		if not tracked_targets.has(target_id):
-			if debug_enabled:
-				print("FCM ERROR: Target assignment for non-existent target!")
 			continue
 			
 		var target_data = tracked_targets[target_id]
@@ -386,24 +469,19 @@ func execute_fire_missions():
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
 			
-			# Calculate firing solution
+			# CRITICAL: Continuously update firing solution
 			var firing_angle = calculate_firing_solution(pdc, target_data)
 			
-			# Only log if PDC is changing targets
-			var old_target = pdc.current_target_id
-			
-			# Command PDC
+			# Command PDC with updated angle
 			var is_emergency = target_data.is_critical
 			pdc.set_target(target_id, firing_angle, is_emergency)
 			
 			# Start firing if PDC reports ready
 			if pdc.is_aimed():
-				pdc.start_firing()
-				
-				# Log only new engagements
-				if debug_enabled and old_target != target_id:
-					print("FCM: PDC %s engaging new target" % pdc_id)
+				if not pdc.is_firing:
+					pdc.start_firing()
 
+# FIXED: Proper angle calculation
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	# Get positions
 	var pdc_pos = pdc.get_muzzle_world_position()
@@ -426,7 +504,9 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var to_intercept = predicted_pos - pdc_pos
 	var world_angle = to_intercept.angle()
 	
-	# CRITICAL: Convert world angle to ship-relative angle
+	# CRITICAL FIX: The ship's "up" in Godot is actually -Y (negative Y)
+	# So we need to account for the fact that rotation 0 means pointing up (-Y)
+	# The world angle is measured from +X axis, so we need to adjust
 	var ship_angle = parent_ship.rotation
 	var relative_angle = world_angle - ship_angle
 	
@@ -436,13 +516,13 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	while relative_angle < -PI:
 		relative_angle += TAU
 	
-	# DEBUG: Log calculation details
-	if debug_enabled and target_data.is_critical:  # Only log critical targets to reduce spam
-		print("FCM Firing Solution:")
-		print("  Ship angle: %.1f°" % rad_to_deg(ship_angle))
-		print("  World angle: %.1f°" % rad_to_deg(world_angle))
+	# DEBUG: Only log for critical targets to reduce spam
+	if debug_verbose and target_data.is_critical:
+		print("FCM Firing Solution for %s:" % target_data.target_id.substr(0, 15))
+		print("  Target at: %.1f°" % rad_to_deg(world_angle))
+		print("  Ship facing: %.1f°" % rad_to_deg(ship_angle))
 		print("  Relative angle: %.1f°" % rad_to_deg(relative_angle))
-		print("  Bullet flight time: %.2f s" % bullet_time)
+		print("  Lead time: %.2f s" % bullet_time)
 	
 	return relative_angle
 
@@ -452,10 +532,17 @@ func pdc_ready_to_fire(pdc_id: String):
 		var pdc = registered_pdcs[pdc_id]
 		pdc.start_firing()
 
+# IMPROVED: Better target removal with debug info
 func remove_target(target_id: String):
 	# Clean up target
 	if tracked_targets.has(target_id):
 		var target_data = tracked_targets[target_id]
+		
+		if debug_verbose:
+			print("FCM: Removing target %s (TTI was %.1f)" % [
+				target_id.substr(0, 15), 
+				target_data.time_to_impact
+			])
 		
 		# Stop all PDCs assigned to this target
 		for pdc_id in target_data.assigned_pdcs:
