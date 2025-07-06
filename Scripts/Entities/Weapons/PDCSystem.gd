@@ -214,7 +214,7 @@ func fire_bullet():
 	bullet.global_position = get_muzzle_world_position()
 	
 	# CURRENT METHOD: Use world angle directly
-	var world_angle = current_rotation + PI
+	var world_angle = current_rotation + PI # if this line is set to: var world_angle = current_rotation then the bullets literally fire in the opposite direction they should be.....so frustrating
 	var fire_direction = Vector2.from_angle(world_angle)
 	
 	# DEBUG: Show all the angles and directions
