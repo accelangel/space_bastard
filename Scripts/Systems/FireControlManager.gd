@@ -605,22 +605,24 @@ func print_battle_summary():
 		if pdc.has_method("get_battle_stats"):
 			var stats = pdc.get_battle_stats()
 			print("  %s: %d rounds, %d hits (%.1f%% hit rate)" % [
-				pdc_id,
-				stats.rounds_fired,
-				stats.targets_hit,
-				stats.hit_rate
+				str(pdc_id),
+				int(stats.rounds_fired),
+				int(stats.targets_hit),
+				float(stats.hit_rate)
 			])
 	
 	print("\nDetailed Intercept Log:")
 	for i in range(intercept_log.size()):
 		var log_entry = intercept_log[i]
+		var target_short = str(log_entry.target_id).substr(8, 7)
+		var outcome_str = str(log_entry.outcome).to_upper()
 		print("  %d. %s: %s (%.1fkm, %.1fs, %d PDCs)" % [
 			i + 1,
-			log_entry.target_id.substr(8, 7),
-			log_entry.outcome.to_upper(),
-			log_entry.distance_meters / 1000.0,
-			log_entry.engagement_time,
-			log_entry.assigned_pdcs.size()
+			target_short,
+			outcome_str,
+			float(log_entry.distance_meters) / 1000.0,
+			float(log_entry.engagement_time),
+			int(log_entry.assigned_pdcs.size())
 		])
 	
 	print("="*50)
@@ -693,11 +695,15 @@ func get_debug_info() -> String:
 	var active_targets = tracked_targets.size()
 	var engaged_targets = target_assignments.size()
 	var busy_pdcs = get_busy_pdc_count()
+	var intercept_rate = 0.0
+	
+	if int(battle_stats.total_torpedoes_detected) > 0:
+		intercept_rate = (float(battle_stats.total_torpedoes_intercepted) / float(battle_stats.total_torpedoes_detected)) * 100.0
 	
 	return "Fire Control: %d targets tracked, %d engaged | PDCs: %d/%d active | Intercepts: %d/%d (%.1f%%)" % [
-		active_targets, engaged_targets, busy_pdcs, registered_pdcs.size(), 
-		battle_stats.total_torpedoes_intercepted, battle_stats.total_torpedoes_detected,
-		(float(battle_stats.total_torpedoes_intercepted) / float(max(battle_stats.total_torpedoes_detected, 1))) * 100.0
+		int(active_targets), int(engaged_targets), int(busy_pdcs), int(registered_pdcs.size()), 
+		int(battle_stats.total_torpedoes_intercepted), int(battle_stats.total_torpedoes_detected),
+		intercept_rate
 	]
 
 # NEW: Public method to get current battle stats

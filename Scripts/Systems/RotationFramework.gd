@@ -39,7 +39,7 @@ static func world_angle_to_direction(angle: float) -> Vector2:
 	"""Convert world angle to direction vector"""
 	return Vector2.from_angle(angle)
 
-static func direction_to_world_angle(direction: Vector2) -> Vector2:
+static func direction_to_world_angle(direction: Vector2) -> float:
 	"""Convert direction vector to world angle"""
 	return direction.angle()
 
