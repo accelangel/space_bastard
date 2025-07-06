@@ -4,7 +4,7 @@ class_name TorpedoLauncher
 
 @export var torpedo_scene: PackedScene
 @export var launch_cooldown: float = 0.05  # Seconds between launches
-@export var max_torpedoes: int = 50       # Max active torpedoes
+@export var max_torpedoes: int = 25       # Max active torpedoes
 
 var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0
@@ -19,6 +19,10 @@ var torpedoes_launched: int = 0
 @export var auto_launch_enabled: bool = true
 @export var auto_launch_interval: float = 0.1
 var auto_launch_timer: float = 0.0
+
+# NEW: One volley option
+@export var continuous_fire: bool = false  # If true, keeps firing; if false, only fires one volley
+var volley_fired: bool = false            # Tracks if the single volley has been fired
 
 func _ready():
 	parent_ship = get_parent()
@@ -37,6 +41,10 @@ func _process(delta):
 	
 	# Auto-launch logic
 	if auto_launch_enabled:
+		# If continuous_fire is false and we've already fired our volley, stop
+		if not continuous_fire and volley_fired:
+			return
+		
 		auto_launch_timer += delta
 		if auto_launch_timer >= auto_launch_interval:
 			launch_at_best_target()
@@ -90,6 +98,11 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	
 	print("Launched torpedo #", torpedoes_launched, " at ", target.name)
 	
+	# Check if we've fired our max volley for single-volley mode
+	if not continuous_fire and active_torpedoes.size() >= max_torpedoes:
+		volley_fired = true
+		print("Single volley complete - no more torpedoes will be fired")
+	
 	return torpedo
 
 func can_launch() -> bool:
@@ -99,5 +112,14 @@ func can_launch() -> bool:
 	return (active_torpedoes.size() < max_torpedoes and 
 			time_since_last >= launch_cooldown)
 
+# NEW: Function to reset the volley system (useful for testing or restarting)
+func reset_volley():
+	volley_fired = false
+	print("Volley system reset - can fire again")
+
 func get_debug_info() -> String:
-	return "Torpedoes: %d/%d active" % [active_torpedoes.size(), max_torpedoes]
+	var mode_text = "Continuous" if continuous_fire else "Single Volley"
+	var status_text = ""
+	if not continuous_fire:
+		status_text = " (Fired: %s)" % str(volley_fired)
+	return "Torpedoes: %d/%d active, Mode: %s%s" % [active_torpedoes.size(), max_torpedoes, mode_text, status_text]

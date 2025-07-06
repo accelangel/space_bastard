@@ -1,4 +1,4 @@
-# Simplified GameCamera.gd - Single click ship selection
+# Enhanced GameCamera.gd - Single click ship selection with relative panning
 extends Camera2D
 
 # Map configuration
@@ -22,6 +22,12 @@ var following_ship: Node2D = null
 var follow_smoothing: float = 12.0  # Increased for smoother tracking
 var follow_offset: Vector2 = Vector2.ZERO
 var follow_deadzone: float = 0.1    # Minimum distance before we start following
+
+# NEW: Relative panning while following
+var relative_pan_offset: Vector2 = Vector2.ZERO
+var is_relative_panning: bool = false
+var relative_pan_start_mouse: Vector2 = Vector2.ZERO
+var relative_pan_start_offset: Vector2 = Vector2.ZERO
 
 # UI feedback
 var selection_indicator: Node2D = null
@@ -72,8 +78,8 @@ func handle_zoom(delta):
 			position += mouse_world_before - mouse_world_after
 
 func handle_pan(delta):
-	# Don't allow manual panning while following a ship
-	if following_ship:
+	# Don't allow manual panning while following a ship (unless it's relative panning)
+	if following_ship and not is_relative_panning:
 		return
 		
 	var moveAmount = Vector2.ZERO
@@ -87,28 +93,65 @@ func handle_pan(delta):
 		moveAmount.y += 1
 	
 	moveAmount = moveAmount.normalized()
-	position += moveAmount * delta * 1000 * (1 / zoom.x)
+	
+	if following_ship:
+		# When following a ship, keyboard movement adjusts the relative offset
+		relative_pan_offset += moveAmount * delta * 1000 * (1 / zoom.x)
+	else:
+		# Normal panning when not following
+		position += moveAmount * delta * 1000 * (1 / zoom.x)
 
 func handle_click_and_drag():
 	# Start dragging with middle mouse button
 	if !isDragging and Input.is_action_just_pressed("camera_pan"):
-		# Stop following when trying to pan manually
 		if following_ship:
-			stop_following_ship()
-			return
-			
-		dragStartMousePos = get_viewport().get_mouse_position()
-		dragStartCameraPos = position
-		isDragging = true
+			# Start relative panning while following
+			start_relative_panning()
+		else:
+			# Normal drag panning when not following
+			dragStartMousePos = get_viewport().get_mouse_position()
+			dragStartCameraPos = position
+			isDragging = true
 	
 	# Stop dragging
 	if isDragging and Input.is_action_just_released("camera_pan"):
 		isDragging = false
 	
+	# Stop relative panning
+	if is_relative_panning and Input.is_action_just_released("camera_pan"):
+		stop_relative_panning()
+	
 	# Apply drag movement
 	if isDragging:
 		var moveVector = get_viewport().get_mouse_position() - dragStartMousePos
 		position = dragStartCameraPos - moveVector * (1 / zoom.x)
+	
+	# Apply relative panning while following
+	if is_relative_panning and following_ship:
+		update_relative_panning()
+
+func start_relative_panning():
+	print("Starting relative panning while following ship")
+	is_relative_panning = true
+	relative_pan_start_mouse = get_viewport().get_mouse_position()
+	relative_pan_start_offset = relative_pan_offset
+
+func stop_relative_panning():
+	print("Stopping relative panning")
+	is_relative_panning = false
+
+func update_relative_panning():
+	if not following_ship:
+		return
+	
+	var mouse_delta = get_viewport().get_mouse_position() - relative_pan_start_mouse
+	# Convert screen space movement to world space offset
+	var world_delta = mouse_delta * (1 / zoom.x)
+	# Invert both X and Y to match expected panning behavior
+	world_delta.x = -world_delta.x
+	world_delta.y = -world_delta.y
+	
+	relative_pan_offset = relative_pan_start_offset + world_delta
 
 func handle_ship_selection():
 	# Simple single-click selection
@@ -181,6 +224,8 @@ func start_following_ship(ship: Node2D):
 	print("Started following: ", ship.name)
 	following_ship = ship
 	follow_offset = Vector2.ZERO
+	# Reset relative pan offset when starting to follow a new ship
+	relative_pan_offset = Vector2.ZERO
 	
 	# Show selection indicator
 	if selection_indicator:
@@ -191,6 +236,10 @@ func stop_following_ship():
 	if following_ship:
 		print("Stopped following: ", following_ship.name)
 	following_ship = null
+	
+	# Reset relative panning state
+	is_relative_panning = false
+	relative_pan_offset = Vector2.ZERO
 	
 	# Hide selection indicator
 	if selection_indicator:
@@ -205,8 +254,8 @@ func follow_ship(_delta):
 		stop_following_ship()
 		return
 	
-	# Direct position matching - no smoothing for crisp tracking
-	position = following_ship.global_position + follow_offset
+	# Apply ship position + any relative offset from panning
+	position = following_ship.global_position + follow_offset + relative_pan_offset
 	
 	# Update selection indicator
 	if selection_indicator and selection_indicator.visible:
@@ -265,3 +314,13 @@ func set_follow_smoothing(smoothing: float):
 
 func set_follow_offset(new_offset: Vector2):
 	follow_offset = new_offset
+
+# NEW: Public methods for relative panning control
+func reset_relative_pan_offset():
+	relative_pan_offset = Vector2.ZERO
+
+func get_relative_pan_offset() -> Vector2:
+	return relative_pan_offset
+
+func set_relative_pan_offset(new_offset: Vector2):
+	relative_pan_offset = new_offset

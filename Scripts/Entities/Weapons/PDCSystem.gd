@@ -3,13 +3,13 @@ extends Node2D
 class_name PDCSystem
 
 # PDC Configuration
-@export var bullet_velocity_mps: float = 300.0
-@export var bullets_per_burst: int = 40  # Bullets in a burst
-@export var burst_fire_rate: float = 80.0  # Bullets per second DURING a burst
-@export var burst_cooldown: float = 0.2  # Seconds between bursts
+@export var bullet_velocity_mps: float = 2000.0
+@export var bullets_per_burst: int = 100  # Bullets in a burst
+@export var burst_fire_rate: float = 100.0  # Bullets per second DURING a burst
+@export var burst_cooldown: float = 0.25  # Seconds between bursts
 @export var engagement_range_meters: float = 15000.0
-@export var min_intercept_distance_meters: float = 200.0  # Increased minimum distance
-@export var turret_rotation_speed: float = 5.0  # Radians per second
+@export var min_intercept_distance_meters: float = 1.0  # Increased minimum distance
+@export var turret_rotation_speed: float = 30.0  # Radians per second
 
 # Firing modes
 enum FiringState { IDLE, TRACKING, FIRING, COOLDOWN }
@@ -26,6 +26,7 @@ var fire_timer: float = 0.0
 var target_lock_duration: float = 2.0  # Minimum time to stick with a target
 var last_target_check: float = 0.0
 var target_check_interval: float = 0.1  # Check for new targets every 100ms
+var game_time: float = 0.0  # Track our own time
 
 # Turret rotation
 var current_rotation: float = 0.0
@@ -61,6 +62,9 @@ func _physics_process(delta):
 	if not sensor_system:
 		return
 	
+	# Update our own time tracker
+	game_time += delta
+	
 	# Update timers
 	cooldown_timer = max(0.0, cooldown_timer - delta)
 	fire_timer += delta
@@ -72,10 +76,10 @@ func _physics_process(delta):
 			find_new_target()
 			
 		FiringState.TRACKING:
-			update_tracking(delta)
+			update_tracking()
 			
 		FiringState.FIRING:
-			fire_burst(delta)
+			fire_burst()
 			
 		FiringState.COOLDOWN:
 			if cooldown_timer <= 0:
@@ -100,7 +104,7 @@ func find_new_target():
 	
 	if best_target:
 		current_target = best_target
-		target_locked_at = Time.get_time_dict_from_system()["unix"]
+		target_locked_at = game_time
 		current_state = FiringState.TRACKING
 		burst_bullets_fired = 0
 		var distance_m = global_position.distance_to(best_target.global_position) * WorldSettings.meters_per_pixel
@@ -189,7 +193,7 @@ func estimate_intercept_time(torpedo: Node2D) -> float:
 	
 	return distance / net_approach_speed
 
-func update_tracking(delta):
+func update_tracking():
 	# Check if current target is still valid
 	if not is_valid_target(current_target):
 		print("PDC lost target - invalid")
@@ -198,8 +202,7 @@ func update_tracking(delta):
 		return
 	
 	# Periodically check for better targets, but only if we haven't been locked long
-	var current_time = Time.get_time_dict_from_system()["unix"]
-	var time_locked = current_time - target_locked_at
+	var time_locked = game_time - target_locked_at
 	
 	if time_locked > target_lock_duration and last_target_check > target_check_interval:
 		last_target_check = 0.0
@@ -216,7 +219,7 @@ func update_tracking(delta):
 			if priority > current_priority * 1.5:  # Must be 50% better to switch
 				print("PDC switching to higher priority target")
 				current_target = torpedo
-				target_locked_at = current_time
+				target_locked_at = game_time
 				break
 	
 	# Calculate lead angle
@@ -229,7 +232,7 @@ func update_tracking(delta):
 		current_state = FiringState.FIRING
 		fire_timer = 0.0
 
-func fire_burst(delta):
+func fire_burst():
 	# Continuously validate target during burst
 	if not is_valid_target(current_target):
 		print("PDC target lost during burst")
