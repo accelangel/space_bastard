@@ -1,4 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - ENHANCED WITH DETAILED BATTLE STATISTICS
+# Scripts/Systems/FireControlManager.gd - FIXED SYNTAX ERRORS
 extends Node2D
 class_name FireControlManager
 
@@ -147,6 +147,8 @@ func _physics_process(delta):
 	update_target_tracking()
 	assess_all_threats()
 	optimize_pdc_assignments()
+	if tracked_targets.size() >= 25 and not has_run_assignment_debug:
+		diagnostic_assignment_breakdown()
 	execute_fire_missions()
 	update_battle_stats()
 	check_battle_end()
@@ -249,17 +251,37 @@ func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	
 	return torpedo_pos + torpedo_vel * bullet_time
 
+# ADD THIS DIAGNOSTIC TO calculate_intercept_feasibility():
 func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	if target_data.distance_meters > engagement_range_meters:
+		# DIAGNOSTIC
+		if debug_enabled:
+			print("Target %s: REJECTED - Out of range (%.1f km > %.1f km)" % [
+				target_data.target_id.substr(8, 7), 
+				target_data.distance_meters / 1000.0, 
+				engagement_range_meters / 1000.0
+			])
 		return 0.0
 	
 	var ship_to_target = target_data.last_position - parent_ship.global_position
 	var closing_velocity = -target_data.last_velocity.dot(ship_to_target.normalized())
 	
 	if closing_velocity <= 0:
+		# DIAGNOSTIC
+		if debug_enabled:
+			print("Target %s: REJECTED - Not approaching (closing vel: %.1f)" % [
+				target_data.target_id.substr(8, 7), closing_velocity
+			])
 		return 0.0
 	
 	if target_data.distance_meters < min_intercept_distance_meters:
+		# DIAGNOSTIC
+		if debug_enabled:
+			print("Target %s: REJECTED - Too close (%.1f km < %.1f km)" % [
+				target_data.target_id.substr(8, 7), 
+				target_data.distance_meters / 1000.0, 
+				min_intercept_distance_meters / 1000.0
+			])
 		return 0.0
 	
 	var best_feasibility = 0.0
@@ -267,6 +289,12 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 		var pdc = registered_pdcs[pdc_id]
 		var pdc_feasibility = calculate_pdc_target_feasibility(pdc, target_data)
 		best_feasibility = max(best_feasibility, pdc_feasibility)
+	
+	# DIAGNOSTIC
+	if debug_enabled and best_feasibility == 0.0:
+		print("Target %s: REJECTED - No PDC can engage (best score: %.3f)" % [
+			target_data.target_id.substr(8, 7), best_feasibility
+		])
 	
 	return best_feasibility
 
@@ -339,6 +367,12 @@ func calculate_target_priority(target_data: TargetData):
 	target_data.priority_score = base_priority
 
 func optimize_pdc_assignments():
+	# DIAGNOSTIC: Add at the very start
+	if tracked_targets.size() >= 190 and not has_run_assignment_debug:
+		print("🔧 PRE-ASSIGNMENT STATE:")
+		print("  Tracked targets: %d" % tracked_targets.size())
+		print("  Target priorities: %d" % target_priorities.size())
+		print("  Available PDCs: %d" % get_available_pdc_count())
 	# Clear all assignments first
 	for pdc_id in pdc_assignments:
 		pdc_assignments[pdc_id] = ""
@@ -398,6 +432,81 @@ func optimize_pdc_assignments():
 	if should_debug:
 		analyze_assignment_patterns_detailed(assignment_debug)
 		print("=== END ASSIGNMENT ANALYSIS ===\n")
+
+# DIAGNOSTIC PATCH - Add to FireControlManager.gd
+# Add this function after optimize_pdc_assignments()
+
+func diagnostic_assignment_breakdown():
+	"""Emergency diagnostic to find why assignments aren't working"""
+	print("\n🔧 === ASSIGNMENT DIAGNOSTIC ===")
+	print("Tracked targets: %d" % tracked_targets.size())
+	print("Target priorities: %d" % target_priorities.size())
+	print("Registered PDCs: %d" % registered_pdcs.size())
+	
+	# Check if we have targets at all
+	if tracked_targets.size() == 0:
+		print("❌ NO TARGETS TRACKED - sensor system issue?")
+		return
+	
+	if target_priorities.size() == 0:
+		print("❌ NO PRIORITIES SET - assessment issue?")
+		return
+	
+	print("\n📋 FEASIBILITY CHECK:")
+	var feasible_targets = 0
+	var total_targets = 0
+	
+	for target_id in tracked_targets:
+		var target_data = tracked_targets[target_id]
+		total_targets += 1
+		
+		print("Target %s:" % target_id.substr(8, 7))
+		print("  Distance: %.1f km" % (target_data.distance_meters / 1000.0))
+		print("  Time to impact: %.1f s" % target_data.time_to_impact)
+		print("  Feasibility: %.3f" % target_data.feasibility_score)
+		print("  Is critical: %s" % str(target_data.is_critical))
+		
+		if target_data.feasibility_score > 0.0:
+			feasible_targets += 1
+		
+		# Only check first 3 targets to avoid spam
+		if total_targets >= 3:
+			break
+	
+	print("Feasible targets: %d / %d" % [feasible_targets, total_targets])
+	
+	print("\n🎯 PDC AVAILABILITY CHECK:")
+	var available_pdcs = 0
+	for pdc_id in pdc_assignments:
+		var assignment_status = pdc_assignments[pdc_id]
+		var is_available = (assignment_status == "")
+		if is_available:
+			available_pdcs += 1
+		print("PDC %s: %s" % [pdc_id.substr(4, 8), "AVAILABLE" if is_available else "BUSY: " + assignment_status.substr(8, 7)])
+	
+	print("Available PDCs: %d / %d" % [available_pdcs, registered_pdcs.size()])
+	
+	print("\n🔍 ASSIGNMENT LOOP TEST:")
+	if target_priorities.size() > 0:
+		var test_target_id = target_priorities[0]
+		var target_data = tracked_targets[test_target_id]
+		print("Testing assignment for target: %s" % test_target_id.substr(8, 7))
+		print("  Feasibility: %.3f" % target_data.feasibility_score)
+		
+		if target_data.feasibility_score <= 0.0:
+			print("  ❌ BLOCKED: Zero feasibility score")
+		else:
+			print("  ✓ PASSED: Feasibility check")
+			
+			# Test PDC scoring
+			print("  PDC Scoring:")
+			for pdc_id in registered_pdcs:
+				if pdc_assignments[pdc_id] == "":
+					var pdc = registered_pdcs[pdc_id]
+					var score = score_pdc_for_target_silent(pdc, target_data)
+					print("    %s: %.3f" % [pdc_id.substr(4, 8), score])
+	
+	print("=== END DIAGNOSTIC ===\n")
 
 func assign_pdcs_to_target_silent(target_data: TargetData, pdcs_needed: int, assignment_data: Dictionary) -> Array:
 	"""Silent version for normal operation - no debug spam"""
@@ -694,8 +803,12 @@ func print_comprehensive_battle_summary():
 			])
 			
 			if log_entry.assigned_pdcs.size() > 0:
-				print("    - Engaged by %d PDCs for %.1f seconds" % [
-					log_entry.assigned_pdcs.size(), log_entry.engagement_duration
+				# FIXED: Convert array to string manually instead of using list comprehension
+				var pdc_names = []
+				for pdc_id in log_entry.assigned_pdcs:
+					pdc_names.append(pdc_id.substr(4, 8))
+				print("    - Engaged by %d PDCs (%s) for %.1f seconds" % [
+					log_entry.assigned_pdcs.size(), ", ".join(pdc_names), log_entry.engagement_duration
 				])
 		
 		# Show details about ship hits
