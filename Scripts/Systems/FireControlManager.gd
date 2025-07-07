@@ -668,8 +668,10 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	
 	return relative_angle
 
+# Replace the intercept classification logic in remove_target() with this:
+
 func remove_target(target_id: String):
-	"""Process a torpedo that EntityManager says no longer exists - SIMPLIFIED"""
+	"""Process a torpedo that EntityManager says no longer exists - BETTER LOGIC"""
 	if not tracked_targets.has(target_id):
 		return
 	
@@ -678,11 +680,17 @@ func remove_target(target_id: String):
 	var distance_meters = distance_to_ship * WorldSettings.meters_per_pixel
 	var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
 	
-	# SIMPLIFIED LOGIC: Only two possible outcomes
-	# 1. PDCs were shooting at it when it disappeared = INTERCEPT
-	# 2. PDCs were not shooting at it when it disappeared = TORPEDO HIT
+	# MUCH SIMPLER LOGIC: If PDCs were assigned = INTERCEPT, otherwise = SHIP HIT
+	# The distance check was causing false classifications
 	
-	var was_successful_intercept = (target_data.rounds_fired_at_target > 0 and distance_meters > 1.0)
+	var was_being_engaged = (target_data.assigned_pdcs.size() > 0)
+	
+	# Only classify as ship hit if:
+	# 1. No PDCs were assigned, OR
+	# 2. Torpedo got VERY close (under 100m) despite PDC engagement
+	var got_very_close = (distance_meters < 100.0)
+	
+	var was_successful_intercept = was_being_engaged and not got_very_close
 	var outcome_reason = ""
 	
 	if was_successful_intercept:
@@ -690,24 +698,28 @@ func remove_target(target_id: String):
 		successful_intercepts += 1
 		battle_stats.total_torpedoes_intercepted += 1
 		
-		# COMMENTED OUT: Individual intercept spam
-		# print("Torpedo %s: INTERCEPTED by %d PDCs at %.2f km" % [
-		#	target_id.substr(8, 7), target_data.assigned_pdcs.size(), distance_meters / 1000.0
-		# ])
+		# Debug: Show questionable intercepts
+		if distance_meters > 2000.0:  # Over 2km
+			print("🤔 Long-range intercept: Torpedo %s destroyed at %.2f km by %d PDCs" % [
+				target_id.substr(8, 7), distance_meters / 1000.0, target_data.assigned_pdcs.size()
+			])
 	else:
-		outcome_reason = "TORPEDO_HIT"
+		outcome_reason = "TORPEDO_HIT"  
 		battle_stats.total_torpedoes_missed += 1
 		
 		# Track closest hit for statistics
 		if target_data.closest_approach_distance < battle_stats.closest_miss_distance:
 			battle_stats.closest_miss_distance = target_data.closest_approach_distance
 		
-		# ONLY print ship hits (these are important)
-		print("🚨 Torpedo %s: HIT SHIP at %.2f km" % [
-			target_id.substr(8, 7), distance_meters / 1000.0
+		# Print ship hits with diagnostic info
+		print("🚨 Torpedo %s: HIT SHIP at %.2f km (assigned: %d PDCs, closest: %.2f km)" % [
+			target_id.substr(8, 7), 
+			distance_meters / 1000.0,
+			target_data.assigned_pdcs.size(),
+			target_data.closest_approach_distance / 1000.0
 		])
 	
-	# Create log entry
+	# Rest of the function stays the same...
 	var log_entry = {
 		"target_id": target_id,
 		"outcome": "intercepted" if was_successful_intercept else "hit_ship",
@@ -716,7 +728,7 @@ func remove_target(target_id: String):
 		"initial_distance_km": target_data.initial_distance / 1000.0,
 		"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
 		"engagement_duration": engagement_duration,
-		"rounds_fired": target_data.rounds_fired_at_target,
+		"rounds_fired": 0,
 		"removal_reason": outcome_reason,
 		"entity_manager_confirmed": true
 	}

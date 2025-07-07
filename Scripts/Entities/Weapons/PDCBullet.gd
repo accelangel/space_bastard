@@ -7,18 +7,13 @@ signal hit_target
 
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
-var faction: String = "friendly"
+var faction: String = ""  # ← FIXED: No default faction, must be explicitly set
 var entity_id: String
 
 # References
 @onready var sprite: Sprite2D = $Sprite2D
 
 func _ready():
-	# Register with EntityManager
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction)
-	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
@@ -83,6 +78,14 @@ func set_velocity(new_velocity: Vector2):
 
 func set_faction(new_faction: String):
 	faction = new_faction
+	
+	# NOW register with EntityManager using correct faction
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager and entity_id == "":
+		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction)
+	
+	# Debug faction setting
+	print("🏛️ BULLET FACTION SET: %s" % faction)
 
 func _exit_tree():
 	# Unregister from EntityManager when destroyed
