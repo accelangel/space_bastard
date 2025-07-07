@@ -212,6 +212,9 @@ func fire_bullet():
 	var world_angle = current_rotation_for_firing + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	
+	if debug_enabled and pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+		print("🔍 DEBUG CHECK: PDC %s should show diagnostic (bullet #%d)" % [pdc_id.substr(4, 8), debug_bullet_count])
+	
 	# ENHANCED DIAGNOSTIC for problem PDCs
 	if debug_enabled and pdc_id in ["-4_-72", "-21_-34", "-16_-49"] and debug_bullet_count <= 5:
 		print("\n🔫 BULLET FIRING DEBUG - PDC %s (Bullet #%d):" % [pdc_id.substr(4, 8), debug_bullet_count])
