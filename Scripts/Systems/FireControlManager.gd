@@ -44,6 +44,9 @@ var update_timer: float = 0.0
 # DEBUG: Only run assignment analysis once
 var has_run_assignment_debug: bool = false
 
+# Add this to _physics_process to run the test once
+var has_run_angle_test = false
+
 # ENHANCED BATTLE STATISTICS SYSTEM
 var battle_stats: Dictionary = {
 	"battle_start_time": 0.0,
@@ -152,6 +155,11 @@ func _physics_process(delta):
 	execute_fire_missions()
 	update_battle_stats()
 	check_battle_end()
+	
+	# Run angle test once when we have targets
+	if not has_run_angle_test and tracked_targets.size() > 10:
+		debug_pdc_angle_calculations()
+		has_run_angle_test = true
 
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
@@ -299,16 +307,12 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	return best_feasibility
 
 func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> float:
-	# ADD THIS DEBUG AT THE START:
-	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
-		print("PROBLEM PDC %s: mount_pos=%s, required_angle=%.1f°, current_angle=%.1f°" % [
-			pdc.pdc_id.substr(4, 8), pdc.mount_position, rad_to_deg(required_angle), rad_to_deg(current_angle)
-		])
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
 	var world_angle = to_intercept.angle()
 	var required_angle = world_angle - parent_ship.rotation
 	
+	# Normalize the required angle to [-PI, PI]
 	while required_angle > PI:
 		required_angle -= TAU
 	while required_angle < -PI:
@@ -318,13 +322,33 @@ func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> f
 	var rotation_needed = abs(angle_difference(current_angle, required_angle))
 	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
 	
-	rotation_time += 0.2
+	# DIAGNOSTIC - Now with correct variable references
+	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+		print("PROBLEM PDC %s:" % pdc.pdc_id.substr(4, 8))
+		print("  Mount position: %s" % pdc.mount_position)
+		print("  World intercept angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+		print("  Required ship-relative angle: %.1f°" % rad_to_deg(required_angle))
+		print("  Current PDC angle: %.1f°" % rad_to_deg(current_angle))
+		print("  Rotation needed: %.1f°" % rad_to_deg(rotation_needed))
+		print("  Rotation time: %.2f s" % rotation_time)
+		print("  Target time to impact: %.2f s" % target_data.time_to_impact)
+		print("  Feasible: %s" % str(rotation_time <= target_data.time_to_impact))
+	
+	rotation_time += 0.2  # Add small buffer
 	
 	if rotation_time > target_data.time_to_impact:
+		if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+			print("  REJECTED: Rotation time %.2f > impact time %.2f" % [rotation_time, target_data.time_to_impact])
 		return 0.1
 	
 	var time_margin = target_data.time_to_impact - rotation_time
-	return clamp(time_margin / 3.0, 0.1, 1.0)
+	var feasibility = clamp(time_margin / 3.0, 0.1, 1.0)
+	
+	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+		print("  ACCEPTED: Time margin %.2f s, feasibility %.3f" % [time_margin, feasibility])
+	
+	return feasibility
 
 func assess_all_threats():
 	target_priorities.clear()
@@ -734,7 +758,20 @@ func end_battle_session():
 	battle_stats.battle_duration = battle_stats.battle_end_time - battle_stats.battle_start_time
 	battle_summary_printed = true
 	
+	# EMERGENCY STOP ALL PDCs - Fix the "PDCs keep firing" bug
+	print("--- Emergency stopping all PDCs ---")
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.has_method("emergency_stop"):
+			pdc.emergency_stop()
+		pdc_assignments[pdc_id] = ""
+	
+	# Clear all assignments
+	target_assignments.clear()
+	
 	print_comprehensive_battle_summary()
+	
+	print("--- Debugging process stopped ---")
 
 func print_comprehensive_battle_summary():
 	"""Print detailed end-of-battle statistics"""
@@ -1028,3 +1065,51 @@ func analyze_assignment_patterns_detailed(assignment_debug: Array):
 		print("  🚨 MAJOR BIAS: Right side severely underutilized!")
 	
 	print("=== END DETAILED ANALYSIS ===\n")
+
+# Add this function to FireControlManager.gd for testing
+func debug_pdc_angle_calculations():
+	"""Test function to verify PDC angle calculations are working correctly"""
+	print("\n🧮 === PDC ANGLE CALCULATION TEST ===")
+	
+	# Test each PDC with a simple target straight ahead of the ship
+	var test_target_pos = parent_ship.global_position + Vector2(0, -1000)  # 1000 pixels ahead
+	
+	print("Ship position: %s" % parent_ship.global_position)
+	print("Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+	print("Test target position: %s" % test_target_pos)
+	print("")
+	
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		var pdc_pos = pdc.get_muzzle_world_position()
+		
+		# Calculate what angle this PDC needs to aim at the test target
+		var to_target = test_target_pos - pdc_pos
+		var world_angle = to_target.angle()
+		var required_ship_relative = world_angle - parent_ship.rotation
+		
+		# Normalize
+		while required_ship_relative > PI:
+			required_ship_relative -= TAU
+		while required_ship_relative < -PI:
+			required_ship_relative += TAU
+		
+		print("PDC %s:" % pdc_id.substr(4, 8))
+		print("  Mount position: %s" % pdc.mount_position)
+		print("  World position: %s" % pdc_pos)
+		print("  Vector to target: %s" % to_target)
+		print("  World angle needed: %.1f°" % rad_to_deg(world_angle))
+		print("  Ship-relative angle needed: %.1f°" % rad_to_deg(required_ship_relative))
+		print("  Current PDC angle: %.1f°" % rad_to_deg(pdc.current_rotation))
+		
+		# Check if this is geometrically reasonable
+		if abs(required_ship_relative) > PI * 0.75:  # More than 135°
+			print("  ⚠️ WARNING: Extreme angle required - check if target is behind PDC")
+		elif abs(required_ship_relative) < PI * 0.25:  # Less than 45°
+			print("  ✓ GOOD: Reasonable angle required")
+		else:
+			print("  ✓ OK: Moderate angle required")
+		
+		print("")
+	
+	print("=== END ANGLE TEST ===\n")
