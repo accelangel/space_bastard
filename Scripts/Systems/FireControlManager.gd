@@ -41,6 +41,9 @@ var ship_forward_direction: Vector2 = Vector2.UP
 var update_interval: float = 0.05
 var update_timer: float = 0.0
 
+# DEBUG: Only run assignment analysis once
+var has_run_assignment_debug: bool = false
+
 # ENHANCED BATTLE STATISTICS SYSTEM
 var battle_stats: Dictionary = {
 	"battle_start_time": 0.0,
@@ -236,7 +239,6 @@ func update_target_data(target_data: TargetData):
 	
 	target_data.is_critical = target_data.time_to_impact < critical_time_threshold and target_data.distance_meters <= engagement_range_meters
 
-# [Previous calculation functions remain the same - calculate_intercept_point, calculate_intercept_feasibility, etc.]
 func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel = get_torpedo_velocity(torpedo) / WorldSettings.meters_per_pixel
@@ -337,9 +339,18 @@ func calculate_target_priority(target_data: TargetData):
 	target_data.priority_score = base_priority
 
 func optimize_pdc_assignments():
+	# Clear all assignments first
 	for pdc_id in pdc_assignments:
 		pdc_assignments[pdc_id] = ""
 	target_assignments.clear()
+	
+	# DEBUG: Only run ONE detailed analysis when we have max targets
+	var assignment_debug = []
+	var should_debug = (tracked_targets.size() >= 190 and not has_run_assignment_debug)  # Only once at peak
+	
+	if should_debug:
+		print("\n=== PDC ASSIGNMENT ANALYSIS (Peak: %d targets) ===" % tracked_targets.size())
+		has_run_assignment_debug = true  # Never run again
 	
 	for target_id in target_priorities:
 		var target_data = tracked_targets[target_id]
@@ -353,35 +364,68 @@ func optimize_pdc_assignments():
 		elif target_data.feasibility_score < difficult_intercept_threshold:
 			pdcs_needed = 2
 		
-		var assigned_pdcs = assign_pdcs_to_target(target_data, pdcs_needed)
+		# Collect assignment data for analysis (but don't print individual assignments)
+		var assignment_data = {
+			"target_id": target_id,
+			"time_to_impact": target_data.time_to_impact,
+			"priority_score": target_data.priority_score,
+			"feasibility_score": target_data.feasibility_score,
+			"pdcs_needed": pdcs_needed,
+			"is_critical": target_data.is_critical,
+			"available_pdcs": [],
+			"rejected_pdcs": [],
+			"assigned_pdcs": [],
+			"assignment_success": false
+		}
+		
+		var assigned_pdcs = assign_pdcs_to_target_silent(target_data, pdcs_needed, assignment_data)
 		
 		if assigned_pdcs.size() > 0:
 			target_assignments[target_id] = assigned_pdcs
 			target_data.assigned_pdcs = assigned_pdcs
+			assignment_data.assigned_pdcs = assigned_pdcs
+			assignment_data.assignment_success = true
 			
+			# Update torpedo tracking
 			if torpedo_tracking.has(target_id):
 				torpedo_tracking[target_id].assigned_pdcs = assigned_pdcs
 				torpedo_tracking[target_id].status = "engaged"
+		
+		if should_debug:
+			assignment_debug.append(assignment_data)
 	
-	for pdc_id in registered_pdcs:
-		if pdc_assignments[pdc_id] == "":
-			var pdc = registered_pdcs[pdc_id]
-			if pdc.current_status != "IDLE":
-				pdc.stop_firing()
+	# Only show pattern analysis once
+	if should_debug:
+		analyze_assignment_patterns_detailed(assignment_debug)
+		print("=== END ASSIGNMENT ANALYSIS ===\n")
 
-func assign_pdcs_to_target(target_data: TargetData, pdcs_needed: int) -> Array:
+func assign_pdcs_to_target_silent(target_data: TargetData, pdcs_needed: int, assignment_data: Dictionary) -> Array:
+	"""Silent version for normal operation - no debug spam"""
 	var available_pdcs = []
 	var assigned = []
 	
+	# Find all available PDCs and score them for this target
 	for pdc_id in registered_pdcs:
 		if pdc_assignments[pdc_id] == "":
 			var pdc = registered_pdcs[pdc_id]
-			var score = score_pdc_for_target(pdc, target_data)
+			var score = score_pdc_for_target_silent(pdc, target_data)
+			var pdc_info = {
+				"pdc_id": pdc_id,
+				"score": score,
+				"position": pdc.mount_position,
+				"current_rotation": pdc.current_rotation
+			}
+			
 			if score > 0.0:
-				available_pdcs.append({"pdc_id": pdc_id, "score": score})
+				available_pdcs.append(pdc_info)
+				assignment_data.available_pdcs.append(pdc_info)
+			else:
+				assignment_data.rejected_pdcs.append(pdc_info)
 	
+	# Sort by best score first
 	available_pdcs.sort_custom(func(a, b): return a.score > b.score)
 	
+	# Assign the best PDCs up to the needed count
 	for i in range(min(pdcs_needed, available_pdcs.size())):
 		var pdc_id = available_pdcs[i].pdc_id
 		pdc_assignments[pdc_id] = target_data.target_id
@@ -389,7 +433,8 @@ func assign_pdcs_to_target(target_data: TargetData, pdcs_needed: int) -> Array:
 	
 	return assigned
 
-func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
+func score_pdc_for_target_silent(pdc: Node2D, target_data: TargetData) -> float:
+	"""Silent scoring for normal operation"""
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
 	var required_angle = to_intercept.angle()
@@ -458,68 +503,80 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	return relative_angle
 
 func remove_target(target_id: String):
-	if tracked_targets.has(target_id):
-		var target_data = tracked_targets[target_id]
+	"""Process a torpedo that EntityManager says no longer exists - SIMPLIFIED"""
+	if not tracked_targets.has(target_id):
+		return
+	
+	var target_data = tracked_targets[target_id]
+	var distance_to_ship = target_data.last_position.distance_to(parent_ship.global_position)
+	var distance_meters = distance_to_ship * WorldSettings.meters_per_pixel
+	var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+	
+	# SIMPLIFIED LOGIC: Only two possible outcomes
+	# 1. PDCs were shooting at it when it disappeared = INTERCEPT
+	# 2. PDCs were not shooting at it when it disappeared = TORPEDO HIT
+	
+	var was_successful_intercept = (target_data.assigned_pdcs.size() > 0)
+	var outcome_reason = ""
+	
+	if was_successful_intercept:
+		outcome_reason = "PDC_INTERCEPT"
+		successful_intercepts += 1
+		battle_stats.total_torpedoes_intercepted += 1
 		
-		var distance_to_ship = target_data.last_position.distance_to(parent_ship.global_position)
-		var distance_meters = distance_to_ship * WorldSettings.meters_per_pixel
+		# COMMENTED OUT: Individual intercept spam
+		# print("Torpedo %s: INTERCEPTED by %d PDCs at %.2f km" % [
+		#	target_id.substr(8, 7), target_data.assigned_pdcs.size(), distance_meters / 1000.0
+		# ])
+	else:
+		outcome_reason = "TORPEDO_HIT"
+		battle_stats.total_torpedoes_missed += 1
 		
-		var was_successful_intercept = false
-		var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+		# Track closest hit for statistics
+		if target_data.closest_approach_distance < battle_stats.closest_miss_distance:
+			battle_stats.closest_miss_distance = target_data.closest_approach_distance
 		
-		# Determine if this was a successful intercept or miss
-		if target_data.time_to_impact > 0.5 and distance_meters > 100.0 and target_data.assigned_pdcs.size() > 0:
-			was_successful_intercept = true
-			successful_intercepts += 1
-			battle_stats.total_torpedoes_intercepted += 1
-		else:
-			battle_stats.total_torpedoes_missed += 1
-			# Track closest miss for statistics
-			if target_data.closest_approach_distance < battle_stats.closest_miss_distance:
-				battle_stats.closest_miss_distance = target_data.closest_approach_distance
-		
-		# Enhanced intercept logging
-		var log_entry = {
-			"target_id": target_id,
-			"outcome": "intercepted" if was_successful_intercept else "missed",
-			"intercept_distance_km": distance_meters / 1000.0,
-			"closest_approach_km": target_data.closest_approach_distance / 1000.0,
-			"initial_distance_km": target_data.initial_distance / 1000.0,
-			"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
-			"engagement_duration": engagement_duration,
-			"rounds_fired": target_data.rounds_fired_at_target
-		}
-		intercept_log.append(log_entry)
-		
-		# Update torpedo tracking
-		if torpedo_tracking.has(target_id):
-			torpedo_tracking[target_id].outcome = "intercepted" if was_successful_intercept else "missed"
-			torpedo_tracking[target_id].intercept_distance_km = distance_meters / 1000.0
-			torpedo_tracking[target_id].engagement_duration = engagement_duration
-		
-		# Stop all PDCs assigned to this target
-		for pdc_id in target_data.assigned_pdcs:
-			if registered_pdcs.has(pdc_id):
-				var pdc = registered_pdcs[pdc_id]
-				pdc.stop_firing()
-				pdc_assignments[pdc_id] = ""
-		
-		# COMMENTED OUT: Individual engagement spam
-		# if debug_enabled:
-		#	print("FCM: %s %s (%.1fs, %d PDCs)" % [
-		#		target_id.substr(0, 15),
-		#		"SUCCESS" if was_successful_intercept else "FAILED",
-		#		engagement_duration,
-		#		target_data.assigned_pdcs.size()
-		#	])
-		
-		tracked_targets.erase(target_id)
-		if target_assignments.has(target_id):
-			target_assignments.erase(target_id)
-		
-		var index = target_priorities.find(target_id)
-		if index >= 0:
-			target_priorities.remove_at(index)
+		# ONLY print ship hits (these are important)
+		print("🚨 Torpedo %s: HIT SHIP at %.2f km" % [
+			target_id.substr(8, 7), distance_meters / 1000.0
+		])
+	
+	# Create log entry
+	var log_entry = {
+		"target_id": target_id,
+		"outcome": "intercepted" if was_successful_intercept else "hit_ship",
+		"intercept_distance_km": distance_meters / 1000.0,
+		"closest_approach_km": target_data.closest_approach_distance / 1000.0,
+		"initial_distance_km": target_data.initial_distance / 1000.0,
+		"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
+		"engagement_duration": engagement_duration,
+		"rounds_fired": target_data.rounds_fired_at_target,
+		"removal_reason": outcome_reason,
+		"entity_manager_confirmed": true
+	}
+	intercept_log.append(log_entry)
+	
+	# Update torpedo tracking
+	if torpedo_tracking.has(target_id):
+		torpedo_tracking[target_id].outcome = "intercepted" if was_successful_intercept else "hit_ship"
+		torpedo_tracking[target_id].intercept_distance_km = distance_meters / 1000.0
+		torpedo_tracking[target_id].engagement_duration = engagement_duration
+	
+	# Stop all PDCs assigned to this target
+	for pdc_id in target_data.assigned_pdcs:
+		if registered_pdcs.has(pdc_id):
+			var pdc = registered_pdcs[pdc_id]
+			pdc.stop_firing()
+			pdc_assignments[pdc_id] = ""
+	
+	# Clean up tracking
+	tracked_targets.erase(target_id)
+	if target_assignments.has(target_id):
+		target_assignments.erase(target_id)
+	
+	var index = target_priorities.find(target_id)
+	if index >= 0:
+		target_priorities.remove_at(index)
 
 func update_battle_stats():
 	# Update total rounds fired from all PDCs
@@ -741,16 +798,7 @@ func print_comprehensive_battle_summary():
 	print("=".repeat(60))
 	print("")
 
-# COMMENTED OUT: Verbose debug function
-# func print_debug_summary():
-#	var active_targets = tracked_targets.size()
-#	var engaged_pdcs = get_busy_pdc_count()
-#	if active_targets > 0:
-#		print("FCM: %d targets, %d/%d PDCs engaged" % [
-#			active_targets, engaged_pdcs, registered_pdcs.size()
-#		])
-
-# Utility functions remain the same
+# Utility functions
 func get_available_pdc_count() -> int:
 	var count = 0
 	for pdc_id in pdc_assignments:
@@ -807,3 +855,58 @@ func get_battle_stats() -> Dictionary:
 
 func reset_for_new_battle():
 	start_battle_session()
+
+func analyze_assignment_patterns_detailed(assignment_debug: Array):
+	"""Full detailed analysis - runs only once"""
+	print("\n🔍 === DETAILED ASSIGNMENT ANALYSIS ===")
+	
+	# PDC assignment statistics
+	var pdc_stats = {}
+	for pdc_id in registered_pdcs:
+		pdc_stats[pdc_id] = {"assignments": 0, "rejections": 0, "total_score": 0.0, "score_count": 0}
+	
+	# Analyze all assignment decisions
+	for data in assignment_debug:
+		for assigned_pdc in data.assigned_pdcs:
+			pdc_stats[assigned_pdc].assignments += 1
+		for rejected_pdc in data.rejected_pdcs:
+			pdc_stats[rejected_pdc.pdc_id].rejections += 1
+		for available_pdc in data.available_pdcs:
+			var pdc_id = available_pdc.pdc_id
+			pdc_stats[pdc_id].total_score += available_pdc.score
+			pdc_stats[pdc_id].score_count += 1
+	
+	# Print detailed analysis
+	print("📊 PDC ASSIGNMENT PERFORMANCE:")
+	for pdc_id in pdc_stats:
+		var stats = pdc_stats[pdc_id]
+		var avg_score = stats.total_score / max(stats.score_count, 1)
+		print("  %s: %d assigned, %d rejected, avg score: %.3f" % [
+			pdc_id.substr(4, 8), stats.assignments, stats.rejections, avg_score
+		])
+		
+		if stats.assignments == 0 and stats.rejections > 50:
+			print("    🚨 NEVER ASSIGNED - Always rejected!")
+		elif avg_score < 0.1:
+			print("    ⚠️ Low scores - geometry/timing issues?")
+	
+	# Side bias analysis
+	var left_assignments = 0
+	var right_assignments = 0
+	for pdc_id in pdc_stats:
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.mount_position.x < 0:
+			left_assignments += pdc_stats[pdc_id].assignments
+		else:
+			right_assignments += pdc_stats[pdc_id].assignments
+	
+	print("\n🧠 SIDE BIAS ANALYSIS:")
+	print("  Left side PDCs: %d assignments" % left_assignments)
+	print("  Right side PDCs: %d assignments" % right_assignments)
+	
+	if left_assignments < right_assignments * 0.3:
+		print("  🚨 MAJOR BIAS: Left side severely underutilized!")
+	elif right_assignments < left_assignments * 0.3:
+		print("  🚨 MAJOR BIAS: Right side severely underutilized!")
+	
+	print("=== END DETAILED ANALYSIS ===\n")
