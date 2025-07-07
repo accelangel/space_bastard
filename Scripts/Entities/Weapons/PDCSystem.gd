@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED FIRING DIRECTION
+# Scripts/Entities/Weapons/PDCSystem.gd - CLEANED UP DEBUG VERSION
 extends Node2D
 
 # PDC Hardware Configuration
@@ -42,12 +42,13 @@ var targets_missed: int = 0
 var last_fire_time: float = 0.0
 
 # MINIMAL DEBUG SYSTEM
-@export var debug_enabled: bool = false
+@export var debug_enabled: bool = true  # Disabled by default
 var debug_bullet_count: int = 0
 
 # FIXED ORIENTATION CONSTANTS
 const SPRITE_POINTS_UP: bool = true
 const IDLE_FACES_SHIP_FORWARD: bool = true
+const COORDINATE_CORRECTION: float = PI
 
 func _ready():
 	parent_ship = get_parent()
@@ -56,8 +57,13 @@ func _ready():
 	pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
 	set_idle_rotation()
 	
+	# Minimal initialization log
 	if debug_enabled:
 		print("PDC %s initialized" % pdc_id.substr(4, 8))
+	
+	# DEBUG: Print exact PDC ID for comparison
+	if position.x < 0:  # Only for problem PDCs
+		print("🔍 PROBLEM PDC ID: '%s' at position %s" % [pdc_id, position])
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -86,6 +92,14 @@ func set_idle_rotation():
 	update_sprite_rotation()
 
 func _physics_process(delta):
+	# ADD THIS DEBUG LINE
+	if debug_enabled and is_firing and debug_bullet_count < 10:
+		print("PDC %s firing at target: %s (assigned by: %s)" % [
+			pdc_id.substr(4, 8), 
+			current_target_id.substr(8, 7) if current_target_id != "" else "NONE",
+			"FireControl" if fire_control_manager else "UNKNOWN"
+		])
+	
 	update_turret_rotation(delta)
 	handle_firing(delta)
 
@@ -112,14 +126,20 @@ func update_sprite_rotation():
 	if not rotation_pivot and not sprite:
 		return
 	
-	# FIXED: Use current_rotation directly for sprite rotation
-	# The FireControlManager already calculates the correct ship-relative angle
-	var sprite_rotation = current_rotation
+	var sprite_rotation = calculate_sprite_rotation()
 	
 	if rotation_pivot:
 		rotation_pivot.rotation = sprite_rotation
 	elif sprite:
 		sprite.rotation = sprite_rotation
+
+func calculate_sprite_rotation() -> float:
+	var base_rotation = current_rotation
+	
+	if SPRITE_POINTS_UP:
+		return base_rotation + COORDINATE_CORRECTION
+	else:
+		return base_rotation + PI/2 + COORDINATE_CORRECTION
 
 func handle_firing(delta):
 	var should_fire = (
@@ -144,10 +164,8 @@ func handle_firing(delta):
 			stop_firing()
 
 func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
-	# FIXED: The FireControlManager already calculated the correct ship-relative angle
-	# Don't apply additional corrections here
 	current_target_id = target_id
-	target_rotation = target_angle
+	target_rotation = target_angle - PI/2  # Apply -90° correction
 	emergency_slew = is_emergency
 	fire_authorized = false
 	current_status = "TRACKING"
@@ -180,7 +198,8 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# COMPLETELY REWRITTEN fire_bullet() function to fix the direction bug
+# Replace the existing fire_bullet() function with this enhanced version:
+
 func fire_bullet():
 	if not bullet_scene:
 		return
@@ -192,21 +211,33 @@ func fire_bullet():
 	
 	debug_bullet_count += 1
 	
-	# FIXED FIRING DIRECTION CALCULATION
-	# The current_rotation is already the correct ship-relative angle from FireControlManager
-	# Convert it to world space by adding the ship's rotation
-	var world_firing_angle = current_rotation + parent_ship.rotation
-	var fire_direction = Vector2.from_angle(world_firing_angle)
+	# CORRECTED FIRE DIRECTION
+	var current_rotation_for_firing = current_rotation - PI/2
+	var world_angle = current_rotation_for_firing + parent_ship.rotation
+	var fire_direction = Vector2.from_angle(world_angle)
+	
+	if debug_enabled and pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"]:
+		print("🔍 DEBUG CHECK: PDC %s should show diagnostic (bullet #%d)" % [pdc_id.substr(4, 8), debug_bullet_count])
+		
 	
 	# ENHANCED DIAGNOSTIC for problem PDCs
-	if debug_enabled and pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"] and debug_bullet_count <= 3:
-		print("\n🎯 FIRING SOLUTION DEBUG - PDC %s:" % pdc_id.substr(4, 8))
-		print("  World firing angle: %.1f°" % rad_to_deg(world_firing_angle))
-		print("  Required PDC angle: %.1f°" % rad_to_deg(target_rotation))
-		
+	if debug_enabled and pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"] and debug_bullet_count <= 5:
 		print("\n🔫 BULLET FIRING DEBUG - PDC %s (Bullet #%d):" % [pdc_id.substr(4, 8), debug_bullet_count])
-		print("  World firing angle: %.1f°" % rad_to_deg(world_firing_angle))
-		print("  Fire direction vector: (%.4f, %.4f)" % [fire_direction.x, fire_direction.y])
+		print("  Mount position: %s" % mount_position)
+		print("  Muzzle world position: %s" % get_muzzle_world_position())
+		print("  Current PDC rotation: %.1f°" % rad_to_deg(current_rotation))
+		print("  Firing rotation calc: %.1f°" % rad_to_deg(current_rotation_for_firing))
+		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+		print("  World firing angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Fire direction vector: %s" % fire_direction)
+		print("  Target: %s" % current_target_id.substr(8, 7))
+		
+		# Verify the fire direction makes sense
+		var angle_magnitude = abs(rad_to_deg(world_angle))
+		if angle_magnitude > 360:
+			print("  ⚠️ WARNING: Extreme firing angle detected!")
+		else:
+			print("  ✓ Firing angle within normal range")
 	
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
@@ -301,3 +332,15 @@ func reset_battle_stats():
 	targets_hit = 0
 	targets_missed = 0
 	debug_bullet_count = 0
+
+# COMMENTED OUT: Debug utilities (can be re-enabled if needed)
+# func print_comprehensive_debug():
+#	print("PDC %s: %s | Target: %s | Rounds: %d" % [
+#		pdc_id.substr(4, 8), current_status, 
+#		current_target_id.substr(8, 7) if current_target_id != "" else "None",
+#		rounds_fired
+#	])
+
+# func force_fire_test_bullet():
+#	print("Test bullet fired from PDC %s" % pdc_id.substr(4, 8))
+#	fire_bullet()

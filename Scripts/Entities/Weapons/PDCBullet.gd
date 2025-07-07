@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - FIXED BULLET ORIENTATION
+# Scripts/Entities/Weapons/PDCBullet.gd - FIXED VERSION
 extends Area2D
 class_name PDCBullet
 
@@ -22,10 +22,11 @@ func _ready():
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
-	# Set rotation to match velocity - FIXED
+	# Set rotation to match velocity
 	if velocity.length() > 0:
-		# FIXED: Simple angle calculation without random offsets
-		rotation = velocity.angle()
+		# Try different offsets to match your sprite orientation
+		# Start with PI (180 degrees) since you mentioned it's shooting backwards
+		rotation = velocity.angle() +3*PI/2 # I have tried + PI, PI/2, - PI/2, nothing changes, it just shoots backwards!!!
 
 func _physics_process(delta):
 	# Move bullet
@@ -61,8 +62,8 @@ func is_hostile_to(other: Node) -> bool:
 func set_velocity(new_velocity: Vector2):
 	velocity = new_velocity
 	if velocity.length() > 0:
-		# FIXED: Simple angle calculation
-		rotation = velocity.angle()
+		# Apply the same offset here
+		rotation = velocity.angle() +3*PI/2 # I have tried + PI, PI/2, - PI/2, nothing changes, it just shoots backwards!!!
 
 func set_faction(new_faction: String):
 	faction = new_faction
