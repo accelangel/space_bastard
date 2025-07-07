@@ -1,4 +1,4 @@
-# Scripts/Managers/EntityManager.gd - SIMPLIFIED VERSION
+# Scripts/Managers/EntityManager.gd - CLEANED VERSION
 extends Node
 
 # Core entity tracking
@@ -11,6 +11,11 @@ var update_timer: float = 0.0
 
 # Map boundaries for auto-cleanup
 var map_bounds: Rect2
+
+# DEBUG CONTROL - Much more limited
+@export var debug_enabled: bool = false  # Disabled by default
+var debug_timer: float = 0.0
+var debug_interval: float = 30.0  # Only log every 30 seconds
 
 class EntityData:
 	var entity_id: String
@@ -33,8 +38,9 @@ func _ready():
 	var half_size = WorldSettings.map_size_pixels / 2
 	map_bounds = Rect2(-half_size.x, -half_size.y, WorldSettings.map_size_pixels.x, WorldSettings.map_size_pixels.y)
 	
-	print("EntityManager initialized (Simplified)")
-	print("Map bounds: ", map_bounds)
+	print("EntityManager initialized")
+	# COMMENTED OUT: Detailed map bounds spam
+	# print("Map bounds: ", map_bounds)
 
 func _physics_process(delta):
 	update_timer += delta
@@ -61,6 +67,13 @@ func _physics_process(delta):
 		
 		# Clean up out-of-bounds entities
 		cleanup_out_of_bounds()
+		
+		# Periodic debug output (much less frequent)
+		if debug_enabled:
+			debug_timer += delta
+			if debug_timer >= debug_interval:
+				debug_timer = 0.0
+				print_debug_summary()
 
 func register_entity(node: Node2D, type: String, faction: String) -> String:
 	entity_id_counter += 1
@@ -69,7 +82,8 @@ func register_entity(node: Node2D, type: String, faction: String) -> String:
 	var entity_data = EntityData.new(entity_id, node, type, faction)
 	entities[entity_id] = entity_data
 	
-	#print("Registered entity: ", entity_id, " (", type, ", ", faction, ")")
+	# COMMENTED OUT: Registration spam
+	# print("Registered entity: ", entity_id, " (", type, ", ", faction, ")")
 	return entity_id
 
 func update_entity_position(entity_id: String, new_position: Vector2):
@@ -79,7 +93,8 @@ func update_entity_position(entity_id: String, new_position: Vector2):
 
 func unregister_entity(entity_id: String):
 	if entities.has(entity_id):
-		#print("Unregistered entity: ", entity_id)
+		# COMMENTED OUT: Unregistration spam
+		# print("Unregistered entity: ", entity_id)
 		entities.erase(entity_id)
 
 func cleanup_out_of_bounds():
@@ -95,7 +110,8 @@ func cleanup_out_of_bounds():
 		
 		# Check if out of bounds
 		if not map_bounds.has_point(entity_data.position):
-			#print("Entity out of bounds, removing: ", entity_id)
+			# COMMENTED OUT: Out of bounds spam
+			# print("Entity out of bounds, removing: ", entity_id)
 			if entity_data.node_ref:
 				entity_data.node_ref.queue_free()
 			to_remove.append(entity_id)
@@ -103,6 +119,17 @@ func cleanup_out_of_bounds():
 	# Remove invalid entities
 	for entity_id in to_remove:
 		entities.erase(entity_id)
+
+func print_debug_summary():
+	"""Print periodic debug summary (much less frequent)"""
+	var type_counts = {}
+	for entity_data in entities.values():
+		if type_counts.has(entity_data.entity_type):
+			type_counts[entity_data.entity_type] += 1
+		else:
+			type_counts[entity_data.entity_type] = 1
+	
+	print("EntityManager: %d total entities - %s" % [entities.size(), type_counts])
 
 func get_all_entities() -> Array:
 	var result = []
@@ -126,4 +153,4 @@ func get_debug_info() -> String:
 		else:
 			type_counts[entity_data.entity_type] = 1
 	
-	return "Entities: %d total | %s" % [entities.size(), type_counts]
+	return "Entities: %d total" % entities.size()  # Simplified output

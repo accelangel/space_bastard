@@ -1,13 +1,12 @@
-# Scripts/Systems/FireControlManager.gd - ENHANCED WITH BATTLE TRACKING
+# Scripts/Systems/FireControlManager.gd - ENHANCED WITH DETAILED BATTLE STATISTICS
 extends Node2D
 class_name FireControlManager
 
-# DEBUG CONTROL
-@export var debug_enabled: bool = true
+# DEBUG CONTROL - Much more limited
+@export var debug_enabled: bool = false  # Disabled by default
 @export var debug_verbose: bool = false
-@export var debug_interval: float = 2.0
+@export var debug_interval: float = 10.0  # Less frequent updates
 var debug_timer: float = 0.0
-var last_target_count: int = 0
 
 # System configuration
 @export var engagement_range_meters: float = 15000.0
@@ -42,26 +41,32 @@ var ship_forward_direction: Vector2 = Vector2.UP
 var update_interval: float = 0.05
 var update_timer: float = 0.0
 
-# NEW: Battle Statistics Tracking
+# ENHANCED BATTLE STATISTICS SYSTEM
 var battle_stats: Dictionary = {
 	"battle_start_time": 0.0,
+	"battle_end_time": 0.0,
+	"battle_duration": 0.0,
 	"total_torpedoes_detected": 0,
 	"total_torpedoes_intercepted": 0,
 	"total_torpedoes_missed": 0,
 	"total_rounds_fired": 0,
 	"successful_intercepts": 0,
 	"failed_intercepts": 0,
-	"battle_active": false
+	"battle_active": false,
+	"intercept_rate": 0.0,
+	"closest_miss_distance": INF
 }
 
-var torpedo_tracking: Dictionary = {}  # Track individual torpedo outcomes
-var intercept_log: Array = []  # Detailed log of each intercept attempt
+# Detailed torpedo tracking for individual statistics
+var torpedo_tracking: Dictionary = {}
+var intercept_log: Array = []
+var battle_summary_printed: bool = false
 
 # Statistics
 var total_engagements: int = 0
 var successful_intercepts: int = 0
 
-# Target data structure
+# Enhanced target data structure with detailed tracking
 class TargetData:
 	var target_id: String
 	var node_ref: Node2D
@@ -75,7 +80,10 @@ class TargetData:
 	var engagement_start_time: float
 	var is_critical: bool = false
 	var distance_meters: float = 0.0
-	var first_detected_time: float = 0.0  # NEW: For tracking
+	var first_detected_time: float = 0.0
+	var initial_distance: float = 0.0
+	var closest_approach_distance: float = INF
+	var rounds_fired_at_target: int = 0
 
 func _ready():
 	parent_ship = get_parent()
@@ -84,13 +92,10 @@ func _ready():
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
 		if "faction" in parent_ship:
 			ship_faction = parent_ship.faction
-		
 		discover_pdcs()
 	
-	# Initialize battle tracking
 	start_battle_session()
-	
-	print("FireControlManager initialized with ", registered_pdcs.size(), " PDCs")
+	print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
 
 func start_battle_session():
 	battle_stats.battle_start_time = Time.get_ticks_msec() / 1000.0
@@ -101,11 +106,12 @@ func start_battle_session():
 	battle_stats.total_rounds_fired = 0
 	battle_stats.successful_intercepts = 0
 	battle_stats.failed_intercepts = 0
+	battle_stats.closest_miss_distance = INF
+	battle_summary_printed = false
 	
 	torpedo_tracking.clear()
 	intercept_log.clear()
 	
-	# Reset PDC stats
 	for pdc in registered_pdcs.values():
 		if pdc.has_method("reset_battle_stats"):
 			pdc.reset_battle_stats()
@@ -113,30 +119,21 @@ func start_battle_session():
 	print("=== BATTLE SESSION STARTED ===")
 
 func discover_pdcs():
-	print("FCM: Discovering PDCs on ship...")
 	for child in parent_ship.get_children():
 		if child.has_method("get_capabilities"):
 			register_pdc(child)
-			print("FCM: Found PDC: ", child.name)
 
 func register_pdc(pdc_node: Node2D):
 	var pdc_id = pdc_node.pdc_id
 	registered_pdcs[pdc_id] = pdc_node
 	pdc_assignments[pdc_id] = ""
 	pdc_node.set_fire_control_manager(self)
-	print("Registered PDC: ", pdc_id)
 
 func _physics_process(delta):
 	if not sensor_system:
 		return
 	
 	ship_forward_direction = Vector2.UP.rotated(parent_ship.rotation)
-	
-	if debug_enabled:
-		debug_timer += delta
-		if debug_timer >= debug_interval:
-			debug_timer = 0.0
-			print_debug_summary()
 	
 	update_timer += delta
 	if update_timer < update_interval:
@@ -148,65 +145,17 @@ func _physics_process(delta):
 	assess_all_threats()
 	optimize_pdc_assignments()
 	execute_fire_missions()
-	
-	# Update battle statistics
 	update_battle_stats()
-
-func print_debug_summary():
-	var active_targets = tracked_targets.size()
-	var engaged_pdcs = get_busy_pdc_count()
-	var critical_count = 0
-	var in_range_count = 0
-	
-	for target_data in tracked_targets.values():
-		if target_data.is_critical:
-			critical_count += 1
-		if target_data.distance_meters <= engagement_range_meters:
-			in_range_count += 1
-	
-	print("\n=== FCM STATUS ===")
-	print("Targets: %d tracked (%d critical, %d in range)" % [active_targets, critical_count, in_range_count])
-	print("PDCs: %d/%d engaged" % [engaged_pdcs, registered_pdcs.size()])
-	
-	# NEW: Battle stats in debug
-	print("Battle Stats: %d detected, %d intercepted, %d missed" % [
-		int(battle_stats.total_torpedoes_detected),
-		int(battle_stats.total_torpedoes_intercepted), 
-		int(battle_stats.total_torpedoes_missed)
-	])
-	
-	for pdc_id in registered_pdcs:
-		var pdc = registered_pdcs[pdc_id]
-		var target_id = pdc_assignments[pdc_id]
-		if target_id != "":
-			var status = pdc.get_status()
-			print("  %s -> %s (rot: %.1f°, error: %.1f°)" % [
-				pdc_id, 
-				target_id.substr(0, 15),
-				rad_to_deg(status.current_rotation),
-				rad_to_deg(status.tracking_error)
-			])
-	
-	if target_priorities.size() > 0:
-		print("Top threats:")
-		for i in range(min(3, target_priorities.size())):
-			var target_id = target_priorities[i]
-			var data = tracked_targets[target_id]
-			print("  %s: %.1fs TTI, %.1fkm, score: %.2f" % [
-				target_id.substr(0, 15),
-				data.time_to_impact,
-				data.distance_meters / 1000.0,
-				data.priority_score
-			])
-	print("==================\n")
+	check_battle_end()
 
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	if debug_enabled and current_torpedoes.size() != last_target_count:
-		if current_torpedoes.size() > last_target_count:
-			print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
-		last_target_count = current_torpedoes.size()
+	# COMMENTED OUT: Frequent torpedo detection spam
+	# if debug_enabled and current_torpedoes.size() != last_target_count:
+	#	if current_torpedoes.size() > last_target_count:
+	#		print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
+	#	last_target_count = current_torpedoes.size()
 	
 	# Update existing targets
 	var targets_to_remove = []
@@ -234,23 +183,29 @@ func add_new_target(torpedo: Node2D):
 	target_data.target_id = get_torpedo_id(torpedo)
 	target_data.node_ref = torpedo
 	target_data.engagement_start_time = Time.get_ticks_msec() / 1000.0
-	target_data.first_detected_time = target_data.engagement_start_time  # NEW
+	target_data.first_detected_time = target_data.engagement_start_time
+	
+	# Calculate initial distance
+	var initial_distance_pixels = torpedo.global_position.distance_to(parent_ship.global_position)
+	target_data.initial_distance = initial_distance_pixels * WorldSettings.meters_per_pixel
+	target_data.closest_approach_distance = target_data.initial_distance
 	
 	update_target_data(target_data)
 	tracked_targets[target_data.target_id] = target_data
 	total_engagements += 1
 	
-	# NEW: Track new torpedo detection
-	battle_stats.total_torpedoes_detected = int(battle_stats.total_torpedoes_detected) + 1
+	# Enhanced torpedo tracking
+	battle_stats.total_torpedoes_detected += 1
 	torpedo_tracking[target_data.target_id] = {
 		"detected_time": target_data.first_detected_time,
+		"initial_distance_km": target_data.initial_distance / 1000.0,
 		"status": "tracking",
 		"assigned_pdcs": [],
-		"outcome": "unknown"
+		"outcome": "unknown",
+		"closest_approach_km": target_data.initial_distance / 1000.0,
+		"intercept_distance_km": 0.0,
+		"engagement_duration": 0.0
 	}
-	
-	if debug_verbose:
-		print("FCM: Added new target: %s at %.1f km" % [target_data.target_id, target_data.distance_meters / 1000.0])
 
 func update_target_data(target_data: TargetData):
 	var torpedo = target_data.node_ref
@@ -261,6 +216,14 @@ func update_target_data(target_data: TargetData):
 	var relative_pos = target_data.last_position - ship_pos
 	var relative_vel = target_data.last_velocity - get_ship_velocity()
 	target_data.distance_meters = relative_pos.length() * WorldSettings.meters_per_pixel
+	
+	# Track closest approach
+	if target_data.distance_meters < target_data.closest_approach_distance:
+		target_data.closest_approach_distance = target_data.distance_meters
+		
+		# Update torpedo tracking
+		if torpedo_tracking.has(target_data.target_id):
+			torpedo_tracking[target_data.target_id].closest_approach_km = target_data.distance_meters / 1000.0
 	
 	var closing_speed = -relative_vel.dot(relative_pos.normalized())
 	if closing_speed > 0:
@@ -277,6 +240,7 @@ func update_target_data(target_data: TargetData):
 	
 	target_data.is_critical = target_data.time_to_impact < critical_time_threshold and target_data.distance_meters <= engagement_range_meters
 
+# [Previous calculation functions remain the same - calculate_intercept_point, calculate_intercept_feasibility, etc.]
 func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel = get_torpedo_velocity(torpedo) / WorldSettings.meters_per_pixel
@@ -399,7 +363,6 @@ func optimize_pdc_assignments():
 			target_assignments[target_id] = assigned_pdcs
 			target_data.assigned_pdcs = assigned_pdcs
 			
-			# Update torpedo tracking
 			if torpedo_tracking.has(target_id):
 				torpedo_tracking[target_id].assigned_pdcs = assigned_pdcs
 				torpedo_tracking[target_id].status = "engaged"
@@ -470,9 +433,6 @@ func execute_fire_missions():
 			
 			if pdc.is_aimed():
 				pdc.authorize_firing()
-				
-				if debug_verbose:
-					print("FCM: Authorized PDC %s to fire on %s" % [pdc_id, target_id])
 
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
@@ -509,34 +469,37 @@ func remove_target(target_id: String):
 		var distance_meters = distance_to_ship * WorldSettings.meters_per_pixel
 		
 		var was_successful_intercept = false
+		var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
+		
+		# Determine if this was a successful intercept or miss
 		if target_data.time_to_impact > 0.5 and distance_meters > 100.0 and target_data.assigned_pdcs.size() > 0:
 			was_successful_intercept = true
 			successful_intercepts += 1
-			battle_stats.total_torpedoes_intercepted = int(battle_stats.total_torpedoes_intercepted) + 1
-			
-			# Log successful intercept
-			intercept_log.append({
-				"target_id": target_id,
-				"outcome": "intercepted",
-				"distance_meters": distance_meters,
-				"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
-				"engagement_time": (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
-			})
+			battle_stats.total_torpedoes_intercepted += 1
 		else:
-			battle_stats.total_torpedoes_missed = int(battle_stats.total_torpedoes_missed) + 1
-			
-			# Log missed intercept
-			intercept_log.append({
-				"target_id": target_id,
-				"outcome": "missed",
-				"distance_meters": distance_meters,
-				"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
-				"engagement_time": (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
-			})
+			battle_stats.total_torpedoes_missed += 1
+			# Track closest miss for statistics
+			if target_data.closest_approach_distance < battle_stats.closest_miss_distance:
+				battle_stats.closest_miss_distance = target_data.closest_approach_distance
+		
+		# Enhanced intercept logging
+		var log_entry = {
+			"target_id": target_id,
+			"outcome": "intercepted" if was_successful_intercept else "missed",
+			"intercept_distance_km": distance_meters / 1000.0,
+			"closest_approach_km": target_data.closest_approach_distance / 1000.0,
+			"initial_distance_km": target_data.initial_distance / 1000.0,
+			"assigned_pdcs": target_data.assigned_pdcs.duplicate(),
+			"engagement_duration": engagement_duration,
+			"rounds_fired": target_data.rounds_fired_at_target
+		}
+		intercept_log.append(log_entry)
 		
 		# Update torpedo tracking
 		if torpedo_tracking.has(target_id):
 			torpedo_tracking[target_id].outcome = "intercepted" if was_successful_intercept else "missed"
+			torpedo_tracking[target_id].intercept_distance_km = distance_meters / 1000.0
+			torpedo_tracking[target_id].engagement_duration = engagement_duration
 		
 		# Stop all PDCs assigned to this target
 		for pdc_id in target_data.assigned_pdcs:
@@ -545,15 +508,14 @@ func remove_target(target_id: String):
 				pdc.stop_firing()
 				pdc_assignments[pdc_id] = ""
 		
-		var engagement_duration = (Time.get_ticks_msec() / 1000.0) - target_data.engagement_start_time
-		
-		if debug_enabled:
-			print("FCM: Engagement Summary - %s: %s (%.1fs duration, %d PDCs)" % [
-				target_id.substr(0, 15),
-				"SUCCESS" if was_successful_intercept else "FAILED",
-				engagement_duration,
-				target_data.assigned_pdcs.size()
-			])
+		# COMMENTED OUT: Individual engagement spam
+		# if debug_enabled:
+		#	print("FCM: %s %s (%.1fs, %d PDCs)" % [
+		#		target_id.substr(0, 15),
+		#		"SUCCESS" if was_successful_intercept else "FAILED",
+		#		engagement_duration,
+		#		target_data.assigned_pdcs.size()
+		#	])
 		
 		tracked_targets.erase(target_id)
 		if target_assignments.has(target_id):
@@ -563,78 +525,235 @@ func remove_target(target_id: String):
 		if index >= 0:
 			target_priorities.remove_at(index)
 
-# NEW: Battle statistics management
 func update_battle_stats():
 	# Update total rounds fired from all PDCs
 	var total_rounds = 0
 	for pdc in registered_pdcs.values():
 		if pdc.has_method("get_battle_stats"):
 			var pdc_stats = pdc.get_battle_stats()
-			total_rounds += int(pdc_stats.rounds_fired)
+			total_rounds += pdc_stats.rounds_fired
 	
 	battle_stats.total_rounds_fired = total_rounds
+	
+	# Calculate intercept rate
+	var total_resolved = battle_stats.total_torpedoes_intercepted + battle_stats.total_torpedoes_missed
+	if total_resolved > 0:
+		battle_stats.intercept_rate = (float(battle_stats.total_torpedoes_intercepted) / float(total_resolved)) * 100.0
 
-func report_successful_intercept(pdc_id: String, target_id: String):
+func report_successful_intercept(pdc_id: String, _target_id: String):
 	"""Called by PDCs when they successfully hit a target"""
-	battle_stats.successful_intercepts = int(battle_stats.successful_intercepts) + 1
+	battle_stats.successful_intercepts += 1
 	
-	if debug_enabled:
-		print("FCM: PDC %s reported successful hit on %s" % [pdc_id, target_id])
+	# Update the specific PDC's hit count in our tracking
+	if registered_pdcs.has(pdc_id):
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.has_method("get_battle_stats"):
+			# The PDC already incremented its own hit count, so we're good
+			pass
 
-func print_battle_summary():
-	"""Print comprehensive battle results"""
-	var battle_duration = (Time.get_ticks_msec() / 1000.0) - battle_stats.battle_start_time
+func check_battle_end():
+	"""Check if battle should auto-end and print comprehensive summary"""
+	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	print("\n==================================================")
-	print("         BATTLE SESSION SUMMARY")
-	print("==================================================")
-	print("Duration: %.1f seconds" % battle_duration)
-	
-	# TEMPORARILY DISABLED - Godot string formatting bug
-	# TODO: Re-enable once string issue is resolved
-	print("Battle complete - check console for basic stats")
-	
-	# print("Torpedoes Detected: %d" % int(battle_stats.total_torpedoes_detected))
-	# print("Torpedoes Intercepted: %d" % int(battle_stats.total_torpedoes_intercepted))
-	# print("Torpedoes Missed: %d" % int(battle_stats.total_torpedoes_missed))
-	# print("Total Rounds Fired: %d" % int(battle_stats.total_rounds_fired))
-	
-	# var intercept_rate = 0.0
-	# var detected_count = int(battle_stats.total_torpedoes_detected)
-	# if detected_count > 0:
-	#	intercept_rate = (float(battle_stats.total_torpedoes_intercepted) / float(detected_count)) * 100.0
-	# print("Intercept Success Rate: %.1f%%" % intercept_rate)
-	
-	# print("\nPDC Performance:")
-	# for pdc_id in registered_pdcs:
-	#	var pdc = registered_pdcs[pdc_id]
-	#	if pdc.has_method("get_battle_stats"):
-	#		var stats = pdc.get_battle_stats()
-	#		print("  PDC: %d rounds, %d hits" % [stats.rounds_fired, stats.targets_hit])
-	
-	# print("\nDetailed Intercept Log:")
-	# for i in range(intercept_log.size()):
-	#	var log_entry = intercept_log[i]
-	#	print("  %d. Engagement: %s (%d PDCs)" % [i + 1, log_entry.outcome, log_entry.assigned_pdcs.size()])
-	
-	print("==================================================")
+	if current_torpedoes.size() == 0 and tracked_targets.size() == 0:
+		if battle_stats.battle_active and battle_stats.total_torpedoes_detected > 0 and not battle_summary_printed:
+			end_battle_session()
 
 func end_battle_session():
-	"""Call this when the battle is over"""
+	"""End the battle and print comprehensive statistics"""
+	if battle_summary_printed:
+		return
+	
 	battle_stats.battle_active = false
-	print_battle_summary()
+	battle_stats.battle_end_time = Time.get_ticks_msec() / 1000.0
+	battle_stats.battle_duration = battle_stats.battle_end_time - battle_stats.battle_start_time
+	battle_summary_printed = true
+	
+	print_comprehensive_battle_summary()
 
-# Check if battle should auto-end (no more torpedoes and none in transit)
-func check_battle_end():
-	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
-	if current_torpedoes.size() == 0 and tracked_targets.size() == 0:
-		if battle_stats.battle_active and battle_stats.total_torpedoes_detected > 0:
-			# Wait a moment to ensure all torpedoes are processed
-			await get_tree().create_timer(2.0).timeout
-			if sensor_system.get_all_enemy_torpedoes().size() == 0:
-				end_battle_session()
+func print_comprehensive_battle_summary():
+	"""Print detailed end-of-battle statistics"""
+	print("\n" + "=".repeat(60))
+	print("                 BATTLE REPORT")
+	print("=".repeat(60))
+	
+	# Basic battle info
+	print("Battle Duration: %.1f seconds" % battle_stats.battle_duration)
+	print("Ship: %s (%s faction)" % [parent_ship.name, ship_faction])
+	print("")
+	
+	# Core statistics
+	print("ENGAGEMENT SUMMARY:")
+	print("  Torpedoes Detected: %d" % battle_stats.total_torpedoes_detected)
+	print("  Torpedoes Intercepted: %d" % battle_stats.total_torpedoes_intercepted)
+	print("  Torpedoes Missed: %d" % battle_stats.total_torpedoes_missed)
+	print("  Intercept Success Rate: %.1f%%" % battle_stats.intercept_rate)
+	print("  Total Rounds Fired: %d" % battle_stats.total_rounds_fired)
+	
+	# Ammunition efficiency
+	if battle_stats.total_rounds_fired > 0 and battle_stats.total_torpedoes_intercepted > 0:
+		var rounds_per_kill = float(battle_stats.total_rounds_fired) / float(battle_stats.total_torpedoes_intercepted)
+		print("  Rounds per Intercept: %.1f" % rounds_per_kill)
+	
+	# Closest miss information
+	if battle_stats.closest_miss_distance < INF:
+		print("  Closest Miss Distance: %.2f km" % (battle_stats.closest_miss_distance / 1000.0))
+	
+	print("")
+	
+	# PDC Performance breakdown
+	print("PDC PERFORMANCE:")
+	var _total_pdc_rounds = 0
+	var _total_pdc_hits = 0
+	var _active_pdcs = 0
+	
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.has_method("get_battle_stats"):
+			var stats = pdc.get_battle_stats()
+			_total_pdc_rounds += stats.rounds_fired
+			_total_pdc_hits += stats.targets_hit
+			
+			if stats.rounds_fired > 0:
+				_active_pdcs += 1
+			
+			var hit_rate = 0.0
+			if stats.rounds_fired > 0:
+				hit_rate = stats.hit_rate
+			
+			print("  %s: %d rounds, %d hits (%.1f%% accuracy)" % [
+				pdc_id.substr(4, 8), stats.rounds_fired, stats.targets_hit, hit_rate
+			])
+	
+	print("")
+	
+	# Individual torpedo breakdown (limit to first 5 for readability)
+	if intercept_log.size() > 0:
+		print("INDIVIDUAL TORPEDO RESULTS:")
+		var display_count = min(5, intercept_log.size())
+		
+		for i in range(display_count):
+			var log_entry = intercept_log[i]
+			var torpedo_num = i + 1
+			var status_icon = "✓" if log_entry.outcome == "intercepted" else "✗"
+			
+			print("  %s Torpedo %d: %s at %.2f km (approached to %.2f km)" % [
+				status_icon, torpedo_num, log_entry.outcome.to_upper(), 
+				log_entry.intercept_distance_km, log_entry.closest_approach_km
+			])
+			
+			if log_entry.assigned_pdcs.size() > 0:
+				print("    - Engaged by %d PDCs for %.1f seconds" % [
+					log_entry.assigned_pdcs.size(), log_entry.engagement_duration
+				])
+		
+		# Show details about any misses
+		var missed_count = 0
+		for log_entry in intercept_log:
+			if log_entry.outcome == "missed":
+				missed_count += 1
+		
+		if missed_count > 0:
+			print("  MISSED TORPEDO DETAILS:")
+			var miss_num = 0
+			for log_entry in intercept_log:
+				if log_entry.outcome == "missed":
+					miss_num += 1
+					var reason = log_entry.get("removal_reason", "UNKNOWN")
+					print("    Miss %d: %s removal at %.2f km (closest: %.2f km)" % [
+						miss_num, reason, 
+						log_entry.intercept_distance_km, log_entry.closest_approach_km
+					])
+		
+		if intercept_log.size() > 5:
+			print("  ... and %d more torpedoes (%s)" % [
+				intercept_log.size() - 5,
+				"all intercepted" if battle_stats.total_torpedoes_missed == 0 else "with mixed results"
+			])
+	
+	print("")
+	
+	# Threat assessment
+	print("THREAT ASSESSMENT:")
+	if battle_stats.total_torpedoes_intercepted == battle_stats.total_torpedoes_detected:
+		print("  PERFECT DEFENSE - All torpedoes intercepted!")
+	elif battle_stats.intercept_rate >= 90.0:
+		print("  EXCELLENT DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
+	elif battle_stats.intercept_rate >= 75.0:
+		print("  GOOD DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
+	elif battle_stats.intercept_rate >= 50.0:
+		print("  MODERATE DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
+	else:
+		print("  POOR DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
+	
+	# Enhanced tactical analysis
+	print("")
+	print("TACTICAL ANALYSIS:")
+	
+	# Analyze PDC performance distribution
+	var working_pdcs = 0
+	var non_contributing_pdcs = 0
+	for pdc_id in registered_pdcs:
+		var pdc = registered_pdcs[pdc_id]
+		if pdc.has_method("get_battle_stats"):
+			var stats = pdc.get_battle_stats()
+			if stats.targets_hit > 0:
+				working_pdcs += 1
+			elif stats.rounds_fired > 50:  # Fired but didn't hit
+				non_contributing_pdcs += 1
+	
+	if non_contributing_pdcs > 0:
+		print("  - %d PDCs fired rounds but scored no hits - check firing solutions" % non_contributing_pdcs)
+	
+	if working_pdcs < registered_pdcs.size() / 2.0:
+		print("  - Only %d of %d PDCs contributed to intercepts - review target allocation" % [working_pdcs, registered_pdcs.size()])
+	
+	# Analyze ammunition efficiency
+	if battle_stats.total_rounds_fired > 0 and battle_stats.total_torpedoes_intercepted > 0:
+		var rounds_per_kill = float(battle_stats.total_rounds_fired) / float(battle_stats.total_torpedoes_intercepted)
+		if rounds_per_kill > 50.0:
+			print("  - High ammunition expenditure (%.1f rounds/kill) - optimize fire control" % rounds_per_kill)
+		elif rounds_per_kill < 10.0:
+			print("  - Excellent ammunition efficiency (%.1f rounds/kill)" % rounds_per_kill)
+	
+	# Analyze engagement patterns
+	if intercept_log.size() > 0:
+		var close_intercepts = 0
+		var far_intercepts = 0
+		for log_entry in intercept_log:
+			if log_entry.outcome == "intercepted":
+				if log_entry.intercept_distance_km < 2.0:
+					close_intercepts += 1
+				elif log_entry.intercept_distance_km > 5.0:
+					far_intercepts += 1
+		
+		if close_intercepts > int(battle_stats.total_torpedoes_intercepted) * 0.3:
+			print("  - Many close-range intercepts - consider earlier engagement")
+		
+		if far_intercepts > int(battle_stats.total_torpedoes_intercepted) * 0.5:
+			print("  - Excellent early intercept capability demonstrated")
+	
+	# Overall assessment
+	if battle_stats.intercept_rate == 100.0:
+		print("  - Outstanding defensive performance - no tactical improvements needed")
+	elif battle_stats.intercept_rate > 90.0:
+		print("  - Excellent defensive performance with minor room for improvement")
+	else:
+		print("  - Defensive system requires optimization for improved performance")
+	
+	print("=".repeat(60))
+	print("")
 
-# Utility functions
+# COMMENTED OUT: Verbose debug function
+# func print_debug_summary():
+#	var active_targets = tracked_targets.size()
+#	var engaged_pdcs = get_busy_pdc_count()
+#	if active_targets > 0:
+#		print("FCM: %d targets, %d/%d PDCs engaged" % [
+#			active_targets, engaged_pdcs, registered_pdcs.size()
+#		])
+
+# Utility functions remain the same
 func get_available_pdc_count() -> int:
 	var count = 0
 	for pdc_id in pdc_assignments:
@@ -684,13 +803,10 @@ func angle_difference(from: float, to: float) -> float:
 	return diff
 
 func get_debug_info() -> String:
-	# TEMPORARILY SIMPLIFIED - Godot string formatting bug
-	return "Fire Control: Active"
+	return "Fire Control: %d targets tracked" % tracked_targets.size()
 
-# NEW: Public method to get current battle stats
 func get_battle_stats() -> Dictionary:
 	return battle_stats.duplicate()
 
-# NEW: Reset everything for a new battle
 func reset_for_new_battle():
 	start_battle_session()

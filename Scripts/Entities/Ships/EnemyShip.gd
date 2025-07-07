@@ -1,10 +1,10 @@
-# Scripts/Entities/Ships/EnemyShip.gd - FIXED VERSION
+# Scripts/Entities/Ships/EnemyShip.gd - CLEANED VERSION
 extends Area2D
 
 # Ship properties
 @export var acceleration_gs: float = 1.5
 @export var rotation_speed: float = 2.0
-@export var faction: String = "hostile"  # FIXED: Changed from "friendly" to "hostile"
+@export var faction: String = "hostile"
 
 # Movement
 var acceleration_mps2: float
@@ -14,21 +14,24 @@ var movement_direction: Vector2 = Vector2.ZERO
 # Entity tracking
 var entity_id: String
 
-# Child nodes - FIXED: Use Node2D type instead of specific class
+# Child nodes
 @onready var sensor_system: SensorSystem = $SensorSystem
-@onready var pdc_systems: Array = []  # Will find PDC systems in _ready
+@onready var pdc_systems: Array = []
 
-# Test movement (keep from original)
+# Test movement
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(1, -1).normalized()
-var test_gs: float = 0.02  # FIXED: Much slower so it doesn't fly off the map
+var test_gs: float = 0.02
+
+# DEBUG CONTROL
+@export var debug_enabled: bool = false
 
 func _ready():
 	acceleration_mps2 = acceleration_gs * 9.81
 	
 	# Find all PDC systems
 	for child in get_children():
-		if child.has_method("get_debug_info"):  # PDCs have this method
+		if child.has_method("get_debug_info"):
 			pdc_systems.append(child)
 	
 	# Register with EntityManager
@@ -40,7 +43,8 @@ func _ready():
 	if test_acceleration:
 		set_acceleration(test_gs)
 		set_movement_direction(test_direction)
-		print("EnemyShip starting test acceleration at ", test_gs, "G with faction: ", faction)
+		if debug_enabled:
+			print("EnemyShip starting test acceleration at %.3fG" % test_gs)
 
 func _physics_process(delta):
 	# Update movement

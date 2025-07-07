@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd
+# Scripts/Entities/Ships/PlayerShip.gd - CLEANED VERSION
 extends Area2D
 
 # Ship properties
@@ -14,14 +14,17 @@ var movement_direction: Vector2 = Vector2.ZERO
 # Entity tracking
 var entity_id: String
 
-# Child nodes - FIXED: Use Node2D type instead of specific class
+# Child nodes
 @onready var sensor_system: SensorSystem = $SensorSystem
 @onready var torpedo_launcher: Node2D = $TorpedoLauncher
 
-# Test movement (keep from original)
+# Test movement
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(1, -1).normalized()
 var test_gs: float = 1.0
+
+# DEBUG CONTROL
+@export var debug_enabled: bool = false
 
 func _ready():
 	acceleration_mps2 = acceleration_gs * 9.81
@@ -35,7 +38,8 @@ func _ready():
 	if test_acceleration:
 		set_acceleration(test_gs)
 		set_movement_direction(test_direction)
-		print("PlayerShip starting test acceleration at ", test_gs, "G")
+		if debug_enabled:
+			print("PlayerShip starting test acceleration at %.1fG" % test_gs)
 
 func _physics_process(delta):
 	# Update movement

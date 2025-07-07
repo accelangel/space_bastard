@@ -131,13 +131,13 @@ func handle_click_and_drag():
 		update_relative_panning()
 
 func start_relative_panning():
-	print("Starting relative panning while following ship")
+	#print("Starting relative panning while following ship")
 	is_relative_panning = true
 	relative_pan_start_mouse = get_viewport().get_mouse_position()
 	relative_pan_start_offset = relative_pan_offset
 
 func stop_relative_panning():
-	print("Stopping relative panning")
+	#print("Stopping relative panning")
 	is_relative_panning = false
 
 func update_relative_panning():
@@ -165,16 +165,16 @@ func handle_ship_selection():
 
 func select_ship_at_mouse():
 	var mouse_world_pos = get_global_mouse_position()
-	print("Selecting at mouse position: ", mouse_world_pos)
+	#print("Selecting at mouse position: ", mouse_world_pos)
 	
 	# Try to find ships using multiple methods
 	var found_ship = find_ship_at_position(mouse_world_pos)
 	
 	if found_ship:
-		print("Found ship to follow: ", found_ship.name)
+		#print("Found ship to follow: ", found_ship.name)
 		start_following_ship(found_ship)
 	else:
-		print("No ship found at mouse position")
+		#print("No ship found at mouse position")
 		# If no ship found, stop following current ship
 		if following_ship:
 			stop_following_ship()
@@ -221,7 +221,7 @@ func get_all_selectable_objects() -> Array:
 	return objects
 
 func start_following_ship(ship: Node2D):
-	print("Started following: ", ship.name)
+	#print("Started following: ", ship.name)
 	following_ship = ship
 	follow_offset = Vector2.ZERO
 	# Reset relative pan offset when starting to follow a new ship
@@ -233,8 +233,8 @@ func start_following_ship(ship: Node2D):
 		selection_indicator.global_position = ship.global_position
 
 func stop_following_ship():
-	if following_ship:
-		print("Stopped following: ", following_ship.name)
+	#if following_ship:
+		#print("Stopped following: ", following_ship.name)
 	following_ship = null
 	
 	# Reset relative panning state

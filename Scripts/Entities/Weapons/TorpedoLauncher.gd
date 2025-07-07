@@ -1,10 +1,10 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - CLEAN VERSION
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - CLEANED VERSION
 extends Node2D
 class_name TorpedoLauncher
 
 @export var torpedo_scene: PackedScene
-@export var launch_cooldown: float = 0.05  # Seconds between launches
-@export var max_torpedoes: int = 50       # Max active torpedoes
+@export var launch_cooldown: float = 0.05
+@export var max_torpedoes: int = 50
 
 var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0
@@ -12,7 +12,7 @@ var parent_ship: Node2D
 var sensor_system: SensorSystem
 
 # Alternating launch system
-var current_launch_side: int = 1  # 1 for right, -1 for left
+var current_launch_side: int = 1
 var torpedoes_launched: int = 0
 
 # Auto-launch for testing
@@ -20,16 +20,20 @@ var torpedoes_launched: int = 0
 @export var auto_launch_interval: float = 0.1
 var auto_launch_timer: float = 0.0
 
-# NEW: One volley option
-@export var continuous_fire: bool = false  # If true, keeps firing; if false, only fires one volley
-var volley_fired: bool = false            # Tracks if the single volley has been fired
+# Volley control
+@export var continuous_fire: bool = false
+var volley_fired: bool = false
+
+# DEBUG CONTROL
+@export var debug_enabled: bool = false
 
 func _ready():
 	parent_ship = get_parent()
 	
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
-		print("TorpedoLauncher initialized on ship: ", parent_ship.name)
+		if debug_enabled:
+			print("TorpedoLauncher initialized on ship: ", parent_ship.name)
 	
 	# Load torpedo scene if not assigned
 	if not torpedo_scene:
@@ -41,7 +45,6 @@ func _process(delta):
 	
 	# Auto-launch logic
 	if auto_launch_enabled:
-		# If continuous_fire is false and we've already fired our volley, stop
 		if not continuous_fire and volley_fired:
 			return
 		
@@ -50,7 +53,7 @@ func _process(delta):
 			launch_at_best_target()
 			auto_launch_timer = 0.0
 	
-	# Manual launch - Use only the input action
+	# Manual launch
 	if Input.is_action_just_pressed("ui_accept"):
 		launch_at_best_target()
 
@@ -98,12 +101,15 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	active_torpedoes.append(torpedo)
 	last_launch_time = Time.get_ticks_msec() / 1000.0
 	
-	print("Launched torpedo #", torpedoes_launched, " at ", target.name)
+	# COMMENTED OUT: Individual launch spam
+	# if debug_enabled:
+	#	print("Launched torpedo #%d at %s" % [torpedoes_launched, target.name])
 	
 	# Check if we've fired our max volley for single-volley mode
 	if not continuous_fire and active_torpedoes.size() >= max_torpedoes:
 		volley_fired = true
-		print("Single volley complete - no more torpedoes will be fired")
+		if debug_enabled:
+			print("Single volley complete - %d torpedoes fired" % active_torpedoes.size())
 	
 	return torpedo
 
@@ -114,10 +120,10 @@ func can_launch() -> bool:
 	return (active_torpedoes.size() < max_torpedoes and 
 			time_since_last >= launch_cooldown)
 
-# Function to reset the volley system (useful for testing or restarting)
 func reset_volley():
 	volley_fired = false
-	print("Volley system reset - can fire again")
+	if debug_enabled:
+		print("Volley system reset - can fire again")
 
 func get_debug_info() -> String:
 	var mode_text = "Continuous" if continuous_fire else "Single Volley"

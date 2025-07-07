@@ -1,11 +1,14 @@
-# Scripts/Systems/SensorSystem.gd - CLEAN VERSION
+# Scripts/Systems/SensorSystem.gd - CLEANED VERSION
 extends Node2D
 class_name SensorSystem
 
 # NO RANGE LIMITS - radar sees entire map
-var all_contacts: Array = []  # Array of entity data dictionaries
+var all_contacts: Array = []
 var parent_ship: Node2D
 var ship_faction: String = "friendly"
+
+# DEBUG CONTROL
+@export var debug_enabled: bool = false
 
 func _ready():
 	add_to_group("sensor_systems")
@@ -14,10 +17,11 @@ func _ready():
 	if parent_ship and "faction" in parent_ship:
 		ship_faction = parent_ship.faction
 	
-	var ship_name: String = "unknown"
-	if parent_ship:
-		ship_name = parent_ship.name
-	print("SensorSystem initialized for ", ship_name, " faction: ", ship_faction)
+	# COMMENTED OUT: Initialization spam
+	# var ship_name: String = "unknown"
+	# if parent_ship:
+	#	ship_name = parent_ship.name
+	# print("SensorSystem initialized for ", ship_name, " faction: ", ship_faction)
 
 func update_contacts(entity_reports: Array):
 	# Clear old contacts
