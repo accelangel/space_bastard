@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED (Preserving all guidance logic)
+# Scripts/Entities/Weapons/Torpedo.gd - SIMPLIFIED (No Proximity Detonation)
 extends Area2D
 class_name Torpedo
 
@@ -7,28 +7,28 @@ var entity_id: String
 var faction: String = "friendly"
 var target_node: Node2D
 
-# Torpedo specifications (KEEP ALL OF THESE)
+# Torpedo specifications
 @export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
-@export var proximity_meters: float = 10.0       # Auto-detonate range
+# REMOVED: @export var proximity_meters: float = 10.0  # No more proximity detonation
 
-# ENHANCED LAUNCH SYSTEM (MUST KEEP)
+# ENHANCED LAUNCH SYSTEM
 @export var lateral_launch_velocity: float = 60.0   # Lateral impulse (m/s)
 @export var lateral_launch_distance: float = 80.0   # Distance to travel laterally (meters)
 @export var engine_ignition_delay: float = 1.6     # Seconds before engines ignite
 
-# SMOOTH TRANSITION SYSTEM (MUST KEEP)
+# SMOOTH TRANSITION SYSTEM
 @export var transition_duration: float = 1.6        # Time to smoothly transition guidance
 @export var rotation_transition_duration: float = 3.2 # Time to smoothly rotate to velocity direction
 @export var guidance_ramp_duration: float = 0.8      # Time to ramp up guidance strength
 
-# Launch state tracking (KEEP ALL)
+# Launch state tracking
 var launch_side: int = 1  # 1 for right, -1 for left
 var engines_ignited: bool = false
 var launch_start_time: float = 0.0
 var lateral_distance_traveled: float = 0.0
 var initial_facing_direction: Vector2
 
-# Smooth transition state (KEEP ALL)
+# Smooth transition state
 var engine_ignition_time: float = 0.0
 var transition_progress: float = 0.0
 var rotation_progress: float = 0.0
@@ -38,12 +38,12 @@ var guidance_strength: float = 0.0
 var target_rotation: float = 0.0
 var initial_rotation: float = 0.0
 
-# Intercept guidance parameters (KEEP ALL)
+# Intercept guidance parameters
 @export var navigation_constant: float = 3.0     # Proportional navigation gain
 @export var direct_weight: float = 0.05          # Direct intercept influence
 @export var speed_threshold: float = 200.0       # m/s - speed threshold for guidance
 
-# Direct intercept PID parameters (KEEP ALL)
+# Direct intercept PID parameters
 @export var kp: float = 800.0        # Proportional gain
 @export var ki: float = 50.0         # Integral gain
 @export var kd: float = 150.0        # Derivative gain
@@ -52,7 +52,7 @@ var initial_rotation: float = 0.0
 var velocity_mps: Vector2 = Vector2.ZERO
 var launcher_ship: Node2D
 
-# Guidance state (KEEP ALL)
+# Guidance state
 var previous_los: Vector2 = Vector2.ZERO
 var previous_los_rate: float = 0.0
 var previous_error: Vector2 = Vector2.ZERO
@@ -77,7 +77,7 @@ func _ready():
 			faction = launcher_ship.faction
 		entity_id = entity_manager.register_entity(self, "torpedo", faction)
 	
-	# LATERAL LAUNCH SETUP (KEEP ALL OF THIS)
+	# LATERAL LAUNCH SETUP
 	var ship_forward = Vector2.UP
 	if launcher_ship:
 		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
@@ -114,14 +114,13 @@ func _physics_process(delta):
 		ignite_engines()
 		engine_ignition_time = current_time
 	
-	var target_pos = target_node.global_position
-	var distance_to_target_pixels = global_position.distance_to(target_pos)
-	var distance_to_target_meters = distance_to_target_pixels * WorldSettings.meters_per_pixel
-	
-	# Check proximity for detonation
-	if distance_to_target_meters < proximity_meters:
-		_impact()
-		return
+	# REMOVED: Proximity detonation check - now only collision detection matters
+	# var target_pos = target_node.global_position
+	# var distance_to_target_pixels = global_position.distance_to(target_pos)
+	# var distance_to_target_meters = distance_to_target_pixels * WorldSettings.meters_per_pixel
+	# if distance_to_target_meters < proximity_meters:
+	#     _impact()
+	#     return
 	
 	# Apply appropriate movement logic based on engine state
 	if engines_ignited:
@@ -310,7 +309,8 @@ func _get_target_velocity() -> Vector2:
 	return Vector2.ZERO
 
 func _on_area_entered(area: Area2D):
-	# Check if we hit something we should destroy
+	# SIMPLIFIED: Only collision detection matters now
+	# If we hit something hostile, that's a direct hit
 	if "faction" in area and area.faction != faction:
 		_impact()
 

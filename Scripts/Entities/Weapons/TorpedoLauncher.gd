@@ -4,7 +4,7 @@ class_name TorpedoLauncher
 
 @export var torpedo_scene: PackedScene
 @export var launch_cooldown: float = 0.05
-@export var max_torpedoes: int = 50
+@export var max_torpedoes: int = 200
 
 var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0
@@ -17,7 +17,7 @@ var torpedoes_launched: int = 0
 
 # Auto-launch for testing
 @export var auto_launch_enabled: bool = true
-@export var auto_launch_interval: float = 0.1
+@export var auto_launch_interval: float = 0.025
 var auto_launch_timer: float = 0.0
 
 # Volley control

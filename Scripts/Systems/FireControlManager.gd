@@ -66,7 +66,7 @@ var battle_summary_printed: bool = false
 var total_engagements: int = 0
 var successful_intercepts: int = 0
 
-# Enhanced target data structure with detailed tracking
+# Enhanced target data structure - simplified without complex tracking
 class TargetData:
 	var target_id: String
 	var node_ref: Node2D
@@ -151,28 +151,24 @@ func _physics_process(delta):
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	# COMMENTED OUT: Frequent torpedo detection spam
-	# if debug_enabled and current_torpedoes.size() != last_target_count:
-	#	if current_torpedoes.size() > last_target_count:
-	#		print("FCM: Detected %d enemy torpedoes!" % current_torpedoes.size())
-	#	last_target_count = current_torpedoes.size()
-	
-	# Update existing targets
+	# EntityManager is our radar - if torpedoes disappear, they were destroyed
 	var targets_to_remove = []
 	for target_id in tracked_targets:
 		var target_data = tracked_targets[target_id]
 		
+		# Simple check: Is this torpedo still in EntityManager's radar?
 		if not is_instance_valid(target_data.node_ref) or not target_data.node_ref in current_torpedoes:
+			# EntityManager says it's gone = it was destroyed
 			targets_to_remove.append(target_id)
 			continue
 		
 		update_target_data(target_data)
 	
-	# Remove dead targets
+	# Process destroyed torpedoes - EntityManager told us they're gone
 	for target_id in targets_to_remove:
 		remove_target(target_id)
 	
-	# Add new targets
+	# Add new targets that EntityManager detected
 	for torpedo in current_torpedoes:
 		var torpedo_id = get_torpedo_id(torpedo)
 		if not tracked_targets.has(torpedo_id):
@@ -541,15 +537,13 @@ func update_battle_stats():
 		battle_stats.intercept_rate = (float(battle_stats.total_torpedoes_intercepted) / float(total_resolved)) * 100.0
 
 func report_successful_intercept(pdc_id: String, _target_id: String):
-	"""Called by PDCs when they successfully hit a target"""
+	"""Called by PDCs when they successfully hit a target - now just for statistics"""
 	battle_stats.successful_intercepts += 1
 	
-	# Update the specific PDC's hit count in our tracking
-	if registered_pdcs.has(pdc_id):
-		var pdc = registered_pdcs[pdc_id]
-		if pdc.has_method("get_battle_stats"):
-			# The PDC already incremented its own hit count, so we're good
-			pass
+	# This is now just for PDC hit tracking, not classification
+	# EntityManager handles the actual intercept detection
+	if debug_enabled:
+		print("PDC %s scored hit on %s" % [pdc_id.substr(4, 8), _target_id.substr(8, 7)])
 
 func check_battle_end():
 	"""Check if battle should auto-end and print comprehensive summary"""
@@ -586,7 +580,7 @@ func print_comprehensive_battle_summary():
 	print("ENGAGEMENT SUMMARY:")
 	print("  Torpedoes Detected: %d" % battle_stats.total_torpedoes_detected)
 	print("  Torpedoes Intercepted: %d" % battle_stats.total_torpedoes_intercepted)
-	print("  Torpedoes Missed: %d" % battle_stats.total_torpedoes_missed)
+	print("  Torpedoes Hit Ship: %d" % battle_stats.total_torpedoes_missed)  # Now means ship hits
 	print("  Intercept Success Rate: %.1f%%" % battle_stats.intercept_rate)
 	print("  Total Rounds Fired: %d" % battle_stats.total_rounds_fired)
 	
@@ -595,9 +589,9 @@ func print_comprehensive_battle_summary():
 		var rounds_per_kill = float(battle_stats.total_rounds_fired) / float(battle_stats.total_torpedoes_intercepted)
 		print("  Rounds per Intercept: %.1f" % rounds_per_kill)
 	
-	# Closest miss information
+	# Closest miss information - now closest ship hit
 	if battle_stats.closest_miss_distance < INF:
-		print("  Closest Miss Distance: %.2f km" % (battle_stats.closest_miss_distance / 1000.0))
+		print("  Closest Ship Hit Distance: %.2f km" % (battle_stats.closest_miss_distance / 1000.0))
 	
 	print("")
 	
@@ -647,22 +641,25 @@ func print_comprehensive_battle_summary():
 					log_entry.assigned_pdcs.size(), log_entry.engagement_duration
 				])
 		
-		# Show details about any misses
-		var missed_count = 0
+		# Show details about ship hits
+		var hit_count = 0
 		for log_entry in intercept_log:
-			if log_entry.outcome == "missed":
-				missed_count += 1
+			if log_entry.outcome == "hit_ship":
+				hit_count += 1
 		
-		if missed_count > 0:
-			print("  MISSED TORPEDO DETAILS:")
-			var miss_num = 0
+		if hit_count > 0:
+			print("  SHIP HIT DETAILS:")
+			var hit_num = 0
 			for log_entry in intercept_log:
-				if log_entry.outcome == "missed":
-					miss_num += 1
+				if log_entry.outcome == "hit_ship":
+					hit_num += 1
 					var reason = log_entry.get("removal_reason", "UNKNOWN")
-					print("    Miss %d: %s removal at %.2f km (closest: %.2f km)" % [
-						miss_num, reason, 
-						log_entry.intercept_distance_km, log_entry.closest_approach_km
+					var confirmed = log_entry.get("entity_manager_confirmed", false)
+					var confirmation_text = " (EntityManager confirmed)" if confirmed else ""
+					print("    Hit %d: %s at %.2f km (closest: %.2f km)%s" % [
+						hit_num, reason, 
+						log_entry.intercept_distance_km, log_entry.closest_approach_km,
+						confirmation_text
 					])
 		
 		if intercept_log.size() > 5:
@@ -675,7 +672,7 @@ func print_comprehensive_battle_summary():
 	
 	# Threat assessment
 	print("THREAT ASSESSMENT:")
-	if battle_stats.total_torpedoes_intercepted == battle_stats.total_torpedoes_detected:
+	if battle_stats.total_torpedoes_missed == 0:
 		print("  PERFECT DEFENSE - All torpedoes intercepted!")
 	elif battle_stats.intercept_rate >= 90.0:
 		print("  EXCELLENT DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
@@ -684,7 +681,7 @@ func print_comprehensive_battle_summary():
 	elif battle_stats.intercept_rate >= 50.0:
 		print("  MODERATE DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
 	else:
-		print("  POOR DEFENSE - %.1f%% intercept rate" % battle_stats.intercept_rate)
+		print("  POOR DEFENSE - %.1f%% intercept rate (%d torpedoes hit ship)" % [battle_stats.intercept_rate, battle_stats.total_torpedoes_missed])
 	
 	# Enhanced tactical analysis
 	print("")
