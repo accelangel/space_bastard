@@ -682,7 +682,7 @@ func remove_target(target_id: String):
 	# 1. PDCs were shooting at it when it disappeared = INTERCEPT
 	# 2. PDCs were not shooting at it when it disappeared = TORPEDO HIT
 	
-	var was_successful_intercept = (target_data.assigned_pdcs.size() > 0)
+	var was_successful_intercept = (target_data.rounds_fired_at_target > 0 and distance_meters > 1.0)
 	var outcome_reason = ""
 	
 	if was_successful_intercept:

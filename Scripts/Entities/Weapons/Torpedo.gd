@@ -70,11 +70,20 @@ func _ready():
 		queue_free()
 		return
 	
+	# DEBUG: Check torpedo faction inheritance
+	print("🚀 TORPEDO FACTION DEBUG:")
+	print("  Torpedo ID: %s" % entity_id)
+	var launcher_name: String = str(launcher_ship.name) if launcher_ship != null else "NONE"
+	print("  Launcher ship: %s" % launcher_name)
+	print("  Launcher faction: %s" % (launcher_ship.faction if launcher_ship and "faction" in launcher_ship else "NONE"))
+	print("  Torpedo faction: %s" % faction)
+	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
 		if launcher_ship and "faction" in launcher_ship:
 			faction = launcher_ship.faction
+			print("  ✅ Updated torpedo faction to: %s" % faction)
 		entity_id = entity_manager.register_entity(self, "torpedo", faction)
 	
 	# LATERAL LAUNCH SETUP

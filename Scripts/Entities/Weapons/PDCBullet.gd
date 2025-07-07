@@ -38,17 +38,33 @@ func _physics_process(delta):
 		entity_manager.update_entity_position(entity_id, global_position)
 
 func _on_area_entered(area: Area2D):
+	# DEBUG: Log all collisions
+	var area_name = "Unknown"
+	if area.has_method("get_name"):
+		area_name = str(area.name)
+	
+	print("🎯 BULLET COLLISION: Bullet hit %s (faction: %s)" % [
+		area_name,
+		area.faction if "faction" in area else "Unknown"
+	])
+	
 	# Check if we hit something hostile
 	if is_hostile_to(area):
+		print("✅ CONFIRMED HIT: Bullet from faction %s hit hostile %s" % [faction, area.faction])
+		
 		# Emit signal before destroying
 		hit_target.emit()
+		print("📡 SIGNAL EMITTED: hit_target signal sent")
 		
 		# Both bullet and target die instantly
 		area.queue_free()
 		queue_free()
+	else:
+		print("❌ FRIENDLY FIRE AVOIDED: Same faction collision")
 
 func is_hostile_to(other: Node) -> bool:
 	if not "faction" in other:
+		print("⚠️ NO FACTION: Target has no faction property")
 		return false
 	
 	# Simple faction check

@@ -2,7 +2,7 @@
 extends Node2D
 
 # PDC Hardware Configuration
-@export var turret_rotation_speed: float = 90.0  # degrees/second
+@export var turret_rotation_speed: float = 360.0  # degrees/second
 @export var max_rotation_speed_multiplier: float = 2.0
 @export var bullet_velocity_mps: float = 1100.0
 @export var rounds_per_second: float = 18.0
@@ -207,6 +207,13 @@ func fire_bullet():
 	var bullet = bullet_scene.instantiate()
 	get_tree().root.add_child(bullet)
 	
+	# DEBUG: Check faction inheritance
+	print("🏛️ FACTION DEBUG - PDC %s:" % pdc_id.substr(4, 8))
+	print("  Parent ship name: %s" % parent_ship.name)
+	print("  Parent ship faction: %s" % (parent_ship.faction if "faction" in parent_ship else "NONE"))
+	print("  Bullet faction BEFORE set: %s" % (bullet.faction if "faction" in bullet else "NONE"))
+
+	
 	bullet.global_position = get_muzzle_world_position()
 	
 	debug_bullet_count += 1
@@ -249,6 +256,11 @@ func fire_bullet():
 	if parent_ship and "faction" in parent_ship:
 		if bullet.has_method("set_faction"):
 			bullet.set_faction(parent_ship.faction)
+			print("  ✅ Set bullet faction to: %s" % bullet.faction)
+		else:
+			print("  ❌ Bullet has no set_faction method!")
+	else:
+		print("  ❌ Parent ship has no faction!")
 	
 	if bullet.has_signal("hit_target"):
 		bullet.hit_target.connect(_on_bullet_hit)
