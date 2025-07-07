@@ -326,7 +326,7 @@ func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> f
 	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
 	
 	# DIAGNOSTIC - Now with correct variable references
-	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+	if debug_enabled and pdc.pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"]:
 		print("PROBLEM PDC %s:" % pdc.pdc_id.substr(4, 8))
 		print("  Mount position: %s" % pdc.mount_position)
 		print("  World intercept angle: %.1f°" % rad_to_deg(world_angle))
