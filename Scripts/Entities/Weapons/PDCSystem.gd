@@ -4,7 +4,7 @@ extends Node2D
 # PDC Hardware Configuration
 @export var turret_rotation_speed: float = 90.0  # degrees/second
 @export var max_rotation_speed_multiplier: float = 2.0
-@export var bullet_velocity_mps: float = 800.0
+@export var bullet_velocity_mps: float = 1100.0
 @export var rounds_per_second: float = 18.0
 @export var max_tracking_error: float = 5.0  # degrees - how accurate we need to be to fire
 
