@@ -194,6 +194,8 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
+# Replace the existing fire_bullet() function with this enhanced version:
+
 func fire_bullet():
 	if not bullet_scene:
 		return
@@ -210,11 +212,24 @@ func fire_bullet():
 	var world_angle = current_rotation_for_firing + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	
-	# COMMENTED OUT: Extensive debug output that was spamming console
-	# if debug_enabled and debug_bullet_count <= 3:
-	#	print("Bullet #%d: world_angle=%.1f°, direction=%s" % [
-	#		debug_bullet_count, rad_to_deg(world_angle), fire_direction
-	#	])
+	# ENHANCED DIAGNOSTIC for problem PDCs
+	if debug_enabled and pdc_id in ["-4_-72", "-21_-34", "-16_-49"] and debug_bullet_count <= 5:
+		print("\n🔫 BULLET FIRING DEBUG - PDC %s (Bullet #%d):" % [pdc_id.substr(4, 8), debug_bullet_count])
+		print("  Mount position: %s" % mount_position)
+		print("  Muzzle world position: %s" % get_muzzle_world_position())
+		print("  Current PDC rotation: %.1f°" % rad_to_deg(current_rotation))
+		print("  Firing rotation calc: %.1f°" % rad_to_deg(current_rotation_for_firing))
+		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+		print("  World firing angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Fire direction vector: %s" % fire_direction)
+		print("  Target: %s" % current_target_id.substr(8, 7))
+		
+		# Verify the fire direction makes sense
+		var angle_magnitude = abs(rad_to_deg(world_angle))
+		if angle_magnitude > 360:
+			print("  ⚠️ WARNING: Extreme firing angle detected!")
+		else:
+			print("  ✓ Firing angle within normal range")
 	
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity

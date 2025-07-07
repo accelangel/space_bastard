@@ -4,7 +4,7 @@ class_name TorpedoLauncher
 
 @export var torpedo_scene: PackedScene
 @export var launch_cooldown: float = 0.05
-@export var max_torpedoes: int = 200
+@export var max_torpedoes: int = 100
 
 var active_torpedoes: Array[Torpedo] = []
 var last_launch_time: float = 0.0

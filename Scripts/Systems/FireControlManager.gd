@@ -47,6 +47,9 @@ var has_run_assignment_debug: bool = false
 # Add this to _physics_process to run the test once
 var has_run_angle_test = false
 
+# Add this variable with the other debug variables
+var firing_angle_debug_count = 0
+
 # ENHANCED BATTLE STATISTICS SYSTEM
 var battle_stats: Dictionary = {
 	"battle_start_time": 0.0,
@@ -613,6 +616,7 @@ func execute_fire_missions():
 			if pdc.is_aimed():
 				pdc.authorize_firing()
 
+# Replace the calculate_firing_solution function with this enhanced version
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var target_pos = target_data.last_position
@@ -637,6 +641,30 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 		relative_angle -= TAU
 	while relative_angle < -PI:
 		relative_angle += TAU
+	
+	# ENHANCED DIAGNOSTIC for problem PDCs
+	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"] and firing_angle_debug_count < 10:
+		firing_angle_debug_count += 1
+		print("\n🎯 FIRING SOLUTION DEBUG - PDC %s:" % pdc.pdc_id.substr(4, 8))
+		print("  PDC world position: %s" % pdc_pos)
+		print("  Target position: %s" % target_pos)
+		print("  Target velocity (m/s): %s" % target_vel)
+		print("  Distance to target: %.1f m" % distance_meters)
+		print("  Bullet flight time: %.2f s" % bullet_time)
+		print("  Target velocity (pixels/s): %s" % target_vel_pixels)
+		print("  Predicted target position: %s" % predicted_pos)
+		print("  Vector to intercept: %s" % to_intercept)
+		print("  World firing angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Ship rotation: %.1f°" % rad_to_deg(ship_angle))
+		print("  Required PDC angle (ship-relative): %.1f°" % rad_to_deg(relative_angle))
+		print("  PDC current rotation: %.1f°" % rad_to_deg(pdc.current_rotation))
+		print("  Angle error: %.1f°" % rad_to_deg(abs(relative_angle - pdc.current_rotation)))
+		
+		# Check if the PDC is actually aimed correctly
+		if abs(relative_angle - pdc.current_rotation) > deg_to_rad(10):
+			print("  ⚠️ WARNING: PDC not properly aimed at calculated intercept!")
+		else:
+			print("  ✓ PDC properly aimed at calculated intercept")
 	
 	return relative_angle
 
