@@ -3,7 +3,7 @@ extends Node2D
 class_name FireControlManager
 
 # DEBUG CONTROL - Much more limited
-@export var debug_enabled: bool = false  # Disabled by default
+@export var debug_enabled: bool = true  # Disabled by default
 @export var debug_verbose: bool = false
 @export var debug_interval: float = 10.0  # Less frequent updates
 var debug_timer: float = 0.0
@@ -147,7 +147,7 @@ func _physics_process(delta):
 	update_target_tracking()
 	assess_all_threats()
 	optimize_pdc_assignments()
-	if tracked_targets.size() >= 25 and not has_run_assignment_debug:
+	if tracked_targets.size() >= 100 and not has_run_assignment_debug:
 		diagnostic_assignment_breakdown()
 	execute_fire_missions()
 	update_battle_stats()
@@ -299,6 +299,11 @@ func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	return best_feasibility
 
 func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> float:
+	# ADD THIS DEBUG AT THE START:
+	if debug_enabled and pdc.pdc_id in ["-4_-72", "-21_-34", "-16_-49"]:
+		print("PROBLEM PDC %s: mount_pos=%s, required_angle=%.1f°, current_angle=%.1f°" % [
+			pdc.pdc_id.substr(4, 8), pdc.mount_position, rad_to_deg(required_angle), rad_to_deg(current_angle)
+		])
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
 	var world_angle = to_intercept.angle()
@@ -380,7 +385,7 @@ func optimize_pdc_assignments():
 	
 	# DEBUG: Only run ONE detailed analysis when we have max targets
 	var assignment_debug = []
-	var should_debug = (tracked_targets.size() >= 190 and not has_run_assignment_debug)  # Only once at peak
+	var should_debug = (tracked_targets.size() >= 100 and not has_run_assignment_debug)  # Only once at peak
 	
 	if should_debug:
 		print("\n=== PDC ASSIGNMENT ANALYSIS (Peak: %d targets) ===" % tracked_targets.size())

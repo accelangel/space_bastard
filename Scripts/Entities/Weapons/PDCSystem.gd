@@ -42,7 +42,7 @@ var targets_missed: int = 0
 var last_fire_time: float = 0.0
 
 # MINIMAL DEBUG SYSTEM
-@export var debug_enabled: bool = false  # Disabled by default
+@export var debug_enabled: bool = true  # Disabled by default
 var debug_bullet_count: int = 0
 
 # FIXED ORIENTATION CONSTANTS
@@ -88,6 +88,14 @@ func set_idle_rotation():
 	update_sprite_rotation()
 
 func _physics_process(delta):
+	# ADD THIS DEBUG LINE
+	if debug_enabled and is_firing and debug_bullet_count < 10:
+		print("PDC %s firing at target: %s (assigned by: %s)" % [
+			pdc_id.substr(4, 8), 
+			current_target_id.substr(8, 7) if current_target_id != "" else "NONE",
+			"FireControl" if fire_control_manager else "UNKNOWN"
+		])
+	
 	update_turret_rotation(delta)
 	handle_firing(delta)
 
