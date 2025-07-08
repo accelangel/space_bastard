@@ -21,7 +21,7 @@ var torpedoes_launched: int = 0
 var auto_launch_timer: float = 0.0
 
 # Volley control - simplified
-@export var continuous_fire: bool = true
+@export var continuous_fire: bool = false
 var volley_fired: bool = false
 
 # DEBUG CONTROL

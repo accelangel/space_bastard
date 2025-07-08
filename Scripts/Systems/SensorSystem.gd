@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - FIXED WITH STRICT VALIDATION
+# Scripts/Systems/SensorSystem.gd - CLEANED - NO UNUSED VARIABLES
 extends Node2D
 class_name SensorSystem
 
@@ -21,18 +21,12 @@ func update_contacts(entity_reports: Array):
 	# Clear old contacts
 	all_contacts.clear()
 	
-	var valid_enemies = 0
-	var invalid_enemies = 0
-	
 	# Filter for enemies only - with STRICT validation
 	for report in entity_reports:
 		if is_enemy_of(report.faction):
 			# STRICT VALIDATION: Must have valid node AND be in scene tree
 			if report.node and is_instance_valid(report.node) and report.node.is_inside_tree():
 				all_contacts.append(report)
-				valid_enemies += 1
-			else:
-				invalid_enemies += 1
 
 func is_enemy_of(other_faction: String) -> bool:
 	# Simple faction logic
@@ -44,19 +38,13 @@ func is_enemy_of(other_faction: String) -> bool:
 
 func get_all_enemy_torpedoes() -> Array:
 	var torpedoes = []
-	var invalid_count = 0
-	var valid_count = 0
 	
 	for contact in all_contacts:
 		if contact.type == "torpedo":
 			# TRIPLE CHECK: valid node, in tree, and still exists
 			if contact.node and is_instance_valid(contact.node) and contact.node.is_inside_tree():
 				torpedoes.append(contact.node)
-				valid_count += 1
-			else:
-				invalid_count += 1
 	
-	# NO DEBUG OUTPUT - runs too frequently
 	return torpedoes
 
 func get_all_enemy_ships() -> Array:
