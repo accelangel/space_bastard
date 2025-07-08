@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleManager.gd - FIXED BATTLE END DETECTION
+# Scripts/Systems/BattleManager.gd - COMPLETE FIXED VERSION
 extends Node
 
 # Battle state tracking
@@ -99,13 +99,13 @@ func monitor_active_battle(delta):
 		no_torpedoes_timer = 0.0  # Reset timer if torpedoes exist
 
 func get_current_torpedo_count() -> int:
-	# FIXED: Get current number of torpedoes from EntityManager with proper validation
+	# Get current number of torpedoes from EntityManager with proper validation
 	if not entity_manager:
 		return 0
 	
 	var torpedo_entities = entity_manager.get_entities_by_type("torpedo")
 	
-	# FIXED: Count only valid, non-destroyed torpedoes
+	# Count only valid, non-destroyed torpedoes
 	var valid_count = 0
 	for entity_data in torpedo_entities:
 		if is_instance_valid(entity_data.node_ref) and not entity_data.is_destroyed:
@@ -150,7 +150,7 @@ func end_battle():
 		if launcher.has_method("stop_battle_firing"):
 			launcher.stop_battle_firing()
 	
-	# FIXED: Emergency stop all PDCs and Fire Control systems
+	# Emergency stop all PDCs and Fire Control systems
 	emergency_stop_all_systems()
 	
 	print("=== BATTLE ENDED ===")
@@ -170,7 +170,6 @@ func end_battle():
 	# Reset for next battle
 	call_deferred("reset_for_next_battle")
 
-# FIXED: Comprehensive system shutdown
 func emergency_stop_all_systems():
 	"""Stop all combat systems across all ships"""
 	for ship in ships:
@@ -179,13 +178,11 @@ func emergency_stop_all_systems():
 			
 		# Stop Fire Control Manager
 		var fire_control = ship.get_node_or_null("FireControlManager")
-		if fire_control and fire_control.has_method("emergency_stop_all_pdcs"):
-			fire_control.emergency_stop_all_pdcs()
-		
-		# Stop individual PDCs as backup
-		for child in ship.get_children():
-			if child.has_method("emergency_stop"):
-				child.emergency_stop()
+		if fire_control:
+			# Stop all PDCs through Fire Control
+			for child in ship.get_children():
+				if child.has_method("emergency_stop"):
+					child.emergency_stop()
 
 func analyze_battle_data():
 	# Process EntityManager events into battle statistics
@@ -297,7 +294,12 @@ func analyze_pdc_effectiveness():
 			var pdc_id = event.source_pdc
 			if pdc_id != "":
 				if not pdc_stats.has(pdc_id):
-					pdc_stats[pdc_id]["bullets_fired"] += 1
+					pdc_stats[pdc_id] = {
+						"bullets_fired": 0,
+						"hits": 0,
+						"hit_rate": 0.0
+					}
+				pdc_stats[pdc_id]["bullets_fired"] += 1
 	
 	# Count hits by matching collision events with bullet sources
 	for event in battle_events:
@@ -438,9 +440,4 @@ func get_battle_statistics() -> Dictionary:
 	return battle_analysis.duplicate()
 
 func set_auto_battle_detection(enabled: bool):
-	auto_start_battles = enabledd] = {
-						"bullets_fired": 0,
-						"hits": 0,
-						"hit_rate": 0.0
-					}
-				pdc_stats[pdc_i
+	auto_start_battles = enabled

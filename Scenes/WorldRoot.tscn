@@ -47,6 +47,3 @@ rotation = 0.785398
 
 [node name="BattleManager" type="Node" parent="."]
 script = ExtResource("5_gi6eu")
-auto_start_battles = null
-print_detailed_reports = null
-debug_enabled = null
