@@ -1,15 +1,16 @@
-# Scripts/Managers/EntityManager.gd - FIXED IMMEDIATE CLEANUP
+# Scripts/Managers/EntityManager.gd - FIXED EVENT TRACKING
 extends Node
 
 # Core entity tracking
 var entities: Dictionary = {}  # entity_id -> EntityData
 var entity_id_counter: int = 0
 
-# NEW: Battle event recording system
+# ENHANCED: Better battle event recording
 var battle_events: Array = []
 var entity_registry: Dictionary = {}  # Full lifecycle tracking
+var bullet_to_pdc_map: Dictionary = {}  # bullet_id -> pdc_id for tracking
 
-# NEW: Collision deduplication system
+# Collision deduplication system
 var pending_collisions: Dictionary = {}  # collision_key -> frame_number
 var current_frame: int = 0
 
@@ -22,8 +23,6 @@ var map_bounds: Rect2
 
 # DEBUG CONTROL - Minimal logging only
 @export var debug_enabled: bool = false
-var debug_timer: float = 0.0
-var debug_interval: float = 30.0
 
 class EntityData:
 	var entity_id: String
@@ -32,7 +31,7 @@ class EntityData:
 	var faction: String       # "friendly" or "hostile"
 	var position: Vector2
 	var last_update: float
-	var source_pdc: String = ""  # NEW: For bullets only - which PDC fired this
+	var source_pdc: String = ""  # For bullets only - which PDC fired this
 	var birth_time: float
 	var is_destroyed: bool = false
 	
@@ -61,7 +60,7 @@ func _physics_process(delta):
 	if update_timer >= update_interval:
 		update_timer = 0.0
 		
-		# FIXED: Clean up invalid entities BEFORE sending reports
+		# Clean up invalid entities BEFORE sending reports
 		cleanup_invalid_entities()
 		
 		# Send position reports to all sensor systems
@@ -84,16 +83,37 @@ func _physics_process(delta):
 		# Clean up out-of-bounds entities
 		cleanup_out_of_bounds()
 
-# ENHANCED: Registration now supports source PDC for bullets
+# Fixed register_entity function for EntityManager.gd
+
 func register_entity(node: Node2D, type: String, faction: String, source_pdc: String = "") -> String:
+	# Validate the node exists and is valid before registration
+	if not node or not is_instance_valid(node):
+		print("EntityManager: Rejected invalid node for registration")
+		return ""
+	
 	entity_id_counter += 1
 	var entity_id = type + "_" + str(entity_id_counter)
+	
+	# ENHANCED: Verify the entity_id is unique (paranoid check)
+	var attempts = 0
+	while entities.has(entity_id) and attempts < 100:
+		entity_id_counter += 1
+		entity_id = type + "_" + str(entity_id_counter)
+		attempts += 1
+	
+	if attempts >= 100:
+		print("EntityManager: ERROR - Could not generate unique entity ID!")
+		return ""
 	
 	var entity_data = EntityData.new(entity_id, node, type, faction, source_pdc)
 	entities[entity_id] = entity_data
 	entity_registry[entity_id] = entity_data  # Also track in registry
 	
-	# Record birth event
+	# FIXED: For bullets, maintain direct PDC mapping only if source_pdc is valid
+	if type == "pdc_bullet" and source_pdc != "" and source_pdc.strip_edges() != "":
+		bullet_to_pdc_map[entity_id] = source_pdc
+	
+	# Record birth event with enhanced data
 	record_battle_event({
 		"type": "entity_registered",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
@@ -104,9 +124,12 @@ func register_entity(node: Node2D, type: String, faction: String, source_pdc: St
 		"source_pdc": source_pdc
 	})
 	
-	# FIXED: Set entity_id as a proper property instead of using set()
-	# This ensures collision detection can find it reliably
+	# Set entity_id as a proper property for collision detection
 	node.entity_id = entity_id
+	
+	# DEBUG: Log torpedo registrations to track the numbering issue
+	if type == "torpedo":
+		print("EntityManager: Registered %s (counter now: %d)" % [entity_id, entity_id_counter])
 	
 	return entity_id
 
@@ -138,12 +161,20 @@ func report_collision(entity1_id: String, entity2_id: String, collision_position
 	if entity1.faction == entity2.faction:
 		return  # Friendly fire ignored
 	
-	# ONLY print torpedo vs bullet collisions
-	if (entity1.entity_type == "torpedo" and entity2.entity_type == "pdc_bullet") or \
-	   (entity1.entity_type == "pdc_bullet" and entity2.entity_type == "torpedo"):
+	# Determine collision type for logging
+	var collision_type = get_collision_type(entity1.entity_type, entity2.entity_type)
+	
+	# ONLY print meaningful intercepts
+	if collision_type == "torpedo_bullet_intercept":
 		print("Intercept: %s vs %s" % [entity1.entity_type, entity2.entity_type])
 	
-	# Record collision event
+	# ENHANCED: Record collision event with better source tracking
+	var bullet_source_pdc = ""
+	if entity1.entity_type == "pdc_bullet":
+		bullet_source_pdc = bullet_to_pdc_map.get(entity1_id, entity1.source_pdc)
+	elif entity2.entity_type == "pdc_bullet":
+		bullet_source_pdc = bullet_to_pdc_map.get(entity2_id, entity2.source_pdc)
+	
 	record_battle_event({
 		"type": "collision",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
@@ -153,7 +184,9 @@ func report_collision(entity1_id: String, entity2_id: String, collision_position
 		"entity2_type": entity2.entity_type,
 		"position": collision_position,
 		"entity1_faction": entity1.faction,
-		"entity2_faction": entity2.faction
+		"entity2_faction": entity2.faction,
+		"collision_type": collision_type,
+		"bullet_source_pdc": bullet_source_pdc  # Track which PDC made the hit
 	})
 	
 	# IMMEDIATE DESTRUCTION - don't wait for cleanup
@@ -163,6 +196,19 @@ func report_collision(entity1_id: String, entity2_id: String, collision_position
 	# FORCE IMMEDIATE CLEANUP - Remove from tracking immediately
 	entities.erase(entity1_id)
 	entities.erase(entity2_id)
+	
+	# Clean up bullet mapping
+	bullet_to_pdc_map.erase(entity1_id)
+	bullet_to_pdc_map.erase(entity2_id)
+
+func get_collision_type(type1: String, type2: String) -> String:
+	# Classify collision types for analysis
+	if (type1 == "torpedo" and type2 == "pdc_bullet") or (type1 == "pdc_bullet" and type2 == "torpedo"):
+		return "torpedo_bullet_intercept"
+	elif (type1 == "torpedo" and type2 in ["player_ship", "enemy_ship"]) or (type2 == "torpedo" and type1 in ["player_ship", "enemy_ship"]):
+		return "torpedo_ship_impact"
+	else:
+		return "other"
 
 func get_collision_key(id1: String, id2: String) -> String:
 	# Create consistent key regardless of order
@@ -187,7 +233,7 @@ func destroy_entity_safe(entity_id: String, reason: String):
 	if entity_data.entity_type == "torpedo":
 		print("Torpedo destroyed: %s (%s)" % [entity_id, reason])
 	
-	# Record destruction event
+	# Record destruction event with enhanced data
 	record_battle_event({
 		"type": "entity_destroyed",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
@@ -219,11 +265,7 @@ func cleanup_invalid_entities():
 	# Remove invalid entities from tracking IMMEDIATELY
 	for entity_id in to_remove:
 		entities.erase(entity_id)
-
-# NEW: Immediate cleanup of destroyed entities
-func remove_destroyed_entity(entity_id: String):
-	if entities.has(entity_id):
-		entities.erase(entity_id)
+		bullet_to_pdc_map.erase(entity_id)  # Clean up bullet mapping
 
 func unregister_entity(entity_id: String):
 	if entities.has(entity_id):
@@ -234,6 +276,7 @@ func unregister_entity(entity_id: String):
 			destroy_entity_safe(entity_id, "manual_cleanup")
 		
 		entities.erase(entity_id)
+		bullet_to_pdc_map.erase(entity_id)
 
 func cleanup_out_of_bounds():
 	var to_remove = []
@@ -253,17 +296,22 @@ func cleanup_out_of_bounds():
 	# Remove out-of-bounds entities from tracking
 	for entity_id in to_remove:
 		entities.erase(entity_id)
+		bullet_to_pdc_map.erase(entity_id)
 
-# NEW: Battle data interface for BattleManager
+# ENHANCED: Battle data interface with better tracking
 func get_battle_data() -> Dictionary:
 	return {
 		"events": battle_events.duplicate(),
-		"entity_registry": entity_registry.duplicate()
+		"entity_registry": entity_registry.duplicate(),
+		"bullet_to_pdc_map": bullet_to_pdc_map.duplicate()
 	}
 
 func clear_battle_data():
 	battle_events.clear()
 	entity_registry.clear()
+	bullet_to_pdc_map.clear()
+	# FIXED: Reset entity counter for clean battle tracking
+	entity_id_counter = 0
 	print("EntityManager: Battle data cleared for new battle")
 
 func record_battle_event(event_data: Dictionary):

@@ -32,17 +32,5 @@ position = Vector2(-4, -72)
 [node name="PDC2" parent="." instance=ExtResource("3_s8ewm")]
 position = Vector2(27, -71)
 
-[node name="PDC3" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(31, -31)
-
-[node name="PDC4" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(-21, -34)
-
-[node name="PDC5" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(30, -48)
-
-[node name="PDC6" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(-16, -49)
-
 [node name="FireControlManager" type="Node2D" parent="."]
 script = ExtResource("5_xl005")

@@ -1,12 +1,12 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - FIXED COLLISION ROUTING
+# Scripts/Entities/Weapons/PDCBullet.gd - FIXED SOURCE TRACKING
 extends Area2D
 class_name PDCBullet
 
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
 var faction: String = ""
-var entity_id: String = ""  # This will be set by EntityManager
-var source_pdc_id: String = ""  # NEW: Track which PDC fired this bullet
+var entity_id: String = ""
+var source_pdc_id: String = ""  # FIXED: Better tracking of source PDC
 
 # References
 @onready var sprite: Sprite2D = $Sprite2D
@@ -35,13 +35,17 @@ func _on_area_entered(area: Area2D):
 	
 	var other_entity_id = ""
 	
-	# Get entity_id from the other object
+	# Get entity_id from the other object - try multiple methods
 	if area.has_meta("entity_id"):
 		other_entity_id = area.get_meta("entity_id")
 	elif "entity_id" in area and area.entity_id != "":
 		other_entity_id = area.entity_id
 	else:
-		# NO WARNING - too spammy
+		# Can't identify the other entity, skip collision
+		return
+	
+	# Validate that we have both IDs
+	if other_entity_id == "" or entity_id == "":
 		return
 	
 	# Report collision - EntityManager will handle destruction
@@ -58,15 +62,18 @@ func set_faction(new_faction: String):
 func set_source_pdc(pdc_id: String):
 	source_pdc_id = pdc_id
 
-# ENHANCED: Initialize bullet with EntityManager registration
+# ENHANCED: Initialize bullet with proper source tracking
 func initialize_bullet(bullet_faction: String, pdc_id: String):
 	faction = bullet_faction
 	source_pdc_id = pdc_id
 	
-	# Register with EntityManager, passing source PDC info
+	# Register with EntityManager, ensuring source PDC is properly tracked
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
-		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction, source_pdc_id)
+		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction, pdc_id)
+		# FIXED: Also store on the node for collision detection
+		set_meta("entity_id", entity_id)
+		set_meta("source_pdc_id", pdc_id)
 
 func _exit_tree():
 	# Unregister from EntityManager when destroyed

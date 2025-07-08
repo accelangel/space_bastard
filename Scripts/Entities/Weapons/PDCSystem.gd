@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED WITH DEBUG AND FORCE STOP
+# Scripts/Entities/Weapons/PDCSystem.gd - SIMPLIFIED NAMING
 extends Node2D
 
 # PDC Hardware Configuration
@@ -15,7 +15,7 @@ var current_rotation: float = 0.0
 var target_rotation: float = 0.0
 var emergency_slew: bool = false
 
-# PDC Identity
+# PDC Identity - SIMPLIFIED
 var pdc_id: String = ""
 var mount_position: Vector2
 var current_status: String = "IDLE"
@@ -35,7 +35,7 @@ var muzzle_point: Marker2D
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
-# MINIMAL DEBUG SYSTEM
+# DEBUG CONTROL - Reduced to minimum
 @export var debug_enabled: bool = false
 
 # FIXED ORIENTATION CONSTANTS
@@ -47,8 +47,18 @@ func _ready():
 	parent_ship = get_parent()
 	setup_sprite_references()
 	mount_position = position
-	pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
+	
+	# FIXED: Use the actual node name from the scene
+	pdc_id = name  # Just use "PDC1", "PDC2", etc. from the scene
+	
+	# Ensure it's not empty
+	if pdc_id == "" or pdc_id == "PDC":
+		pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
+	
 	set_idle_rotation()
+	
+	if debug_enabled:
+		print("PDC initialized: %s at position %s" % [pdc_id, mount_position])
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -143,16 +153,15 @@ func handle_firing(delta):
 func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
 	# FIXED: Don't accept empty target IDs
 	if target_id == "" or target_id.strip_edges() == "":
-		print("PDC %s: Rejecting empty target ID" % pdc_id.substr(-4))
 		emergency_stop()
 		return
 	
 	# ONLY print when switching targets, not every update
 	if current_target_id != target_id:
 		if current_target_id != "":
-			print("PDC %s: %s -> %s" % [pdc_id.substr(-4), current_target_id.substr(-4), target_id.substr(-4)])
+			print("PDC %s: %s -> %s" % [pdc_id, get_short_target_name(current_target_id), get_short_target_name(target_id)])
 		else:
-			print("PDC %s: acquiring %s" % [pdc_id.substr(-4), target_id.substr(-4)])
+			print("PDC %s: acquiring %s" % [pdc_id, get_short_target_name(target_id)])
 	
 	current_target_id = target_id
 	target_rotation = target_angle - PI/2  # Apply -90° correction
@@ -176,7 +185,7 @@ func start_firing():
 func stop_firing():
 	# ONLY print when actually stopping (not when already idle)
 	if is_firing or current_target_id != "":
-		print("PDC %s: stop firing" % pdc_id.substr(-4))
+		print("PDC %s: stop firing" % pdc_id)
 	
 	is_firing = false
 	fire_authorized = false
@@ -191,7 +200,7 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# ENHANCED: Bullet creation with better PDC tracking
+# ENHANCED: Better bullet creation with simple PDC tracking
 func fire_bullet():
 	if not bullet_scene:
 		return
@@ -210,9 +219,17 @@ func fire_bullet():
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
-	# ENHANCED: Initialize bullet with proper PDC tracking
+	# FIXED: Simple bullet initialization with clear PDC ID
 	if bullet.has_method("initialize_bullet") and parent_ship and "faction" in parent_ship:
 		bullet.initialize_bullet(parent_ship.faction, pdc_id)
+		if debug_enabled:
+			print("Bullet fired by %s (entity_id will be assigned by EntityManager)" % pdc_id)
+	else:
+		# Fallback
+		if bullet.has_method("set_faction"):
+			bullet.set_faction(parent_ship.faction)
+		if bullet.has_method("set_source_pdc"):
+			bullet.set_source_pdc(pdc_id)
 	
 	if bullet.has_method("set_velocity"):
 		bullet.set_velocity(bullet_velocity_pixels)
@@ -236,6 +253,14 @@ func angle_difference(from: float, to: float) -> float:
 	elif diff < -PI:
 		diff += TAU
 	return diff
+
+# Helper functions for cleaner debug output
+func get_short_target_name(target_id: String) -> String:
+	if "_" in target_id:
+		var parts = target_id.split("_")
+		if parts.size() >= 2:
+			return parts[0] + "_" + parts[-1].substr(-4)  # Type + last 4 digits
+	return target_id.substr(-4)
 
 # Status reporting
 func get_status() -> Dictionary:
@@ -266,7 +291,7 @@ func set_fire_control_manager(manager: Node):
 
 func emergency_stop():
 	# ALWAYS print emergency stops
-	print("PDC %s: EMERGENCY STOP" % pdc_id.substr(-4))
+	print("PDC %s: EMERGENCY STOP" % pdc_id)
 	stop_firing()
 	emergency_slew = false
 	fire_authorized = false

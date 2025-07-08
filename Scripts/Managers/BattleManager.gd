@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleManager.gd - FIXED WITH FORCE END BATTLE
+# Scripts/Systems/BattleManager.gd - FIXED ANALYSIS LOGIC
 extends Node
 
 # Battle state tracking
@@ -25,6 +25,7 @@ var ships: Array = []
 # Battle data
 var battle_events: Array = []
 var entity_registry: Dictionary = {}
+var bullet_to_pdc_map: Dictionary = {}
 var battle_analysis: Dictionary = {}
 
 # Settings
@@ -94,7 +95,7 @@ func monitor_active_battle(delta):
 	# Monitor ongoing battle for end conditions
 	var torpedo_count = get_current_torpedo_count()
 	
-	# FIXED: Also check if all fire control systems are idle
+	# Also check if all fire control systems are idle
 	var all_pdcs_idle = true
 	var ships_found = get_tree().get_nodes_in_group("enemy_ships") + get_tree().get_nodes_in_group("player_ships")
 	for ship in ships_found:
@@ -183,6 +184,7 @@ func end_battle():
 		var battle_data = entity_manager.get_battle_data()
 		battle_events = battle_data.events
 		entity_registry = battle_data.entity_registry
+		bullet_to_pdc_map = battle_data.get("bullet_to_pdc_map", {})
 		
 		# Perform analysis
 		analyze_battle_data()
@@ -193,7 +195,7 @@ func end_battle():
 	# Reset for next battle
 	call_deferred("reset_for_next_battle")
 
-# NEW: Force end battle for emergencies
+# Force end battle for emergencies
 func force_end_battle():
 	# Emergency battle end when PDCs won't stop firing
 	print("BATTLE_DEBUG: Force ending battle due to persistent firing")
@@ -253,7 +255,7 @@ func analyze_battle_data():
 	var pdc_performance = {}
 	battle_analysis["pdc_performance"] = pdc_performance
 	
-	# Analyze events
+	# Analyze events in the correct order
 	analyze_entity_lifecycle()
 	analyze_collision_outcomes()
 	analyze_pdc_effectiveness()
@@ -262,62 +264,107 @@ func analyze_battle_data():
 	calculate_summary_statistics()
 
 func analyze_entity_lifecycle():
-	# Track entity births and deaths
-	var torpedoes_born = 0
-	var bullets_born = 0
+	# ENHANCED: Track entity births and deaths with detailed logging
+	var unique_torpedoes = {}
+	var torpedo_registrations = []
+	
+	print("\n=== TORPEDO LIFECYCLE DEBUG ===")
 	
 	for event in battle_events:
 		if event.type == "entity_registered":
 			match event.entity_type:
 				"torpedo":
-					torpedoes_born += 1
+					unique_torpedoes[event.entity_id] = true
+					torpedo_registrations.append({
+						"torpedo_id": event.entity_id,
+						"timestamp": event.timestamp
+					})
 				"pdc_bullet":
-					bullets_born += 1
+					pass  # Count bullets separately
 	
-	battle_analysis["torpedoes_fired"] = torpedoes_born
-	battle_analysis["total_bullets_fired"] = bullets_born
+	print("Total torpedo registrations found: %d" % torpedo_registrations.size())
+	print("Unique torpedo IDs: %d" % unique_torpedoes.size())
+	
+	# Print first few and last few torpedo registrations
+	if torpedo_registrations.size() > 0:
+		print("First torpedo: %s at %.2fs" % [torpedo_registrations[0].torpedo_id, torpedo_registrations[0].timestamp])
+		if torpedo_registrations.size() > 1:
+			var last_idx = torpedo_registrations.size() - 1
+			print("Last torpedo: %s at %.2fs" % [torpedo_registrations[last_idx].torpedo_id, torpedo_registrations[last_idx].timestamp])
+	
+	battle_analysis["torpedoes_fired"] = unique_torpedoes.size()
+	
+	# Also count bullets for comparison
+	var unique_bullets = {}
+	for event in battle_events:
+		if event.type == "entity_registered" and event.entity_type == "pdc_bullet":
+			unique_bullets[event.entity_id] = true
+	
+	battle_analysis["total_bullets_fired"] = unique_bullets.size()
+	print("Total bullets registered: %d" % unique_bullets.size())
 
 func analyze_collision_outcomes():
-	# Analyze collision events to determine torpedo fates
+	# ENHANCED: Track each collision with detailed torpedo fate logging
 	var torpedo_fates = {}  # torpedo_id -> "intercepted" or "hit_ship"
 	var collision_details = []
 	
-	# Track all collisions
+	print("\n=== TORPEDO COLLISION DEBUG ===")
+	
+	# Process all collision events
+	var torpedo_bullet_collisions = 0
+	var torpedo_ship_collisions = 0
+	
 	for event in battle_events:
 		if event.type == "collision":
-			var torpedo_id = ""
-			var bullet_id = ""
-			var is_torpedo_bullet_collision = false
+			var collision_type = event.get("collision_type", "unknown")
 			
-			# Determine if this is torpedo vs bullet collision
-			if event.entity1_type == "torpedo" and event.entity2_type == "pdc_bullet":
-				torpedo_id = event.entity1_id
-				bullet_id = event.entity2_id
-				is_torpedo_bullet_collision = true
-			elif event.entity1_type == "pdc_bullet" and event.entity2_type == "torpedo":
-				torpedo_id = event.entity2_id
-				bullet_id = event.entity1_id
-				is_torpedo_bullet_collision = true
-			
-			if is_torpedo_bullet_collision:
-				torpedo_fates[torpedo_id] = "intercepted"
-				collision_details.append({
-					"torpedo_id": torpedo_id,
-					"bullet_id": bullet_id,
-					"position": event.position,
-					"timestamp": event.timestamp
-				})
-			
-			# Check for torpedo-ship collisions
-			if (event.entity1_type == "torpedo" and event.entity2_type in ["player_ship", "enemy_ship"]) or \
-			   (event.entity2_type == "torpedo" and event.entity1_type in ["player_ship", "enemy_ship"]):
-				torpedo_id = event.entity1_id if event.entity1_type == "torpedo" else event.entity2_id
+			if collision_type == "torpedo_bullet_intercept":
+				torpedo_bullet_collisions += 1
 				
-				# Only mark as ship hit if not already intercepted
-				if not torpedo_fates.has(torpedo_id):
+				# Find the torpedo in this collision
+				var torpedo_id = ""
+				if event.entity1_type == "torpedo":
+					torpedo_id = event.entity1_id
+				elif event.entity2_type == "torpedo":
+					torpedo_id = event.entity2_id
+				
+				if torpedo_id != "":
+					# Check for double-counting
+					if torpedo_fates.has(torpedo_id):
+						print("WARNING: Torpedo %s already had fate '%s', now being marked as intercepted!" % [
+							torpedo_id, torpedo_fates[torpedo_id]
+						])
+					
+					torpedo_fates[torpedo_id] = "intercepted"
+					collision_details.append({
+						"torpedo_id": torpedo_id,
+						"collision_type": "intercept",
+						"timestamp": event.timestamp
+					})
+			
+			elif collision_type == "torpedo_ship_impact":
+				torpedo_ship_collisions += 1
+				
+				# Find the torpedo in this collision
+				var torpedo_id = ""
+				if event.entity1_type == "torpedo":
+					torpedo_id = event.entity1_id
+				elif event.entity2_type == "torpedo":
+					torpedo_id = event.entity2_id
+				
+				if torpedo_id != "" and not torpedo_fates.has(torpedo_id):
 					torpedo_fates[torpedo_id] = "hit_ship"
+					collision_details.append({
+						"torpedo_id": torpedo_id,
+						"collision_type": "ship_hit",
+						"timestamp": event.timestamp
+					})
 	
-	# Count outcomes
+	print("Torpedo-bullet collision events: %d" % torpedo_bullet_collisions)
+	print("Torpedo-ship collision events: %d" % torpedo_ship_collisions)
+	print("Unique torpedoes with fates: %d" % torpedo_fates.size())
+	
+	# Count final outcomes
 	var intercepted_count = 0
 	var ship_hit_count = 0
 	
@@ -327,20 +374,34 @@ func analyze_collision_outcomes():
 		elif fate == "hit_ship":
 			ship_hit_count += 1
 	
+	print("Final count - Intercepted: %d, Ship hits: %d" % [intercepted_count, ship_hit_count])
+	
+	# Check for discrepancies
+	if torpedo_bullet_collisions != intercepted_count:
+		print("DISCREPANCY: %d collision events but %d unique torpedoes intercepted" % [
+			torpedo_bullet_collisions, intercepted_count
+		])
+	
 	battle_analysis["torpedoes_intercepted"] = intercepted_count
 	battle_analysis["torpedoes_hit_ships"] = ship_hit_count
-	battle_analysis["collision_details"] = collision_details
 	battle_analysis["torpedo_fates"] = torpedo_fates
+	battle_analysis["collision_details"] = collision_details
+	
+	print("=== END COLLISION DEBUG ===\n")
 
 func analyze_pdc_effectiveness():
-	# Analyze PDC performance from bullet sources and collisions
+	# MINIMAL DEBUG: Just print summary, not every event
 	var pdc_stats = {}
 	
 	# Count bullets fired by each PDC
+	var total_bullets = 0
+	var bullets_with_source = 0
 	for event in battle_events:
 		if event.type == "entity_registered" and event.entity_type == "pdc_bullet":
-			var pdc_id = event.source_pdc
+			total_bullets += 1
+			var pdc_id = event.get("source_pdc", "")
 			if pdc_id != "":
+				bullets_with_source += 1
 				if not pdc_stats.has(pdc_id):
 					pdc_stats[pdc_id] = {
 						"bullets_fired": 0,
@@ -349,36 +410,50 @@ func analyze_pdc_effectiveness():
 					}
 				pdc_stats[pdc_id]["bullets_fired"] += 1
 	
-	# Count hits by matching collision events with bullet sources
+	# Count hits via collision events
+	var total_hits = 0
+	var hits_with_source = 0
 	for event in battle_events:
-		if event.type == "collision":
-			var bullet_id = ""
-			var is_successful_intercept = false
-			
-			# Find bullet in torpedo-bullet collisions
-			if event.entity1_type == "pdc_bullet" and event.entity2_type == "torpedo":
-				bullet_id = event.entity1_id
-				is_successful_intercept = true
-			elif event.entity2_type == "pdc_bullet" and event.entity1_type == "torpedo":
-				bullet_id = event.entity2_id
-				is_successful_intercept = true
-			
-			if is_successful_intercept:
-				# Find which PDC fired this bullet
-				for reg_event in battle_events:
-					if reg_event.type == "entity_registered" and \
-					   reg_event.entity_id == bullet_id and \
-					   reg_event.entity_type == "pdc_bullet":
-						var pdc_id = reg_event.source_pdc
-						if pdc_id != "" and pdc_stats.has(pdc_id):
-							pdc_stats[pdc_id]["hits"] += 1
-						break
+		if event.type == "collision" and event.get("collision_type", "") == "torpedo_bullet_intercept":
+			total_hits += 1
+			var pdc_id = event.get("bullet_source_pdc", "")
+			if pdc_id != "" and pdc_stats.has(pdc_id):
+				pdc_stats[pdc_id]["hits"] += 1
+				hits_with_source += 1
+			else:
+				# Try backup method using bullet_to_pdc_map
+				var bullet_id = ""
+				if event.entity1_type == "pdc_bullet":
+					bullet_id = event.entity1_id
+				elif event.entity2_type == "pdc_bullet":
+					bullet_id = event.entity2_id
+				
+				if bullet_id != "" and bullet_to_pdc_map.has(bullet_id):
+					var mapped_pdc = bullet_to_pdc_map[bullet_id]
+					if pdc_stats.has(mapped_pdc):
+						pdc_stats[mapped_pdc]["hits"] += 1
+						hits_with_source += 1
 	
 	# Calculate hit rates
 	for pdc_id in pdc_stats:
 		var stats = pdc_stats[pdc_id]
 		if stats["bullets_fired"] > 0:
 			stats["hit_rate"] = (float(stats["hits"]) / float(stats["bullets_fired"])) * 100.0
+		else:
+			stats["hit_rate"] = 0.0
+	
+	# MINIMAL DEBUG OUTPUT - just the important stuff
+	if total_bullets != bullets_with_source or total_hits != hits_with_source:
+		print("PDC_DEBUG: Bullets %d/%d tracked, Hits %d/%d tracked" % [
+			bullets_with_source, total_bullets, hits_with_source, total_hits
+		])
+		
+		# If tracking is broken, list what PDCs we found
+		if pdc_stats.size() > 0:
+			var pdc_names = []
+			for pdc_id in pdc_stats:
+				pdc_names.append(pdc_id)
+			print("PDC_DEBUG: Found PDCs: %s" % str(pdc_names))
 	
 	battle_analysis["pdc_performance"] = pdc_stats
 
@@ -387,10 +462,12 @@ func calculate_summary_statistics():
 	var torpedoes_intercepted = battle_analysis["torpedoes_intercepted"]
 	var torpedoes_hit_ships = battle_analysis["torpedoes_hit_ships"]
 	
-	# Calculate intercept rate
+	# Calculate intercept rate based on torpedoes that actually reached a conclusion
 	var total_torpedoes_resolved = torpedoes_intercepted + torpedoes_hit_ships
 	if total_torpedoes_resolved > 0:
 		battle_analysis["intercept_rate"] = (float(torpedoes_intercepted) / float(total_torpedoes_resolved)) * 100.0
+	else:
+		battle_analysis["intercept_rate"] = 0.0
 	
 	# Calculate ammunition efficiency
 	var total_bullets = battle_analysis["total_bullets_fired"]
@@ -422,16 +499,26 @@ func print_comprehensive_battle_report():
 	
 	print("")
 	
-	# PDC Performance
+	# PDC Performance - Enhanced display
 	print("PDC PERFORMANCE:")
 	var pdc_performance = battle_analysis["pdc_performance"]
 	
-	for pdc_id in pdc_performance:
-		var stats = pdc_performance[pdc_id]
-		
-		print("  %s: %d rounds, %d hits (%.1f%% accuracy)" % [
-			pdc_id.substr(4, 8), stats["bullets_fired"], stats["hits"], stats["hit_rate"]
-		])
+	if pdc_performance.size() == 0:
+		print("  No PDC performance data available")
+	else:
+		for pdc_id in pdc_performance:
+			var stats = pdc_performance[pdc_id]
+			var display_name = pdc_id
+			
+			# Shorten PDC name for display (just the position part)
+			if "_" in pdc_id:
+				var parts = pdc_id.split("_")
+				if parts.size() >= 3:
+					display_name = parts[1] + "_" + parts[2]
+			
+			print("  %s: %d rounds, %d hits (%.1f%% accuracy)" % [
+				display_name, stats["bullets_fired"], stats["hits"], stats["hit_rate"]
+			])
 	
 	print("")
 	
@@ -466,6 +553,7 @@ func reset_for_next_battle():
 	no_torpedoes_timer = 0.0
 	battle_events.clear()
 	entity_registry.clear()
+	bullet_to_pdc_map.clear()
 	battle_analysis.clear()
 	
 	if debug_enabled:
