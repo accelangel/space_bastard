@@ -1,4 +1,4 @@
-# Scripts/Managers/EntityManager.gd - ENHANCED FOR BATTLE REFACTOR
+# Scripts/Managers/EntityManager.gd - FIXED ENTITY ID ASSIGNMENT
 extends Node
 
 # Core entity tracking
@@ -108,9 +108,9 @@ func register_entity(node: Node2D, type: String, faction: String, source_pdc: St
 		"source_pdc": source_pdc
 	})
 	
-	# Set entity_id on the node for collision reporting
-	if node.has_method("set"):
-		node.set("entity_id", entity_id)
+	# FIXED: Set entity_id as a proper property instead of using set()
+	# This ensures collision detection can find it reliably
+	node.entity_id = entity_id
 	
 	return entity_id
 

@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - UPDATED FOR BATTLE REFACTOR
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - FIXED DOCSTRINGS
 extends Node2D
 class_name TorpedoLauncher
 
@@ -66,13 +66,13 @@ func start_battle_firing():
 		print("TorpedoLauncher: Battle firing started")
 
 func stop_battle_firing():
-	"""Called by BattleManager to stop torpedo barrage"""
+	# Called by BattleManager to stop torpedo barrage
 	auto_launch_enabled = false
 	if debug_enabled:
 		print("TorpedoLauncher: Battle firing stopped")
 
 func is_battle_active() -> bool:
-	"""Check if we're currently in battle firing mode"""
+	# Check if we're currently in battle firing mode
 	return auto_launch_enabled
 
 func launch_at_best_target() -> Torpedo:
@@ -160,6 +160,6 @@ func set_launch_rate(new_interval: float):
 	auto_launch_interval = new_interval
 
 func force_stop_all():
-	"""Emergency stop all torpedo launching"""
+	# Emergency stop all torpedo launching
 	auto_launch_enabled = false
 	volley_fired = true

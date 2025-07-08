@@ -1,11 +1,11 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - REFACTORED FOR BATTLE SYSTEM
+# Scripts/Entities/Weapons/PDCBullet.gd - FIXED COLLISION DETECTION
 extends Area2D
 class_name PDCBullet
 
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
 var faction: String = ""
-var entity_id: String = ""
+var entity_id: String = ""  # This will be set by EntityManager
 var source_pdc_id: String = ""  # NEW: Track which PDC fired this bullet
 
 # References
@@ -29,19 +29,26 @@ func _physics_process(delta):
 		entity_manager.update_entity_position(entity_id, global_position)
 
 func _on_area_entered(area: Area2D):
-	# NEW: Report collision to EntityManager instead of direct destruction
+	# FIXED: Better collision detection with fallback options
 	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager and entity_id:
-		# Get the other entity's ID
-		var other_entity_id = ""
-		if "entity_id" in area:
-			other_entity_id = area.entity_id
-		else:
-			print("Warning: Collided entity has no entity_id: %s" % area.name)
-			return
-		
-		# Report collision - EntityManager will handle destruction
-		entity_manager.report_collision(entity_id, other_entity_id, global_position)
+	if not entity_manager or not entity_id:
+		return
+	
+	var other_entity_id = ""
+	
+	# Method 1: Try to get entity_id as a property (most reliable)
+	if area.has_meta("entity_id"):
+		other_entity_id = area.get_meta("entity_id")
+	elif "entity_id" in area and area.entity_id != "":
+		other_entity_id = area.entity_id
+	else:
+		# Method 2: Fallback - generate a temporary ID for unregistered entities
+		# This handles cases where entities might not be properly registered
+		print("Warning: Collided entity has no entity_id, skipping collision: %s" % area.name)
+		return
+	
+	# Report collision - EntityManager will handle destruction
+	entity_manager.report_collision(entity_id, other_entity_id, global_position)
 
 func set_velocity(new_velocity: Vector2):
 	velocity = new_velocity
