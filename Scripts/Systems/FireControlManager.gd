@@ -1,4 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - PROPER SIGNAL-BASED CLEANUP
+# Scripts/Systems/FireControlManager.gd - FIXED WITHOUT SIGNAL DEPENDENCIES
 extends Node2D
 class_name FireControlManager
 
@@ -21,10 +21,9 @@ var registered_pdcs: Dictionary = {}
 var pdc_assignments: Dictionary = {}
 var target_assignments: Dictionary = {}
 
-# Target tracking with proper cleanup
+# Target tracking - SIMPLIFIED WITHOUT SIGNALS
 var tracked_targets: Dictionary = {}
 var target_priorities: Array = []
-var target_signal_connections: Dictionary = {}  # target_id -> signal connection
 
 # System state
 var parent_ship: Node2D
@@ -92,28 +91,31 @@ func _physics_process(delta):
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	# Remove targets that no longer exist in sensor data
-	var targets_to_remove = []
-	for target_id in tracked_targets:
-		var target_data = tracked_targets[target_id]
-		
-		# Check if torpedo still exists in current sensor data
-		if not target_data.node_ref in current_torpedoes:
-			targets_to_remove.append(target_id)
-			continue
-		
-		update_target_data(target_data)
+	# SIMPLIFIED: Clean tracking based on sensor data only
+	var valid_target_ids = []
 	
-	# Clean up destroyed targets
-	for target_id in targets_to_remove:
-		remove_target(target_id)
-	
-	# Add new targets
+	# Update existing targets and collect valid IDs
 	for torpedo in current_torpedoes:
 		if is_instance_valid(torpedo):
 			var torpedo_id = get_torpedo_id(torpedo)
-			if not tracked_targets.has(torpedo_id):
+			valid_target_ids.append(torpedo_id)
+			
+			if tracked_targets.has(torpedo_id):
+				# Update existing target
+				update_target_data(tracked_targets[torpedo_id])
+			else:
+				# Add new target
 				add_new_target(torpedo)
+	
+	# Remove targets that no longer exist in sensor data
+	var targets_to_remove = []
+	for target_id in tracked_targets:
+		if not target_id in valid_target_ids:
+			targets_to_remove.append(target_id)
+	
+	# Clean up removed targets
+	for target_id in targets_to_remove:
+		remove_target(target_id)
 
 func add_new_target(torpedo: Node2D):
 	if not is_instance_valid(torpedo):
@@ -123,19 +125,8 @@ func add_new_target(torpedo: Node2D):
 	target_data.target_id = get_torpedo_id(torpedo)
 	target_data.node_ref = torpedo
 	
-	# PROPER CLEANUP: Connect to torpedo's tree_exiting signal
-	if torpedo.tree_exiting.connect(_on_target_tree_exiting.bind(target_data.target_id)):
-		print("Warning: Could not connect to torpedo's tree_exiting signal")
-	else:
-		target_signal_connections[target_data.target_id] = torpedo
-	
 	update_target_data(target_data)
 	tracked_targets[target_data.target_id] = target_data
-
-# PROPER CLEANUP: Signal handler for when torpedo is destroyed
-func _on_target_tree_exiting(target_id: String):
-	# Called when a tracked torpedo is about to be removed from scene tree
-	remove_target(target_id)
 
 func update_target_data(target_data: TargetData):
 	if not is_instance_valid(target_data.node_ref):
@@ -406,7 +397,7 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	return relative_angle
 
 func remove_target(target_id: String):
-	# Clean removal of target from tracking with proper signal cleanup
+	"""Clean removal of target from tracking"""
 	if not tracked_targets.has(target_id):
 		return
 	
@@ -418,13 +409,6 @@ func remove_target(target_id: String):
 			var pdc = registered_pdcs[pdc_id]
 			pdc.stop_firing()
 			pdc_assignments[pdc_id] = ""
-	
-	# PROPER CLEANUP: Disconnect signal if connected
-	if target_signal_connections.has(target_id):
-		var torpedo_node = target_signal_connections[target_id]
-		if is_instance_valid(torpedo_node) and torpedo_node.tree_exiting.is_connected(_on_target_tree_exiting):
-			torpedo_node.tree_exiting.disconnect(_on_target_tree_exiting)
-		target_signal_connections.erase(target_id)
 	
 	# Clean up tracking
 	tracked_targets.erase(target_id)

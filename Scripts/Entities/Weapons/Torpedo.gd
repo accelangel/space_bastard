@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - PROPER REFERENCE CLEANUP
+# Scripts/Entities/Weapons/Torpedo.gd - FIXED SIGNAL CONNECTION
 extends Area2D
 class_name Torpedo
 
@@ -69,9 +69,8 @@ func _ready():
 		queue_free()
 		return
 	
-	# PROPER CLEANUP: Connect to target's tree_exiting signal
-	if target_node.tree_exiting.connect(_on_target_destroyed):
-		print("Warning: Could not connect to target's tree_exiting signal")
+	# REMOVED: Signal connection that was failing and causing the issue
+	# The FireControlManager will handle target cleanup through sensor updates instead
 	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
@@ -97,13 +96,6 @@ func _ready():
 	
 	# Connect collision - Route through EntityManager
 	area_entered.connect(_on_area_entered)
-
-# PROPER CLEANUP: Handle target destruction
-func _on_target_destroyed():
-	"""Called when target is about to be removed from scene tree"""
-	print("Torpedo: Target destroyed, switching to ballistic mode")
-	target_node = null
-	# Continue in ballistic mode rather than self-destructing
 
 func _physics_process(delta):
 	# Target validation - if target was destroyed, continue ballistically
@@ -342,9 +334,6 @@ func _on_area_entered(area: Area2D):
 # Methods called by launcher
 func set_target(target: Node2D):
 	target_node = target
-	# Connect to the new target's tree_exiting signal
-	if target_node and target_node.tree_exiting.connect(_on_target_destroyed):
-		print("Warning: Could not connect to new target's tree_exiting signal")
 
 func set_launcher(ship: Node2D):
 	launcher_ship = ship
