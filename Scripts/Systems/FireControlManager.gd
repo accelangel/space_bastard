@@ -1,4 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - FIXED WITHOUT SIGNAL DEPENDENCIES
+# Scripts/Systems/FireControlManager.gd - FIXED WITH FORCE STOP
 extends Node2D
 class_name FireControlManager
 
@@ -91,7 +91,10 @@ func _physics_process(delta):
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	# SIMPLIFIED: Clean tracking based on sensor data only
+	# ONLY print when targets change significantly
+	var old_count = tracked_targets.size()
+	
+	# Clear old contacts
 	var valid_target_ids = []
 	
 	# Update existing targets and collect valid IDs
@@ -116,6 +119,12 @@ func update_target_tracking():
 	# Clean up removed targets
 	for target_id in targets_to_remove:
 		remove_target(target_id)
+	
+	# ONLY print when target count changes
+	var new_count = tracked_targets.size()
+	if new_count != old_count:
+		print("FireControl: Now tracking %d targets (was %d)" % [new_count, old_count])
+
 
 func add_new_target(torpedo: Node2D):
 	if not is_instance_valid(torpedo):
@@ -268,12 +277,19 @@ func calculate_target_priority(target_data: TargetData):
 	target_data.priority_score = base_priority
 
 func optimize_pdc_assignments():
+	# FIXED: Clean up empty assignments first
+	cleanup_empty_assignments()
+	
 	# Clear all assignments first
 	for pdc_id in pdc_assignments:
 		pdc_assignments[pdc_id] = ""
 	target_assignments.clear()
 	
 	for target_id in target_priorities:
+		# FIXED: Skip empty target IDs
+		if target_id == "" or target_id.strip_edges() == "":
+			continue
+			
 		if not tracked_targets.has(target_id):
 			continue
 			
@@ -341,7 +357,14 @@ func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	return rotation_score * target_data.feasibility_score
 
 func execute_fire_missions():
+	var active_missions = 0
+	
 	for target_id in target_assignments:
+		# FIXED: Skip empty or invalid target IDs
+		if target_id == "" or target_id.strip_edges() == "":
+			print("FireControl: Skipping empty target ID")
+			continue
+			
 		if not tracked_targets.has(target_id):
 			continue
 			
@@ -355,6 +378,8 @@ func execute_fire_missions():
 		if target_data.distance_meters > engagement_range_meters:
 			continue
 		
+		active_missions += 1
+		
 		for pdc_id in assigned_pdcs:
 			var pdc = registered_pdcs[pdc_id]
 			
@@ -365,6 +390,10 @@ func execute_fire_missions():
 			
 			if pdc.is_aimed():
 				pdc.authorize_firing()
+	
+	# Print status only when there are missions or when missions end
+	if active_missions == 0 and target_assignments.size() > 0:
+		print("FireControl: No valid missions from %d assignments" % target_assignments.size())
 
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	if not is_instance_valid(target_data.node_ref):
@@ -403,11 +432,15 @@ func remove_target(target_id: String):
 	
 	var target_data = tracked_targets[target_id]
 	
-	# Stop all PDCs assigned to this target
+	# ONLY print when actually removing a target
+	if target_data.assigned_pdcs.size() > 0:
+		print("Target lost: %s, stopping %d PDCs" % [target_id, target_data.assigned_pdcs.size()])
+	
+	# FORCE STOP all PDCs assigned to this target
 	for pdc_id in target_data.assigned_pdcs:
 		if registered_pdcs.has(pdc_id):
 			var pdc = registered_pdcs[pdc_id]
-			pdc.stop_firing()
+			pdc.emergency_stop()  # Force immediate stop
 			pdc_assignments[pdc_id] = ""
 	
 	# Clean up tracking
@@ -439,7 +472,18 @@ func get_average_pdc_position() -> Vector2:
 	return sum / count if count > 0 else parent_ship.global_position
 
 func get_torpedo_id(torpedo: Node2D) -> String:
-	return "torpedo_" + str(torpedo.get_instance_id())
+	if not is_instance_valid(torpedo):
+		return ""
+	
+	# FIXED: Create more reliable torpedo ID
+	var torpedo_id = "torpedo_" + str(torpedo.get_instance_id())
+	
+	# Validate the ID is not empty
+	if torpedo_id == "torpedo_" or torpedo_id.strip_edges() == "":
+		print("Warning: Generated empty torpedo ID for node: %s" % torpedo.name)
+		return ""
+	
+	return torpedo_id
 
 func get_torpedo_velocity(torpedo: Node2D) -> Vector2:
 	if not is_instance_valid(torpedo):
@@ -466,3 +510,17 @@ func angle_difference(from: float, to: float) -> float:
 
 func get_debug_info() -> String:
 	return "Fire Control: %d targets tracked" % tracked_targets.size()
+
+func cleanup_empty_assignments():
+	"""Remove any empty or invalid target assignments"""
+	var assignments_to_remove = []
+	
+	for target_id in target_assignments:
+		if target_id == "" or target_id.strip_edges() == "" or not tracked_targets.has(target_id):
+			assignments_to_remove.append(target_id)
+	
+	for target_id in assignments_to_remove:
+		target_assignments.erase(target_id)
+		var index = target_priorities.find(target_id)
+		if index >= 0:
+			target_priorities.remove_at(index)

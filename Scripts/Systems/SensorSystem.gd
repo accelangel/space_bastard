@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - FIXED CRASH PREVENTION
+# Scripts/Systems/SensorSystem.gd - FIXED WITH STRICT VALIDATION
 extends Node2D
 class_name SensorSystem
 
@@ -21,11 +21,18 @@ func update_contacts(entity_reports: Array):
 	# Clear old contacts
 	all_contacts.clear()
 	
-	# Filter for enemies only - with validation
+	var valid_enemies = 0
+	var invalid_enemies = 0
+	
+	# Filter for enemies only - with STRICT validation
 	for report in entity_reports:
-		# FIXED: Validate that the node reference is still valid
-		if is_enemy_of(report.faction) and is_instance_valid(report.node):
-			all_contacts.append(report)
+		if is_enemy_of(report.faction):
+			# STRICT VALIDATION: Must have valid node AND be in scene tree
+			if report.node and is_instance_valid(report.node) and report.node.is_inside_tree():
+				all_contacts.append(report)
+				valid_enemies += 1
+			else:
+				invalid_enemies += 1
 
 func is_enemy_of(other_faction: String) -> bool:
 	# Simple faction logic
@@ -37,17 +44,26 @@ func is_enemy_of(other_faction: String) -> bool:
 
 func get_all_enemy_torpedoes() -> Array:
 	var torpedoes = []
+	var invalid_count = 0
+	var valid_count = 0
+	
 	for contact in all_contacts:
-		# FIXED: Double-check node validity before adding
-		if contact.type == "torpedo" and contact.node and is_instance_valid(contact.node):
-			torpedoes.append(contact.node)
+		if contact.type == "torpedo":
+			# TRIPLE CHECK: valid node, in tree, and still exists
+			if contact.node and is_instance_valid(contact.node) and contact.node.is_inside_tree():
+				torpedoes.append(contact.node)
+				valid_count += 1
+			else:
+				invalid_count += 1
+	
+	# NO DEBUG OUTPUT - runs too frequently
 	return torpedoes
 
 func get_all_enemy_ships() -> Array:
 	var ships = []
 	for contact in all_contacts:
 		# FIXED: Double-check node validity before adding
-		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node):
+		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node) and contact.node.is_inside_tree():
 			ships.append(contact.node)
 	return ships
 
@@ -60,7 +76,7 @@ func get_closest_enemy_ship() -> Node2D:
 	
 	for contact in all_contacts:
 		# FIXED: Validate node before using it
-		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node):
+		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node) and contact.node.is_inside_tree():
 			var distance_sq = parent_ship.global_position.distance_squared_to(contact.position)
 			if distance_sq < closest_distance_sq:
 				closest_ship = contact.node
@@ -78,7 +94,7 @@ func get_debug_info() -> String:
 	
 	for contact in all_contacts:
 		# FIXED: Only count valid contacts
-		if contact.node and is_instance_valid(contact.node):
+		if contact.node and is_instance_valid(contact.node) and contact.node.is_inside_tree():
 			if contact.type == "torpedo":
 				torpedo_count += 1
 			elif contact.type in ["player_ship", "enemy_ship"]:

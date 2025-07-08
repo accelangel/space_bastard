@@ -312,7 +312,7 @@ func _get_target_velocity() -> Vector2:
 	return Vector2.ZERO
 
 func _on_area_entered(area: Area2D):
-	# Route collision through EntityManager
+	# FIXED: Route collision through EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if not entity_manager or not entity_id:
 		return
@@ -325,7 +325,7 @@ func _on_area_entered(area: Area2D):
 	elif "entity_id" in area and area.entity_id != "":
 		other_entity_id = area.entity_id
 	else:
-		print("Warning: Torpedo collided with entity lacking entity_id, skipping: %s" % area.name)
+		# NO WARNING - too spammy
 		return
 	
 	# Report collision - EntityManager will handle destruction

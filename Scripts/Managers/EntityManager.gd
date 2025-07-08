@@ -1,4 +1,4 @@
-# Scripts/Managers/EntityManager.gd - FIXED ENTITY CLEANUP
+# Scripts/Managers/EntityManager.gd - FIXED IMMEDIATE CLEANUP
 extends Node
 
 # Core entity tracking
@@ -83,13 +83,6 @@ func _physics_process(delta):
 		
 		# Clean up out-of-bounds entities
 		cleanup_out_of_bounds()
-		
-		# Periodic debug output (much less frequent)
-		if debug_enabled:
-			debug_timer += delta
-			if debug_timer >= debug_interval:
-				debug_timer = 0.0
-				print_debug_summary()
 
 # ENHANCED: Registration now supports source PDC for bullets
 func register_entity(node: Node2D, type: String, faction: String, source_pdc: String = "") -> String:
@@ -122,7 +115,6 @@ func update_entity_position(entity_id: String, new_position: Vector2):
 		entities[entity_id].position = new_position
 		entities[entity_id].last_update = Time.get_ticks_msec() / 1000.0
 
-# NEW: Collision reporting system with deduplication
 func report_collision(entity1_id: String, entity2_id: String, collision_position: Vector2):
 	# Prevent duplicate collision reports in same frame
 	var collision_key = get_collision_key(entity1_id, entity2_id)
@@ -146,6 +138,11 @@ func report_collision(entity1_id: String, entity2_id: String, collision_position
 	if entity1.faction == entity2.faction:
 		return  # Friendly fire ignored
 	
+	# ONLY print torpedo vs bullet collisions
+	if (entity1.entity_type == "torpedo" and entity2.entity_type == "pdc_bullet") or \
+	   (entity1.entity_type == "pdc_bullet" and entity2.entity_type == "torpedo"):
+		print("Intercept: %s vs %s" % [entity1.entity_type, entity2.entity_type])
+	
 	# Record collision event
 	record_battle_event({
 		"type": "collision",
@@ -159,9 +156,13 @@ func report_collision(entity1_id: String, entity2_id: String, collision_position
 		"entity2_faction": entity2.faction
 	})
 	
-	# Destroy both entities involved in collision
+	# IMMEDIATE DESTRUCTION - don't wait for cleanup
 	destroy_entity_safe(entity1_id, "collision")
 	destroy_entity_safe(entity2_id, "collision")
+	
+	# FORCE IMMEDIATE CLEANUP - Remove from tracking immediately
+	entities.erase(entity1_id)
+	entities.erase(entity2_id)
 
 func get_collision_key(id1: String, id2: String) -> String:
 	# Create consistent key regardless of order
@@ -170,7 +171,6 @@ func get_collision_key(id1: String, id2: String) -> String:
 	else:
 		return id2 + "_" + id1
 
-# NEW: Safe entity destruction with event recording
 func destroy_entity_safe(entity_id: String, reason: String):
 	if not entities.has(entity_id):
 		return
@@ -178,10 +178,14 @@ func destroy_entity_safe(entity_id: String, reason: String):
 	var entity_data = entities[entity_id]
 	
 	if entity_data.is_destroyed:
-		return  # Already destroyed
+		return
 	
 	# Mark as destroyed to prevent double-destruction
 	entity_data.is_destroyed = true
+	
+	# ONLY print torpedo destructions for battle tracking
+	if entity_data.entity_type == "torpedo":
+		print("Torpedo destroyed: %s (%s)" % [entity_id, reason])
 	
 	# Record destruction event
 	record_battle_event({
@@ -199,10 +203,22 @@ func destroy_entity_safe(entity_id: String, reason: String):
 	# Queue the actual node for destruction
 	if is_instance_valid(entity_data.node_ref):
 		entity_data.node_ref.queue_free()
+
+func cleanup_invalid_entities():
+	var to_remove = []
 	
-	# FIXED: Immediately remove from active tracking
-	# This prevents BattleManager from counting destroyed entities
-	call_deferred("remove_destroyed_entity", entity_id)
+	for entity_id in entities:
+		var entity_data = entities[entity_id]
+		
+		# Check if node is still valid OR if it's marked destroyed
+		if not is_instance_valid(entity_data.node_ref) or entity_data.is_destroyed:
+			if not entity_data.is_destroyed:
+				destroy_entity_safe(entity_id, "node_invalid")
+			to_remove.append(entity_id)
+	
+	# Remove invalid entities from tracking IMMEDIATELY
+	for entity_id in to_remove:
+		entities.erase(entity_id)
 
 # NEW: Immediate cleanup of destroyed entities
 func remove_destroyed_entity(entity_id: String):
@@ -217,23 +233,6 @@ func unregister_entity(entity_id: String):
 		if not entity_data.is_destroyed:
 			destroy_entity_safe(entity_id, "manual_cleanup")
 		
-		entities.erase(entity_id)
-
-# NEW: Clean up invalid entities to prevent sensor system crashes
-func cleanup_invalid_entities():
-	var to_remove = []
-	
-	for entity_id in entities:
-		var entity_data = entities[entity_id]
-		
-		# Check if node is still valid
-		if not is_instance_valid(entity_data.node_ref):
-			if not entity_data.is_destroyed:
-				destroy_entity_safe(entity_id, "node_invalid")
-			to_remove.append(entity_id)
-	
-	# Remove invalid entities from tracking
-	for entity_id in to_remove:
 		entities.erase(entity_id)
 
 func cleanup_out_of_bounds():

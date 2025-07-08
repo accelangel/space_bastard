@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - FIXED COLLISION DETECTION
+# Scripts/Entities/Weapons/PDCBullet.gd - FIXED COLLISION ROUTING
 extends Area2D
 class_name PDCBullet
 
@@ -29,22 +29,19 @@ func _physics_process(delta):
 		entity_manager.update_entity_position(entity_id, global_position)
 
 func _on_area_entered(area: Area2D):
-	# FIXED: Better collision detection with fallback options
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if not entity_manager or not entity_id:
 		return
 	
 	var other_entity_id = ""
 	
-	# Method 1: Try to get entity_id as a property (most reliable)
+	# Get entity_id from the other object
 	if area.has_meta("entity_id"):
 		other_entity_id = area.get_meta("entity_id")
 	elif "entity_id" in area and area.entity_id != "":
 		other_entity_id = area.entity_id
 	else:
-		# Method 2: Fallback - generate a temporary ID for unregistered entities
-		# This handles cases where entities might not be properly registered
-		print("Warning: Collided entity has no entity_id, skipping collision: %s" % area.name)
+		# NO WARNING - too spammy
 		return
 	
 	# Report collision - EntityManager will handle destruction
@@ -61,7 +58,7 @@ func set_faction(new_faction: String):
 func set_source_pdc(pdc_id: String):
 	source_pdc_id = pdc_id
 
-# NEW: Initialize bullet with EntityManager registration
+# ENHANCED: Initialize bullet with EntityManager registration
 func initialize_bullet(bullet_faction: String, pdc_id: String):
 	faction = bullet_faction
 	source_pdc_id = pdc_id

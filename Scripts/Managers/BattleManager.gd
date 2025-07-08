@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleManager.gd - COMPLETE FIXED VERSION
+# Scripts/Systems/BattleManager.gd - FIXED WITH FORCE END BATTLE
 extends Node
 
 # Battle state tracking
@@ -33,6 +33,9 @@ var battle_analysis: Dictionary = {}
 @export var debug_enabled: bool = false
 
 func _ready():
+	# Add to group for easy finding
+	add_to_group("battle_managers")
+	
 	# Get EntityManager reference
 	entity_manager = get_node_or_null("/root/EntityManager")
 	if not entity_manager:
@@ -91,12 +94,32 @@ func monitor_active_battle(delta):
 	# Monitor ongoing battle for end conditions
 	var torpedo_count = get_current_torpedo_count()
 	
-	if torpedo_count == 0:
+	# FIXED: Also check if all fire control systems are idle
+	var all_pdcs_idle = true
+	var ships_found = get_tree().get_nodes_in_group("enemy_ships") + get_tree().get_nodes_in_group("player_ships")
+	for ship in ships_found:
+		var firecontrol = ship.get_node_or_null("FireControlManager")
+		if firecontrol:
+			if firecontrol.tracked_targets.size() > 0 or firecontrol.target_assignments.size() > 0:
+				all_pdcs_idle = false
+				break
+	
+	if torpedo_count == 0 and all_pdcs_idle:
 		no_torpedoes_timer += delta
+		# ONLY print every second, not every frame
+		if int(no_torpedoes_timer) != int(no_torpedoes_timer - delta):
+			print("Battle ending: no torpedoes, all PDCs idle (%.0fs)" % no_torpedoes_timer)
+		
 		if no_torpedoes_timer >= battle_end_delay:
 			end_battle()
 	else:
-		no_torpedoes_timer = 0.0  # Reset timer if torpedoes exist
+		no_torpedoes_timer = 0.0  # Reset timer if torpedoes exist or PDCs are busy
+	
+	# FORCE END if battle has been running too long (emergency)
+	var battle_runtime = Time.get_ticks_msec() / 1000.0 - battle_start_time
+	if battle_runtime > 60.0:  # Force end after 1 minute
+		print("Force ending battle - runtime %.1f seconds" % battle_runtime)
+		force_end_battle()
 
 func get_current_torpedo_count() -> int:
 	# Get current number of torpedoes from EntityManager with proper validation
@@ -169,6 +192,31 @@ func end_battle():
 	
 	# Reset for next battle
 	call_deferred("reset_for_next_battle")
+
+# NEW: Force end battle for emergencies
+func force_end_battle():
+	# Emergency battle end when PDCs won't stop firing
+	print("BATTLE_DEBUG: Force ending battle due to persistent firing")
+	
+	# Force stop all PDCs on all ships
+	var ships_found = get_tree().get_nodes_in_group("enemy_ships") + get_tree().get_nodes_in_group("player_ships")
+	for ship in ships_found:
+		var firecontrol = ship.get_node_or_null("FireControlManager")
+		if firecontrol:
+			# Clear all tracking
+			firecontrol.tracked_targets.clear()
+			firecontrol.target_assignments.clear()
+			firecontrol.target_priorities.clear()
+			
+			# Stop all PDCs
+			for pdc_id in firecontrol.registered_pdcs:
+				var pdc = firecontrol.registered_pdcs[pdc_id]
+				pdc.emergency_stop()
+				firecontrol.pdc_assignments[pdc_id] = ""
+	
+	# Force battle end
+	if current_phase == BattlePhase.ACTIVE:
+		end_battle()
 
 func emergency_stop_all_systems():
 	"""Stop all combat systems across all ships"""

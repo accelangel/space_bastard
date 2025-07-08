@@ -1,4 +1,4 @@
-# Enhanced GameCamera.gd - Single click ship selection with relative panning
+# Enhanced GameCamera.gd - FIXED ZOOM CALCULATION
 extends Camera2D
 
 # Map configuration
@@ -49,6 +49,18 @@ func _process(delta):
 	handle_click_and_drag()
 	handle_ship_selection()
 	follow_ship(delta)
+
+func _input(event):
+	# Add debug key to force end battle and print system state
+	if event.is_action_pressed("ui_cancel") and Input.is_key_pressed(KEY_CTRL):
+		print_full_system_state()
+		
+		var battle_manager = get_node_or_null("../BattleManager")
+		if not battle_manager:
+			battle_manager = get_tree().get_first_node_in_group("battle_managers")
+		
+		if battle_manager and battle_manager.has_method("force_end_battle"):
+			battle_manager.force_end_battle()
 
 func handle_zoom(delta):
 	var scroll = 0
@@ -131,13 +143,11 @@ func handle_click_and_drag():
 		update_relative_panning()
 
 func start_relative_panning():
-	#print("Starting relative panning while following ship")
 	is_relative_panning = true
 	relative_pan_start_mouse = get_viewport().get_mouse_position()
 	relative_pan_start_offset = relative_pan_offset
 
 func stop_relative_panning():
-	#print("Stopping relative panning")
 	is_relative_panning = false
 
 func update_relative_panning():
@@ -159,22 +169,19 @@ func handle_ship_selection():
 		select_ship_at_mouse()
 	
 	# Stop following on escape key
-	if Input.is_action_just_pressed("ui_cancel"):
+	if Input.is_action_just_pressed("ui_cancel") and not Input.is_key_pressed(KEY_CTRL):
 		if following_ship:
 			stop_following_ship()
 
 func select_ship_at_mouse():
 	var mouse_world_pos = get_global_mouse_position()
-	#print("Selecting at mouse position: ", mouse_world_pos)
 	
 	# Try to find ships using multiple methods
 	var found_ship = find_ship_at_position(mouse_world_pos)
 	
 	if found_ship:
-		#print("Found ship to follow: ", found_ship.name)
 		start_following_ship(found_ship)
 	else:
-		#print("No ship found at mouse position")
 		# If no ship found, stop following current ship
 		if following_ship:
 			stop_following_ship()
@@ -221,7 +228,6 @@ func get_all_selectable_objects() -> Array:
 	return objects
 
 func start_following_ship(ship: Node2D):
-	#print("Started following: ", ship.name)
 	following_ship = ship
 	follow_offset = Vector2.ZERO
 	# Reset relative pan offset when starting to follow a new ship
@@ -233,8 +239,6 @@ func start_following_ship(ship: Node2D):
 		selection_indicator.global_position = ship.global_position
 
 func stop_following_ship():
-	#if following_ship:
-		#print("Stopped following: ", following_ship.name)
 	following_ship = null
 	
 	# Reset relative panning state
@@ -296,11 +300,41 @@ func update_indicator_scale(scale_value: float):
 
 func calculate_min_zoom():
 	var viewport_size = get_viewport_rect().size
-	var _zoom_for_width = viewport_size.x / map_size.x
-	var _zoom_for_height = viewport_size.y / map_size.y
-	# Fixed: removed unused variable warning by directly using the calculation
-	var clean_zoom = 0.01397  # Slightly smaller than calculated for buffer
-	return Vector2(clean_zoom, clean_zoom)
+	var zoom_for_width = viewport_size.x / map_size.x
+	var zoom_for_height = viewport_size.y / map_size.y
+	# FIXED: Use the larger of the two to ensure entire map fits, with buffer
+	var min_zoom_value = max(zoom_for_width, zoom_for_height) * 1.1
+	return Vector2(min_zoom_value, min_zoom_value)
+
+# GLOBAL DEBUG FUNCTION
+func print_full_system_state():
+	print("\n=== FULL SYSTEM DEBUG STATE ===")
+	
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager:
+		print("EntityManager: %d total entities" % entity_manager.entities.size())
+		for entity_id in entity_manager.entities:
+			var entity = entity_manager.entities[entity_id]
+			print("  %s: %s (destroyed: %s, valid: %s)" % [
+				entity_id, entity.entity_type, entity.is_destroyed, is_instance_valid(entity.node_ref)
+			])
+	
+	var ships = get_tree().get_nodes_in_group("enemy_ships") + get_tree().get_nodes_in_group("player_ships")
+	for ship in ships:
+		var sensor = ship.get_node_or_null("SensorSystem")
+		if sensor:
+			print("Ship %s SensorSystem: %d contacts" % [ship.name, sensor.all_contacts.size()])
+		
+		var firecontrol = ship.get_node_or_null("FireControlManager")
+		if firecontrol:
+			print("Ship %s FireControl: %d tracked targets" % [ship.name, firecontrol.tracked_targets.size()])
+			for target_id in firecontrol.tracked_targets:
+				var target_data = firecontrol.tracked_targets[target_id]
+				print("    Target %s: valid=%s, assigned_pdcs=%d" % [
+					target_id, is_instance_valid(target_data.node_ref), target_data.assigned_pdcs.size()
+				])
+	
+	print("=== END DEBUG STATE ===\n")
 
 # Public methods for external control
 func set_follow_target(ship: Node2D):

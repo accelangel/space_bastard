@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - SIMPLIFIED FOR BATTLE REFACTOR
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED WITH DEBUG AND FORCE STOP
 extends Node2D
 
 # PDC Hardware Configuration
@@ -34,14 +34,6 @@ var muzzle_point: Marker2D
 
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
-
-# REMOVED: All battle statistics tracking - BattleManager handles this now
-# REMOVED: var rounds_fired: int
-# REMOVED: var targets_hit: int
-# REMOVED: var targets_missed: int
-# REMOVED: func _on_bullet_hit()
-# REMOVED: func get_battle_stats()
-# REMOVED: Signal connections for hit tracking
 
 # MINIMAL DEBUG SYSTEM
 @export var debug_enabled: bool = false
@@ -149,6 +141,19 @@ func handle_firing(delta):
 			stop_firing()
 
 func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
+	# FIXED: Don't accept empty target IDs
+	if target_id == "" or target_id.strip_edges() == "":
+		print("PDC %s: Rejecting empty target ID" % pdc_id.substr(-4))
+		emergency_stop()
+		return
+	
+	# ONLY print when switching targets, not every update
+	if current_target_id != target_id:
+		if current_target_id != "":
+			print("PDC %s: %s -> %s" % [pdc_id.substr(-4), current_target_id.substr(-4), target_id.substr(-4)])
+		else:
+			print("PDC %s: acquiring %s" % [pdc_id.substr(-4), target_id.substr(-4)])
+	
 	current_target_id = target_id
 	target_rotation = target_angle - PI/2  # Apply -90° correction
 	emergency_slew = is_emergency
@@ -169,6 +174,10 @@ func start_firing():
 	fire_timer = 0.0
 
 func stop_firing():
+	# ONLY print when actually stopping (not when already idle)
+	if is_firing or current_target_id != "":
+		print("PDC %s: stop firing" % pdc_id.substr(-4))
+	
 	is_firing = false
 	fire_authorized = false
 	current_status = "IDLE"
@@ -182,7 +191,7 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# SIMPLIFIED: Bullet creation with enhanced PDC tracking
+# ENHANCED: Bullet creation with better PDC tracking
 func fire_bullet():
 	if not bullet_scene:
 		return
@@ -201,14 +210,12 @@ func fire_bullet():
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
-	# NEW: Initialize bullet with proper PDC tracking
+	# ENHANCED: Initialize bullet with proper PDC tracking
 	if bullet.has_method("initialize_bullet") and parent_ship and "faction" in parent_ship:
 		bullet.initialize_bullet(parent_ship.faction, pdc_id)
 	
 	if bullet.has_method("set_velocity"):
 		bullet.set_velocity(bullet_velocity_pixels)
-
-# REMOVED: _on_bullet_hit() - No longer needed with EntityManager system
 
 func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
@@ -230,7 +237,7 @@ func angle_difference(from: float, to: float) -> float:
 		diff += TAU
 	return diff
 
-# SIMPLIFIED: Status reporting without battle statistics
+# Status reporting
 func get_status() -> Dictionary:
 	return {
 		"pdc_id": pdc_id,
@@ -258,13 +265,11 @@ func set_fire_control_manager(manager: Node):
 	fire_control_manager = manager
 
 func emergency_stop():
+	# ALWAYS print emergency stops
+	print("PDC %s: EMERGENCY STOP" % pdc_id.substr(-4))
 	stop_firing()
 	emergency_slew = false
 	fire_authorized = false
 	current_status = "IDLE"
+	current_target_id = ""  # Clear target immediately
 	set_idle_rotation()
-
-# REMOVED: Battle statistics functions - BattleManager handles this now
-# REMOVED: get_battle_stats()
-# REMOVED: reset_battle_stats()
-# REMOVED: All hit/miss tracking code
