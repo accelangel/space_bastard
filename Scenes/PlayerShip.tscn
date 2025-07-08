@@ -11,7 +11,7 @@
 radius = 30.9052
 height = 157.993
 
-[node name="PlayerShip" type="Area2D"]
+[node name="PlayerShip" type="Area2D" groups=["player_ships"]]
 script = ExtResource("1_jqy2v")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
@@ -24,7 +24,7 @@ shape = SubResource("CapsuleShape2D_j8x4e")
 scale = Vector2(0.25, 0.25)
 texture = ExtResource("1_k28x5")
 
-[node name="TorpedoLauncher" type="Node2D" parent="."]
+[node name="TorpedoLauncher" type="Node2D" parent="." groups=["torpedo_launchers"]]
 script = ExtResource("2_lovhs")
 
 [node name="SensorSystem" type="Node2D" parent="."]

@@ -59,7 +59,7 @@ func _process(delta):
 
 # NEW: BattleManager interface functions
 func start_battle_firing():
-	"""Called by BattleManager to start torpedo barrage"""
+	# Called by BattleManager to start torpedo barrage
 	auto_launch_enabled = true
 	volley_fired = false
 	if debug_enabled:
