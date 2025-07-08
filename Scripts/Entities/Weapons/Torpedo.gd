@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - SIMPLIFIED (No Proximity Detonation)
+# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED FOR BATTLE SYSTEM
 extends Area2D
 class_name Torpedo
 
@@ -9,7 +9,6 @@ var target_node: Node2D
 
 # Torpedo specifications
 @export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
-# REMOVED: @export var proximity_meters: float = 10.0  # No more proximity detonation
 
 # ENHANCED LAUNCH SYSTEM
 @export var lateral_launch_velocity: float = 60.0   # Lateral impulse (m/s)
@@ -70,20 +69,11 @@ func _ready():
 		queue_free()
 		return
 	
-	# DEBUG: Check torpedo faction inheritance
-	print("🚀 TORPEDO FACTION DEBUG:")
-	print("  Torpedo ID: %s" % entity_id)
-	var launcher_name: String = str(launcher_ship.name) if launcher_ship != null else "NONE"
-	print("  Launcher ship: %s" % launcher_name)
-	print("  Launcher faction: %s" % (launcher_ship.faction if launcher_ship and "faction" in launcher_ship else "NONE"))
-	print("  Torpedo faction: %s" % faction)
-	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
 		if launcher_ship and "faction" in launcher_ship:
 			faction = launcher_ship.faction
-			print("  ✅ Updated torpedo faction to: %s" % faction)
 		entity_id = entity_manager.register_entity(self, "torpedo", faction)
 	
 	# LATERAL LAUNCH SETUP
@@ -101,7 +91,7 @@ func _ready():
 	rotation = ship_forward.angle()
 	initial_rotation = rotation
 	
-	# Connect collision
+	# Connect collision - NEW: Route through EntityManager
 	area_entered.connect(_on_area_entered)
 
 func _physics_process(delta):
@@ -122,14 +112,6 @@ func _physics_process(delta):
 	if not engines_ignited and should_ignite_engines(time_since_launch):
 		ignite_engines()
 		engine_ignition_time = current_time
-	
-	# REMOVED: Proximity detonation check - now only collision detection matters
-	# var target_pos = target_node.global_position
-	# var distance_to_target_pixels = global_position.distance_to(target_pos)
-	# var distance_to_target_meters = distance_to_target_pixels * WorldSettings.meters_per_pixel
-	# if distance_to_target_meters < proximity_meters:
-	#     _impact()
-	#     return
 	
 	# Apply appropriate movement logic based on engine state
 	if engines_ignited:
@@ -318,17 +300,19 @@ func _get_target_velocity() -> Vector2:
 	return Vector2.ZERO
 
 func _on_area_entered(area: Area2D):
-	# SIMPLIFIED: Only collision detection matters now
-	# If we hit something hostile, that's a direct hit
-	if "faction" in area and area.faction != faction:
-		_impact()
-
-func _impact():
-	# Clean up and destroy
+	# NEW: Report collision to EntityManager instead of direct destruction
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager and entity_id:
-		entity_manager.unregister_entity(entity_id)
-	queue_free()
+		# Get the other entity's ID
+		var other_entity_id = ""
+		if "entity_id" in area:
+			other_entity_id = area.entity_id
+		else:
+			print("Warning: Torpedo collided with entity lacking entity_id: %s" % area.name)
+			return
+		
+		# Report collision - EntityManager will handle destruction
+		entity_manager.report_collision(entity_id, other_entity_id, global_position)
 
 # Methods called by launcher
 func set_target(target: Node2D):

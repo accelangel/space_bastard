@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - CLEANED VERSION
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - UPDATED FOR BATTLE REFACTOR
 extends Node2D
 class_name TorpedoLauncher
 
@@ -15,13 +15,13 @@ var sensor_system: SensorSystem
 var current_launch_side: int = 1
 var torpedoes_launched: int = 0
 
-# Auto-launch for testing
-@export var auto_launch_enabled: bool = true
+# NEW: BattleManager interface - controlled externally now
+@export var auto_launch_enabled: bool = false  # Changed default to false
 @export var auto_launch_interval: float = 0.025
 var auto_launch_timer: float = 0.0
 
-# Volley control
-@export var continuous_fire: bool = false
+# Volley control - simplified
+@export var continuous_fire: bool = true  # Changed default to continuous
 var volley_fired: bool = false
 
 # DEBUG CONTROL
@@ -43,7 +43,7 @@ func _process(delta):
 	# Clean up destroyed torpedoes
 	active_torpedoes = active_torpedoes.filter(func(torpedo): return is_instance_valid(torpedo))
 	
-	# Auto-launch logic
+	# Auto-launch logic - now controlled by BattleManager
 	if auto_launch_enabled:
 		if not continuous_fire and volley_fired:
 			return
@@ -56,6 +56,24 @@ func _process(delta):
 	# Manual launch
 	if Input.is_action_just_pressed("ui_accept"):
 		launch_at_best_target()
+
+# NEW: BattleManager interface functions
+func start_battle_firing():
+	"""Called by BattleManager to start torpedo barrage"""
+	auto_launch_enabled = true
+	volley_fired = false
+	if debug_enabled:
+		print("TorpedoLauncher: Battle firing started")
+
+func stop_battle_firing():
+	"""Called by BattleManager to stop torpedo barrage"""
+	auto_launch_enabled = false
+	if debug_enabled:
+		print("TorpedoLauncher: Battle firing stopped")
+
+func is_battle_active() -> bool:
+	"""Check if we're currently in battle firing mode"""
+	return auto_launch_enabled
 
 func launch_at_best_target() -> Torpedo:
 	if not sensor_system:
@@ -101,10 +119,6 @@ func launch_torpedo(target: Node2D) -> Torpedo:
 	active_torpedoes.append(torpedo)
 	last_launch_time = Time.get_ticks_msec() / 1000.0
 	
-	# COMMENTED OUT: Individual launch spam
-	# if debug_enabled:
-	#	print("Launched torpedo #%d at %s" % [torpedoes_launched, target.name])
-	
 	# Check if we've fired our max volley for single-volley mode
 	if not continuous_fire and active_torpedoes.size() >= max_torpedoes:
 		volley_fired = true
@@ -127,7 +141,25 @@ func reset_volley():
 
 func get_debug_info() -> String:
 	var mode_text = "Continuous" if continuous_fire else "Single Volley"
+	var battle_status = "ACTIVE" if auto_launch_enabled else "INACTIVE"
 	var status_text = ""
 	if not continuous_fire:
 		status_text = " (Fired: %s)" % str(volley_fired)
-	return "Torpedoes: %d/%d active, Mode: %s%s" % [active_torpedoes.size(), max_torpedoes, mode_text, status_text]
+	return "Torpedoes: %d/%d active, Mode: %s%s, Battle: %s" % [
+		active_torpedoes.size(), max_torpedoes, mode_text, status_text, battle_status
+	]
+
+# NEW: Additional interface for BattleManager
+func get_active_torpedo_count() -> int:
+	return active_torpedoes.size()
+
+func get_max_torpedo_count() -> int:
+	return max_torpedoes
+
+func set_launch_rate(new_interval: float):
+	auto_launch_interval = new_interval
+
+func force_stop_all():
+	"""Emergency stop all torpedo launching"""
+	auto_launch_enabled = false
+	volley_fired = true

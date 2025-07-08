@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - CLEANED UP DEBUG VERSION
+# Scripts/Entities/Weapons/PDCSystem.gd - SIMPLIFIED FOR BATTLE REFACTOR
 extends Node2D
 
 # PDC Hardware Configuration
@@ -35,15 +35,16 @@ var muzzle_point: Marker2D
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
-# Statistics for battle tracking
-var rounds_fired: int = 0
-var targets_hit: int = 0
-var targets_missed: int = 0
-var last_fire_time: float = 0.0
+# REMOVED: All battle statistics tracking - BattleManager handles this now
+# REMOVED: var rounds_fired: int
+# REMOVED: var targets_hit: int
+# REMOVED: var targets_missed: int
+# REMOVED: func _on_bullet_hit()
+# REMOVED: func get_battle_stats()
+# REMOVED: Signal connections for hit tracking
 
 # MINIMAL DEBUG SYSTEM
-@export var debug_enabled: bool = true  # Disabled by default
-var debug_bullet_count: int = 0
+@export var debug_enabled: bool = false
 
 # FIXED ORIENTATION CONSTANTS
 const SPRITE_POINTS_UP: bool = true
@@ -56,14 +57,6 @@ func _ready():
 	mount_position = position
 	pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
 	set_idle_rotation()
-	
-	# Minimal initialization log
-	if debug_enabled:
-		print("PDC %s initialized" % pdc_id.substr(4, 8))
-	
-	# DEBUG: Print exact PDC ID for comparison
-	if position.x < 0:  # Only for problem PDCs
-		print("🔍 PROBLEM PDC ID: '%s' at position %s" % [pdc_id, position])
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -92,14 +85,6 @@ func set_idle_rotation():
 	update_sprite_rotation()
 
 func _physics_process(delta):
-	# ADD THIS DEBUG LINE
-	if debug_enabled and is_firing and debug_bullet_count < 10:
-		print("PDC %s firing at target: %s (assigned by: %s)" % [
-			pdc_id.substr(4, 8), 
-			current_target_id.substr(8, 7) if current_target_id != "" else "NONE",
-			"FireControl" if fire_control_manager else "UNKNOWN"
-		])
-	
 	update_turret_rotation(delta)
 	handle_firing(delta)
 
@@ -182,7 +167,6 @@ func start_firing():
 	is_firing = true
 	current_status = "FIRING"
 	fire_timer = 0.0
-	last_fire_time = Time.get_ticks_msec() / 1000.0
 
 func stop_firing():
 	is_firing = false
@@ -198,8 +182,7 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# Replace the existing fire_bullet() function with this enhanced version:
-
+# SIMPLIFIED: Bullet creation with enhanced PDC tracking
 func fire_bullet():
 	if not bullet_scene:
 		return
@@ -207,71 +190,25 @@ func fire_bullet():
 	var bullet = bullet_scene.instantiate()
 	get_tree().root.add_child(bullet)
 	
-	# DEBUG: Check faction inheritance
-	print("🏛️ FACTION DEBUG - PDC %s:" % pdc_id.substr(4, 8))
-	print("  Parent ship name: %s" % parent_ship.name)
-	print("  Parent ship faction: %s" % (parent_ship.faction if "faction" in parent_ship else "NONE"))
-	print("  Bullet faction BEFORE set: %s" % (bullet.faction if "faction" in bullet else "NONE"))
-
-	
 	bullet.global_position = get_muzzle_world_position()
-	
-	debug_bullet_count += 1
 	
 	# CORRECTED FIRE DIRECTION
 	var current_rotation_for_firing = current_rotation - PI/2
 	var world_angle = current_rotation_for_firing + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	
-	if debug_enabled and pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"]:
-		print("🔍 DEBUG CHECK: PDC %s should show diagnostic (bullet #%d)" % [pdc_id.substr(4, 8), debug_bullet_count])
-		
-	
-	# ENHANCED DIAGNOSTIC for problem PDCs
-	if debug_enabled and pdc_id in ["PDC_-4_-72", "PDC_-21_-34", "PDC_-16_-49"] and debug_bullet_count <= 5:
-		print("\n🔫 BULLET FIRING DEBUG - PDC %s (Bullet #%d):" % [pdc_id.substr(4, 8), debug_bullet_count])
-		print("  Mount position: %s" % mount_position)
-		print("  Muzzle world position: %s" % get_muzzle_world_position())
-		print("  Current PDC rotation: %.1f°" % rad_to_deg(current_rotation))
-		print("  Firing rotation calc: %.1f°" % rad_to_deg(current_rotation_for_firing))
-		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
-		print("  World firing angle: %.1f°" % rad_to_deg(world_angle))
-		print("  Fire direction vector: %s" % fire_direction)
-		print("  Target: %s" % current_target_id.substr(8, 7))
-		
-		# Verify the fire direction makes sense
-		var angle_magnitude = abs(rad_to_deg(world_angle))
-		if angle_magnitude > 360:
-			print("  ⚠️ WARNING: Extreme firing angle detected!")
-		else:
-			print("  ✓ Firing angle within normal range")
-	
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
+	# NEW: Initialize bullet with proper PDC tracking
+	if bullet.has_method("initialize_bullet") and parent_ship and "faction" in parent_ship:
+		bullet.initialize_bullet(parent_ship.faction, pdc_id)
+	
 	if bullet.has_method("set_velocity"):
 		bullet.set_velocity(bullet_velocity_pixels)
-	
-	if parent_ship and "faction" in parent_ship:
-		if bullet.has_method("set_faction"):
-			bullet.set_faction(parent_ship.faction)
-			print("  ✅ Set bullet faction to: %s" % bullet.faction)
-		else:
-			print("  ❌ Bullet has no set_faction method!")
-	else:
-		print("  ❌ Parent ship has no faction!")
-	
-	if bullet.has_signal("hit_target"):
-		bullet.hit_target.connect(_on_bullet_hit)
-	
-	rounds_fired += 1
 
-func _on_bullet_hit():
-	targets_hit += 1
-	
-	if fire_control_manager and fire_control_manager.has_method("report_successful_intercept"):
-		fire_control_manager.report_successful_intercept(pdc_id, current_target_id)
+# REMOVED: _on_bullet_hit() - No longer needed with EntityManager system
 
 func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
@@ -293,7 +230,7 @@ func angle_difference(from: float, to: float) -> float:
 		diff += TAU
 	return diff
 
-# Status reporting
+# SIMPLIFIED: Status reporting without battle statistics
 func get_status() -> Dictionary:
 	return {
 		"pdc_id": pdc_id,
@@ -304,9 +241,6 @@ func get_status() -> Dictionary:
 		"is_aimed": is_aimed(),
 		"fire_authorized": fire_authorized,
 		"is_firing": is_firing,
-		"rounds_fired": rounds_fired,
-		"targets_hit": targets_hit,
-		"targets_missed": targets_missed,
 		"current_target": current_target_id,
 		"mount_position": mount_position
 	}
@@ -330,29 +264,7 @@ func emergency_stop():
 	current_status = "IDLE"
 	set_idle_rotation()
 
-func get_battle_stats() -> Dictionary:
-	return {
-		"pdc_id": pdc_id,
-		"rounds_fired": rounds_fired,
-		"targets_hit": targets_hit,
-		"targets_missed": targets_missed,
-		"hit_rate": (float(targets_hit) / float(rounds_fired)) * 100.0 if rounds_fired > 0 else 0.0
-	}
-
-func reset_battle_stats():
-	rounds_fired = 0
-	targets_hit = 0
-	targets_missed = 0
-	debug_bullet_count = 0
-
-# COMMENTED OUT: Debug utilities (can be re-enabled if needed)
-# func print_comprehensive_debug():
-#	print("PDC %s: %s | Target: %s | Rounds: %d" % [
-#		pdc_id.substr(4, 8), current_status, 
-#		current_target_id.substr(8, 7) if current_target_id != "" else "None",
-#		rounds_fired
-#	])
-
-# func force_fire_test_bullet():
-#	print("Test bullet fired from PDC %s" % pdc_id.substr(4, 8))
-#	fire_bullet()
+# REMOVED: Battle statistics functions - BattleManager handles this now
+# REMOVED: get_battle_stats()
+# REMOVED: reset_battle_stats()
+# REMOVED: All hit/miss tracking code

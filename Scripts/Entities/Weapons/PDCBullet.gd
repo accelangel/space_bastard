@@ -1,14 +1,12 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - FIXED VERSION
+# Scripts/Entities/Weapons/PDCBullet.gd - REFACTORED FOR BATTLE SYSTEM
 extends Area2D
 class_name PDCBullet
 
-# Signals
-signal hit_target
-
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
-var faction: String = ""  # ← FIXED: No default faction, must be explicitly set
-var entity_id: String
+var faction: String = ""
+var entity_id: String = ""
+var source_pdc_id: String = ""  # NEW: Track which PDC fired this bullet
 
 # References
 @onready var sprite: Sprite2D = $Sprite2D
@@ -19,9 +17,7 @@ func _ready():
 	
 	# Set rotation to match velocity
 	if velocity.length() > 0:
-		# Try different offsets to match your sprite orientation
-		# Start with PI (180 degrees) since you mentioned it's shooting backwards
-		rotation = velocity.angle() +3*PI/2 # I have tried + PI, PI/2, - PI/2, nothing changes, it just shoots backwards!!!
+		rotation = velocity.angle() + 3*PI/2
 
 func _physics_process(delta):
 	# Move bullet
@@ -33,59 +29,40 @@ func _physics_process(delta):
 		entity_manager.update_entity_position(entity_id, global_position)
 
 func _on_area_entered(area: Area2D):
-	# DEBUG: Log all collisions
-	var area_name = "Unknown"
-	if area.has_method("get_name"):
-		area_name = str(area.name)
-	
-	print("🎯 BULLET COLLISION: Bullet hit %s (faction: %s)" % [
-		area_name,
-		area.faction if "faction" in area else "Unknown"
-	])
-	
-	# Check if we hit something hostile
-	if is_hostile_to(area):
-		print("✅ CONFIRMED HIT: Bullet from faction %s hit hostile %s" % [faction, area.faction])
+	# NEW: Report collision to EntityManager instead of direct destruction
+	var entity_manager = get_node_or_null("/root/EntityManager")
+	if entity_manager and entity_id:
+		# Get the other entity's ID
+		var other_entity_id = ""
+		if "entity_id" in area:
+			other_entity_id = area.entity_id
+		else:
+			print("Warning: Collided entity has no entity_id: %s" % area.name)
+			return
 		
-		# Emit signal before destroying
-		hit_target.emit()
-		print("📡 SIGNAL EMITTED: hit_target signal sent")
-		
-		# Both bullet and target die instantly
-		area.queue_free()
-		queue_free()
-	else:
-		print("❌ FRIENDLY FIRE AVOIDED: Same faction collision")
-
-func is_hostile_to(other: Node) -> bool:
-	if not "faction" in other:
-		print("⚠️ NO FACTION: Target has no faction property")
-		return false
-	
-	# Simple faction check
-	if faction == "friendly":
-		return other.faction == "hostile"
-	elif faction == "hostile":
-		return other.faction == "friendly"
-	
-	return false
+		# Report collision - EntityManager will handle destruction
+		entity_manager.report_collision(entity_id, other_entity_id, global_position)
 
 func set_velocity(new_velocity: Vector2):
 	velocity = new_velocity
 	if velocity.length() > 0:
-		# Apply the same offset here
-		rotation = velocity.angle() +3*PI/2 # I have tried + PI, PI/2, - PI/2, nothing changes, it just shoots backwards!!!
+		rotation = velocity.angle() + 3*PI/2
 
 func set_faction(new_faction: String):
 	faction = new_faction
+
+func set_source_pdc(pdc_id: String):
+	source_pdc_id = pdc_id
+
+# NEW: Initialize bullet with EntityManager registration
+func initialize_bullet(bullet_faction: String, pdc_id: String):
+	faction = bullet_faction
+	source_pdc_id = pdc_id
 	
-	# NOW register with EntityManager using correct faction
+	# Register with EntityManager, passing source PDC info
 	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager and entity_id == "":
-		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction)
-	
-	# Debug faction setting
-	print("🏛️ BULLET FACTION SET: %s" % faction)
+	if entity_manager:
+		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction, source_pdc_id)
 
 func _exit_tree():
 	# Unregister from EntityManager when destroyed
