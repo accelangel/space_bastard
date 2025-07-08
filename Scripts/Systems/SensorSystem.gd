@@ -1,4 +1,4 @@
-# Scripts/Systems/SensorSystem.gd - CLEANED VERSION
+# Scripts/Systems/SensorSystem.gd - FIXED CRASH PREVENTION
 extends Node2D
 class_name SensorSystem
 
@@ -16,20 +16,15 @@ func _ready():
 	
 	if parent_ship and "faction" in parent_ship:
 		ship_faction = parent_ship.faction
-	
-	# COMMENTED OUT: Initialization spam
-	# var ship_name: String = "unknown"
-	# if parent_ship:
-	#	ship_name = parent_ship.name
-	# print("SensorSystem initialized for ", ship_name, " faction: ", ship_faction)
 
 func update_contacts(entity_reports: Array):
 	# Clear old contacts
 	all_contacts.clear()
 	
-	# Filter for enemies only
+	# Filter for enemies only - with validation
 	for report in entity_reports:
-		if is_enemy_of(report.faction):
+		# FIXED: Validate that the node reference is still valid
+		if is_enemy_of(report.faction) and is_instance_valid(report.node):
 			all_contacts.append(report)
 
 func is_enemy_of(other_faction: String) -> bool:
@@ -43,14 +38,16 @@ func is_enemy_of(other_faction: String) -> bool:
 func get_all_enemy_torpedoes() -> Array:
 	var torpedoes = []
 	for contact in all_contacts:
-		if contact.type == "torpedo" and contact.node:
+		# FIXED: Double-check node validity before adding
+		if contact.type == "torpedo" and contact.node and is_instance_valid(contact.node):
 			torpedoes.append(contact.node)
 	return torpedoes
 
 func get_all_enemy_ships() -> Array:
 	var ships = []
 	for contact in all_contacts:
-		if contact.type in ["player_ship", "enemy_ship"] and contact.node:
+		# FIXED: Double-check node validity before adding
+		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node):
 			ships.append(contact.node)
 	return ships
 
@@ -62,22 +59,29 @@ func get_closest_enemy_ship() -> Node2D:
 	var closest_distance_sq = INF
 	
 	for contact in all_contacts:
-		if contact.type in ["player_ship", "enemy_ship"] and contact.node:
+		# FIXED: Validate node before using it
+		if contact.type in ["player_ship", "enemy_ship"] and contact.node and is_instance_valid(contact.node):
 			var distance_sq = parent_ship.global_position.distance_squared_to(contact.position)
 			if distance_sq < closest_distance_sq:
 				closest_ship = contact.node
 				closest_distance_sq = distance_sq
 	
-	return closest_ship
+	# FIXED: Final validation before returning
+	if closest_ship and is_instance_valid(closest_ship):
+		return closest_ship
+	else:
+		return null
 
 func get_debug_info() -> String:
 	var torpedo_count = 0
 	var ship_count = 0
 	
 	for contact in all_contacts:
-		if contact.type == "torpedo":
-			torpedo_count += 1
-		elif contact.type in ["player_ship", "enemy_ship"]:
-			ship_count += 1
+		# FIXED: Only count valid contacts
+		if contact.node and is_instance_valid(contact.node):
+			if contact.type == "torpedo":
+				torpedo_count += 1
+			elif contact.type in ["player_ship", "enemy_ship"]:
+				ship_count += 1
 	
 	return "Contacts: %d ships, %d torpedoes" % [ship_count, torpedo_count]

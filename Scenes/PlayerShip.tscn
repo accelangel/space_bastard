@@ -32,6 +32,15 @@ script = ExtResource("5_dplm1")
 
 [node name="FireControlManager" type="Node2D" parent="."]
 script = ExtResource("5_qjl7e")
+debug_enabled = null
+engagement_range_meters = null
+min_intercept_distance_meters = null
+max_simultaneous_engagements = null
+critical_time_threshold = null
+short_time_threshold = null
+medium_time_threshold = null
+difficult_intercept_threshold = null
+multi_pdc_assignment_bonus = null
 
 [node name="PDC1" parent="." instance=ExtResource("6_n2ig7")]
 position = Vector2(9, -83)

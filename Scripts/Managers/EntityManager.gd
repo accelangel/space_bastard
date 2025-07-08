@@ -1,4 +1,4 @@
-# Scripts/Managers/EntityManager.gd - FIXED ENTITY ID ASSIGNMENT
+# Scripts/Managers/EntityManager.gd - FIXED ENTITY CLEANUP
 extends Node
 
 # Core entity tracking
@@ -60,6 +60,9 @@ func _physics_process(delta):
 	
 	if update_timer >= update_interval:
 		update_timer = 0.0
+		
+		# FIXED: Clean up invalid entities BEFORE sending reports
+		cleanup_invalid_entities()
 		
 		# Send position reports to all sensor systems
 		var all_positions = []
@@ -196,6 +199,15 @@ func destroy_entity_safe(entity_id: String, reason: String):
 	# Queue the actual node for destruction
 	if is_instance_valid(entity_data.node_ref):
 		entity_data.node_ref.queue_free()
+	
+	# FIXED: Immediately remove from active tracking
+	# This prevents BattleManager from counting destroyed entities
+	call_deferred("remove_destroyed_entity", entity_id)
+
+# NEW: Immediate cleanup of destroyed entities
+func remove_destroyed_entity(entity_id: String):
+	if entities.has(entity_id):
+		entities.erase(entity_id)
 
 func unregister_entity(entity_id: String):
 	if entities.has(entity_id):
@@ -207,7 +219,8 @@ func unregister_entity(entity_id: String):
 		
 		entities.erase(entity_id)
 
-func cleanup_out_of_bounds():
+# NEW: Clean up invalid entities to prevent sensor system crashes
+func cleanup_invalid_entities():
 	var to_remove = []
 	
 	for entity_id in entities:
@@ -218,6 +231,19 @@ func cleanup_out_of_bounds():
 			if not entity_data.is_destroyed:
 				destroy_entity_safe(entity_id, "node_invalid")
 			to_remove.append(entity_id)
+	
+	# Remove invalid entities from tracking
+	for entity_id in to_remove:
+		entities.erase(entity_id)
+
+func cleanup_out_of_bounds():
+	var to_remove = []
+	
+	for entity_id in entities:
+		var entity_data = entities[entity_id]
+		
+		# Skip if already invalid (handled by cleanup_invalid_entities)
+		if not is_instance_valid(entity_data.node_ref):
 			continue
 		
 		# Check if out of bounds
@@ -225,7 +251,7 @@ func cleanup_out_of_bounds():
 			destroy_entity_safe(entity_id, "out_of_bounds")
 			to_remove.append(entity_id)
 	
-	# Remove invalid entities from tracking
+	# Remove out-of-bounds entities from tracking
 	for entity_id in to_remove:
 		entities.erase(entity_id)
 

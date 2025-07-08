@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED FOR BATTLE SYSTEM
+# Scripts/Entities/Weapons/Torpedo.gd - PROPER REFERENCE CLEANUP
 extends Area2D
 class_name Torpedo
 
@@ -69,6 +69,10 @@ func _ready():
 		queue_free()
 		return
 	
+	# PROPER CLEANUP: Connect to target's tree_exiting signal
+	if target_node.tree_exiting.connect(_on_target_destroyed):
+		print("Warning: Could not connect to target's tree_exiting signal")
+	
 	# Register with EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if entity_manager:
@@ -91,14 +95,20 @@ func _ready():
 	rotation = ship_forward.angle()
 	initial_rotation = rotation
 	
-	# Connect collision - NEW: Route through EntityManager
+	# Connect collision - Route through EntityManager
 	area_entered.connect(_on_area_entered)
 
+# PROPER CLEANUP: Handle target destruction
+func _on_target_destroyed():
+	"""Called when target is about to be removed from scene tree"""
+	print("Torpedo: Target destroyed, switching to ballistic mode")
+	target_node = null
+	# Continue in ballistic mode rather than self-destructing
+
 func _physics_process(delta):
-	# Validate target
-	if not is_instance_valid(target_node):
-		queue_free()
-		return
+	# Target validation - if target was destroyed, continue ballistically
+	if target_node and not is_instance_valid(target_node):
+		target_node = null
 	
 	var current_time = Time.get_ticks_msec() / 1000.0
 	var time_since_launch = current_time - launch_start_time
@@ -121,8 +131,11 @@ func _physics_process(delta):
 		rotation_progress = clamp(time_since_ignition / rotation_transition_duration, 0.0, 1.0)
 		guidance_strength = clamp(time_since_ignition / guidance_ramp_duration, 0.0, 1.0)
 		
-		# SMOOTH GUIDANCE: Gradually apply intercept calculations
-		var commanded_acceleration = calculate_smooth_guidance(delta)
+		# GUIDANCE: Only calculate if we have a valid target
+		var commanded_acceleration = Vector2.ZERO
+		if target_node:
+			commanded_acceleration = calculate_smooth_guidance(delta)
+		
 		velocity_mps += commanded_acceleration * delta
 		
 		# SMOOTH ROTATION: Gradually rotate from initial direction to velocity direction
@@ -147,8 +160,9 @@ func should_ignite_engines(time_since_launch: float) -> bool:
 
 func ignite_engines():
 	engines_ignited = true
-	var to_target = (target_node.global_position - global_position).normalized()
-	previous_los = to_target
+	if target_node:
+		var to_target = (target_node.global_position - global_position).normalized()
+		previous_los = to_target
 
 func update_smooth_rotation(delta: float):
 	if velocity_mps.length() < 10.0:
@@ -159,9 +173,9 @@ func update_smooth_rotation(delta: float):
 	var rotation_speed = 3.0 * (1.0 + rotation_progress)
 	rotation = rotate_toward(rotation, current_target, rotation_speed * delta)
 
-# ALL GUIDANCE FUNCTIONS PRESERVED EXACTLY AS THEY WERE
+# ALL GUIDANCE FUNCTIONS PRESERVED WITH TARGET VALIDATION
 func calculate_smooth_guidance(delta: float) -> Vector2:
-	if not engines_ignited:
+	if not engines_ignited or not target_node:
 		return Vector2.ZERO
 	
 	var pn_command = calculate_proportional_navigation(delta)
@@ -199,6 +213,9 @@ func calculate_smooth_guidance(delta: float) -> Vector2:
 	return final_command
 
 func calculate_proportional_navigation(delta: float) -> Vector2:
+	if not target_node:
+		return Vector2.ZERO
+		
 	var target_pos = target_node.global_position
 	var target_vel = _get_target_velocity()
 	
@@ -229,6 +246,9 @@ func calculate_proportional_navigation(delta: float) -> Vector2:
 	return acceleration_command
 
 func calculate_direct_intercept(delta: float) -> Vector2:
+	if not target_node:
+		return Vector2.ZERO
+		
 	var target_pos = target_node.global_position
 	var target_vel = _get_target_velocity()
 	
@@ -300,28 +320,31 @@ func _get_target_velocity() -> Vector2:
 	return Vector2.ZERO
 
 func _on_area_entered(area: Area2D):
-	# FIXED: Better collision detection with fallback options
+	# Route collision through EntityManager
 	var entity_manager = get_node_or_null("/root/EntityManager")
 	if not entity_manager or not entity_id:
 		return
 	
 	var other_entity_id = ""
 	
-	# Method 1: Try to get entity_id as a property (most reliable)
+	# Get entity_id from the other object
 	if area.has_meta("entity_id"):
 		other_entity_id = area.get_meta("entity_id")
 	elif "entity_id" in area and area.entity_id != "":
 		other_entity_id = area.entity_id
 	else:
-		# Method 2: Fallback for unregistered entities
 		print("Warning: Torpedo collided with entity lacking entity_id, skipping: %s" % area.name)
 		return
 	
 	# Report collision - EntityManager will handle destruction
 	entity_manager.report_collision(entity_id, other_entity_id, global_position)
+
 # Methods called by launcher
 func set_target(target: Node2D):
 	target_node = target
+	# Connect to the new target's tree_exiting signal
+	if target_node and target_node.tree_exiting.connect(_on_target_destroyed):
+		print("Warning: Could not connect to new target's tree_exiting signal")
 
 func set_launcher(ship: Node2D):
 	launcher_ship = ship

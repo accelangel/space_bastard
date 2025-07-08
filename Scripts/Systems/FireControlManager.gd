@@ -1,9 +1,6 @@
-# Scripts/Systems/FireControlManager.gd - SIMPLIFIED FOR BATTLE REFACTOR
+# Scripts/Systems/FireControlManager.gd - PROPER SIGNAL-BASED CLEANUP
 extends Node2D
 class_name FireControlManager
-
-# MINIMAL DEBUG CONTROL
-@export var debug_enabled: bool = false
 
 # System configuration
 @export var engagement_range_meters: float = 15000.0
@@ -24,9 +21,10 @@ var registered_pdcs: Dictionary = {}
 var pdc_assignments: Dictionary = {}
 var target_assignments: Dictionary = {}
 
-# Target tracking
+# Target tracking with proper cleanup
 var tracked_targets: Dictionary = {}
 var target_priorities: Array = []
+var target_signal_connections: Dictionary = {}  # target_id -> signal connection
 
 # System state
 var parent_ship: Node2D
@@ -37,12 +35,6 @@ var ship_forward_direction: Vector2 = Vector2.UP
 # Performance optimization
 var update_interval: float = 0.05
 var update_timer: float = 0.0
-
-# REMOVED: All battle statistics tracking - BattleManager handles this now
-# REMOVED: var battle_stats: Dictionary
-# REMOVED: var torpedo_tracking: Dictionary
-# REMOVED: var intercept_log: Array
-# REMOVED: All battle analysis functions
 
 # Simple target data structure - focused only on fire control
 class TargetData:
@@ -91,7 +83,7 @@ func _physics_process(delta):
 		return
 	update_timer = 0.0
 	
-	# Main fire control loop - SIMPLIFIED
+	# Main fire control loop
 	update_target_tracking()
 	assess_all_threats()
 	optimize_pdc_assignments()
@@ -100,12 +92,13 @@ func _physics_process(delta):
 func update_target_tracking():
 	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
 	
-	# Remove targets that no longer exist
+	# Remove targets that no longer exist in sensor data
 	var targets_to_remove = []
 	for target_id in tracked_targets:
 		var target_data = tracked_targets[target_id]
 		
-		if not is_instance_valid(target_data.node_ref) or not target_data.node_ref in current_torpedoes:
+		# Check if torpedo still exists in current sensor data
+		if not target_data.node_ref in current_torpedoes:
 			targets_to_remove.append(target_id)
 			continue
 		
@@ -117,19 +110,37 @@ func update_target_tracking():
 	
 	# Add new targets
 	for torpedo in current_torpedoes:
-		var torpedo_id = get_torpedo_id(torpedo)
-		if not tracked_targets.has(torpedo_id):
-			add_new_target(torpedo)
+		if is_instance_valid(torpedo):
+			var torpedo_id = get_torpedo_id(torpedo)
+			if not tracked_targets.has(torpedo_id):
+				add_new_target(torpedo)
 
 func add_new_target(torpedo: Node2D):
+	if not is_instance_valid(torpedo):
+		return
+		
 	var target_data = TargetData.new()
 	target_data.target_id = get_torpedo_id(torpedo)
 	target_data.node_ref = torpedo
 	
+	# PROPER CLEANUP: Connect to torpedo's tree_exiting signal
+	if torpedo.tree_exiting.connect(_on_target_tree_exiting.bind(target_data.target_id)):
+		print("Warning: Could not connect to torpedo's tree_exiting signal")
+	else:
+		target_signal_connections[target_data.target_id] = torpedo
+	
 	update_target_data(target_data)
 	tracked_targets[target_data.target_id] = target_data
 
+# PROPER CLEANUP: Signal handler for when torpedo is destroyed
+func _on_target_tree_exiting(target_id: String):
+	# Called when a tracked torpedo is about to be removed from scene tree
+	remove_target(target_id)
+
 func update_target_data(target_data: TargetData):
+	if not is_instance_valid(target_data.node_ref):
+		return
+		
 	var torpedo = target_data.node_ref
 	target_data.last_position = torpedo.global_position
 	target_data.last_velocity = get_torpedo_velocity(torpedo)
@@ -155,6 +166,9 @@ func update_target_data(target_data: TargetData):
 	target_data.is_critical = target_data.time_to_impact < critical_time_threshold and target_data.distance_meters <= engagement_range_meters
 
 func calculate_intercept_point(torpedo: Node2D) -> Vector2:
+	if not is_instance_valid(torpedo):
+		return Vector2.ZERO
+		
 	var torpedo_pos = torpedo.global_position
 	var torpedo_vel = get_torpedo_velocity(torpedo) / WorldSettings.meters_per_pixel
 	
@@ -166,6 +180,9 @@ func calculate_intercept_point(torpedo: Node2D) -> Vector2:
 
 func calculate_intercept_feasibility(target_data: TargetData) -> float:
 	if target_data.distance_meters > engagement_range_meters:
+		return 0.0
+	
+	if not is_instance_valid(target_data.node_ref):
 		return 0.0
 	
 	var ship_to_target = target_data.last_position - parent_ship.global_position
@@ -217,6 +234,9 @@ func assess_all_threats():
 	for target_id in tracked_targets:
 		var target_data = tracked_targets[target_id]
 		
+		if not is_instance_valid(target_data.node_ref):
+			continue
+		
 		if target_data.feasibility_score <= 0.0:
 			continue
 		
@@ -263,7 +283,13 @@ func optimize_pdc_assignments():
 	target_assignments.clear()
 	
 	for target_id in target_priorities:
+		if not tracked_targets.has(target_id):
+			continue
+			
 		var target_data = tracked_targets[target_id]
+		
+		if not is_instance_valid(target_data.node_ref):
+			continue
 		
 		if target_data.feasibility_score <= 0.0:
 			continue
@@ -274,13 +300,13 @@ func optimize_pdc_assignments():
 		elif target_data.feasibility_score < difficult_intercept_threshold:
 			pdcs_needed = 2
 		
-		var assigned_pdcs = assign_pdcs_to_target_silent(target_data, pdcs_needed)
+		var assigned_pdcs = assign_pdcs_to_target(target_data, pdcs_needed)
 		
 		if assigned_pdcs.size() > 0:
 			target_assignments[target_id] = assigned_pdcs
 			target_data.assigned_pdcs = assigned_pdcs
 
-func assign_pdcs_to_target_silent(target_data: TargetData, pdcs_needed: int) -> Array:
+func assign_pdcs_to_target(target_data: TargetData, pdcs_needed: int) -> Array:
 	var available_pdcs = []
 	var assigned = []
 	
@@ -288,7 +314,7 @@ func assign_pdcs_to_target_silent(target_data: TargetData, pdcs_needed: int) -> 
 	for pdc_id in registered_pdcs:
 		if pdc_assignments[pdc_id] == "":
 			var pdc = registered_pdcs[pdc_id]
-			var score = score_pdc_for_target_silent(pdc, target_data)
+			var score = score_pdc_for_target(pdc, target_data)
 			
 			if score > 0.0:
 				available_pdcs.append({"pdc_id": pdc_id, "score": score})
@@ -304,7 +330,7 @@ func assign_pdcs_to_target_silent(target_data: TargetData, pdcs_needed: int) -> 
 	
 	return assigned
 
-func score_pdc_for_target_silent(pdc: Node2D, target_data: TargetData) -> float:
+func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var to_intercept = target_data.intercept_point - pdc_pos
 	var required_angle = to_intercept.angle()
@@ -329,6 +355,10 @@ func execute_fire_missions():
 			continue
 			
 		var target_data = tracked_targets[target_id]
+		
+		if not is_instance_valid(target_data.node_ref):
+			continue
+			
 		var assigned_pdcs = target_assignments[target_id]
 		
 		if target_data.distance_meters > engagement_range_meters:
@@ -346,6 +376,9 @@ func execute_fire_missions():
 				pdc.authorize_firing()
 
 func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
+	if not is_instance_valid(target_data.node_ref):
+		return 0.0
+		
 	var pdc_pos = pdc.get_muzzle_world_position()
 	var target_pos = target_data.last_position
 	var target_vel = target_data.last_velocity
@@ -373,7 +406,7 @@ func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
 	return relative_angle
 
 func remove_target(target_id: String):
-	"""Clean removal of target from tracking"""
+	# Clean removal of target from tracking with proper signal cleanup
 	if not tracked_targets.has(target_id):
 		return
 	
@@ -386,6 +419,13 @@ func remove_target(target_id: String):
 			pdc.stop_firing()
 			pdc_assignments[pdc_id] = ""
 	
+	# PROPER CLEANUP: Disconnect signal if connected
+	if target_signal_connections.has(target_id):
+		var torpedo_node = target_signal_connections[target_id]
+		if is_instance_valid(torpedo_node) and torpedo_node.tree_exiting.is_connected(_on_target_tree_exiting):
+			torpedo_node.tree_exiting.disconnect(_on_target_tree_exiting)
+		target_signal_connections.erase(target_id)
+	
 	# Clean up tracking
 	tracked_targets.erase(target_id)
 	if target_assignments.has(target_id):
@@ -394,11 +434,6 @@ func remove_target(target_id: String):
 	var index = target_priorities.find(target_id)
 	if index >= 0:
 		target_priorities.remove_at(index)
-
-# REMOVED: All battle analysis functions - BattleManager handles this now
-# REMOVED: report_successful_intercept()
-# REMOVED: battle statistics tracking
-# REMOVED: battle report generation
 
 # Utility functions
 func get_available_pdc_count() -> int:
@@ -423,6 +458,9 @@ func get_torpedo_id(torpedo: Node2D) -> String:
 	return "torpedo_" + str(torpedo.get_instance_id())
 
 func get_torpedo_velocity(torpedo: Node2D) -> Vector2:
+	if not is_instance_valid(torpedo):
+		return Vector2.ZERO
+		
 	if torpedo.has_method("get_velocity_mps"):
 		return torpedo.get_velocity_mps()
 	elif "velocity_mps" in torpedo:

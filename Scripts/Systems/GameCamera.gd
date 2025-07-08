@@ -1,4 +1,4 @@
-# Enhanced GameCamera.gd - Single click ship selection with relative panning
+# Enhanced GameCamera.gd - FIXED VARIABLE USAGE
 extends Camera2D
 
 # Map configuration
@@ -19,11 +19,11 @@ var isDragging: bool = false
 
 # Ship following variables
 var following_ship: Node2D = null
-var follow_smoothing: float = 12.0  # Increased for smoother tracking
+var follow_smoothing: float = 12.0
 var follow_offset: Vector2 = Vector2.ZERO
-var follow_deadzone: float = 0.1    # Minimum distance before we start following
+var follow_deadzone: float = 0.1
 
-# NEW: Relative panning while following
+# Relative panning while following
 var relative_pan_offset: Vector2 = Vector2.ZERO
 var is_relative_panning: bool = false
 var relative_pan_start_mouse: Vector2 = Vector2.ZERO
@@ -40,8 +40,8 @@ func _ready():
 	print("Viewport size: ", get_viewport_rect().size)
 	print("Min zoom: ", zoom_min)
 	
-	# Create selection indicator
-	create_selection_indicator()
+	# Create selection indicator with deferred call
+	call_deferred("create_selection_indicator")
 
 func _process(delta):
 	handle_zoom(delta)
@@ -131,13 +131,11 @@ func handle_click_and_drag():
 		update_relative_panning()
 
 func start_relative_panning():
-	#print("Starting relative panning while following ship")
 	is_relative_panning = true
 	relative_pan_start_mouse = get_viewport().get_mouse_position()
 	relative_pan_start_offset = relative_pan_offset
 
 func stop_relative_panning():
-	#print("Stopping relative panning")
 	is_relative_panning = false
 
 func update_relative_panning():
@@ -165,16 +163,13 @@ func handle_ship_selection():
 
 func select_ship_at_mouse():
 	var mouse_world_pos = get_global_mouse_position()
-	#print("Selecting at mouse position: ", mouse_world_pos)
 	
 	# Try to find ships using multiple methods
 	var found_ship = find_ship_at_position(mouse_world_pos)
 	
 	if found_ship:
-		#print("Found ship to follow: ", found_ship.name)
 		start_following_ship(found_ship)
 	else:
-		#print("No ship found at mouse position")
 		# If no ship found, stop following current ship
 		if following_ship:
 			stop_following_ship()
@@ -221,7 +216,6 @@ func get_all_selectable_objects() -> Array:
 	return objects
 
 func start_following_ship(ship: Node2D):
-	#print("Started following: ", ship.name)
 	following_ship = ship
 	follow_offset = Vector2.ZERO
 	# Reset relative pan offset when starting to follow a new ship
@@ -233,8 +227,6 @@ func start_following_ship(ship: Node2D):
 		selection_indicator.global_position = ship.global_position
 
 func stop_following_ship():
-	#if following_ship:
-		#print("Stopped following: ", following_ship.name)
 	following_ship = null
 	
 	# Reset relative panning state
@@ -262,11 +254,21 @@ func follow_ship(_delta):
 		selection_indicator.global_position = following_ship.global_position
 
 func create_selection_indicator():
+	# Use deferred child addition to avoid timing issues
 	selection_indicator = Node2D.new()
 	selection_indicator.name = "SelectionIndicator"
 	selection_indicator.visible = false
-	get_tree().current_scene.add_child(selection_indicator)
 	
+	# Use call_deferred to add child when scene is ready
+	get_tree().current_scene.call_deferred("add_child", selection_indicator)
+	
+	# Set up indicator components after it's added to scene
+	call_deferred("setup_selection_indicator")
+
+func setup_selection_indicator():
+	if not selection_indicator:
+		return
+		
 	# Create a simple circle indicator
 	var line = Line2D.new()
 	line.width = 3.0
@@ -295,12 +297,15 @@ func update_indicator_scale(scale_value: float):
 		selection_indicator.scale = Vector2(scale_value, scale_value)
 
 func calculate_min_zoom():
+	# FIXED: Properly use viewport_size variable
 	var viewport_size = get_viewport_rect().size
-	var _zoom_for_width = viewport_size.x / map_size.x
-	var _zoom_for_height = viewport_size.y / map_size.y
-	# Fixed: removed unused variable warning by directly using the calculation
-	var clean_zoom = 0.01397  # Slightly smaller than calculated for buffer
-	return Vector2(clean_zoom, clean_zoom)
+	var zoom_for_width = viewport_size.x / map_size.x
+	var zoom_for_height = viewport_size.y / map_size.y
+	
+	# Use the smaller zoom value to ensure entire map fits, with slight buffer
+	var calculated_zoom = min(zoom_for_width, zoom_for_height) * 0.9
+	
+	return Vector2(calculated_zoom, calculated_zoom)
 
 # Public methods for external control
 func set_follow_target(ship: Node2D):
@@ -315,7 +320,7 @@ func set_follow_smoothing(smoothing: float):
 func set_follow_offset(new_offset: Vector2):
 	follow_offset = new_offset
 
-# NEW: Public methods for relative panning control
+# Public methods for relative panning control
 func reset_relative_pan_offset():
 	relative_pan_offset = Vector2.ZERO
 
