@@ -1,169 +1,173 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - FIXED AUTO BATTLE START
+# Scripts/Systems/TorpedoLauncher.gd - IMMEDIATE STATE REFACTOR
 extends Node2D
 class_name TorpedoLauncher
 
-@export var torpedo_scene: PackedScene
-@export var launch_cooldown: float = 0.05
-@export var max_torpedoes: int = 25
+# Launcher configuration
+@export var launcher_id: String = ""
+@export var tubes_per_side: int = 2
+@export var reload_time: float = 10.0
+@export var launch_sequence_delay: float = 0.2
 
-var active_torpedoes: Array[Torpedo] = []
-var last_launch_time: float = 0.0
+# Tube spacing configuration
+@export var tube_spacing: float = 30.0
+@export var lateral_offset: float = 60.0
+
+# Launch state
+var port_tubes_ready: int
+var starboard_tubes_ready: int
+var reload_timers: Dictionary = {}  # "port_0", "starboard_1" -> float
+
+# References
 var parent_ship: Node2D
-var sensor_system: SensorSystem
+var torpedo_scene = preload("res://Scenes/Torpedo.tscn")
 
-# Alternating launch system
-var current_launch_side: int = 1
-var torpedoes_launched: int = 0
-
-# FIXED: Auto-launch enabled by default for immediate battle start
-@export var auto_launch_enabled: bool = true  # Changed to true for auto-start
-@export var auto_launch_interval: float = 0.15
-var auto_launch_timer: float = 0.0
-
-# Volley control - simplified
-@export var continuous_fire: bool = false
-var volley_fired: bool = false
-
-# DEBUG CONTROL
-@export var debug_enabled: bool = false
+# Launch sequence
+var launch_queue: Array = []
+var launch_timer: float = 0.0
 
 func _ready():
 	parent_ship = get_parent()
 	
-	if parent_ship:
-		sensor_system = parent_ship.get_node_or_null("SensorSystem")
-		if debug_enabled:
-			print("TorpedoLauncher initialized on ship: ", parent_ship.name)
+	# Generate ID if not provided
+	if launcher_id == "":
+		launcher_id = "launcher_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# Load torpedo scene if not assigned
-	if not torpedo_scene:
-		torpedo_scene = preload("res://Scenes/Torpedo.tscn")
+	# Initialize tubes
+	port_tubes_ready = tubes_per_side
+	starboard_tubes_ready = tubes_per_side
 	
-	# FIXED: Start firing immediately if auto-launch is enabled
-	if auto_launch_enabled:
-		print("TorpedoLauncher: Auto-launch enabled - battle will start immediately")
+	# Initialize reload timers
+	for i in range(tubes_per_side):
+		reload_timers["port_%d" % i] = 0.0
+		reload_timers["starboard_%d" % i] = 0.0
+	
+	print("Torpedo launcher initialized: %s with %d tubes per side" % [launcher_id, tubes_per_side])
 
-func _process(delta):
-	# Clean up destroyed torpedoes
-	active_torpedoes = active_torpedoes.filter(func(torpedo): return is_instance_valid(torpedo))
+func _physics_process(delta):
+	# Process reload timers
+	for tube_id in reload_timers:
+		if reload_timers[tube_id] > 0:
+			reload_timers[tube_id] -= delta
+			if reload_timers[tube_id] <= 0:
+				reload_timers[tube_id] = 0.0
+				on_tube_reloaded(tube_id)
 	
-	# FIXED: Auto-launch logic - fires immediately when enabled
-	if auto_launch_enabled:
-		if not continuous_fire and volley_fired:
-			return
-		
-		auto_launch_timer += delta
-		if auto_launch_timer >= auto_launch_interval:
-			launch_at_best_target()
-			auto_launch_timer = 0.0
-	
-	# Manual launch (space bar) - works regardless of auto_launch_enabled
-	if Input.is_action_just_pressed("ui_accept"):
-		launch_at_best_target()
+	# Process launch queue
+	if launch_queue.size() > 0:
+		launch_timer -= delta
+		if launch_timer <= 0:
+			var launch_data = launch_queue.pop_front()
+			_launch_single_torpedo(launch_data.target, launch_data.side, launch_data.tube_index)
+			launch_timer = launch_sequence_delay
 
-# BattleManager interface functions
-func start_battle_firing():
-	"""Called by BattleManager to start torpedo barrage"""
-	auto_launch_enabled = true
-	volley_fired = false
-	if debug_enabled:
-		print("TorpedoLauncher: Battle firing started by BattleManager")
+func fire_torpedo(target: Node2D):
+	if not is_valid_target(target):
+		print("Invalid target provided to torpedo launcher")
+		return
+	
+	var total_ready = port_tubes_ready + starboard_tubes_ready
+	if total_ready == 0:
+		print("No torpedo tubes ready")
+		return
+	
+	# Determine which side to fire from based on target position
+	var to_target = target.global_position - global_position
+	var ship_right = Vector2.UP.rotated(parent_ship.rotation + PI/2)
+	var is_target_starboard = to_target.dot(ship_right) > 0
+	
+	# Queue torpedoes for launch
+	launch_queue.clear()
+	
+	# Fire from the side facing the target first
+	if is_target_starboard:
+		queue_side_launch(target, 1)  # Starboard
+		queue_side_launch(target, -1)  # Port
+	else:
+		queue_side_launch(target, -1)  # Port
+		queue_side_launch(target, 1)  # Starboard
+	
+	print("Firing %d torpedoes at target" % launch_queue.size())
 
-func stop_battle_firing():
-	"""Called by BattleManager to stop torpedo barrage"""
-	auto_launch_enabled = false
-	if debug_enabled:
-		print("TorpedoLauncher: Battle firing stopped by BattleManager")
+func queue_side_launch(target: Node2D, side: int):
+	var ready_count = starboard_tubes_ready if side == 1 else port_tubes_ready
+	
+	for i in range(tubes_per_side):
+		var tube_id = ("starboard_%d" if side == 1 else "port_%d") % i
+		if reload_timers[tube_id] == 0.0 and ready_count > 0:
+			launch_queue.append({
+				"target": target,
+				"side": side,
+				"tube_index": i
+			})
+			
+			# Mark tube as firing
+			reload_timers[tube_id] = reload_time
+			if side == 1:
+				starboard_tubes_ready -= 1
+			else:
+				port_tubes_ready -= 1
+			ready_count -= 1
 
-func is_battle_active() -> bool:
-	"""Check if we're currently in battle firing mode"""
-	return auto_launch_enabled
-
-func launch_at_best_target() -> Torpedo:
-	if not sensor_system:
-		return null
+func _launch_single_torpedo(target: Node2D, side: int, tube_index: int):
+	if not torpedo_scene or not is_valid_target(target):
+		return
 	
-	var target = sensor_system.get_closest_enemy_ship()
-	if target:
-		return launch_torpedo(target)
-	
-	return null
-
-func launch_torpedo(target: Node2D) -> Torpedo:
-	if not can_launch():
-		return null
-	
-	if not torpedo_scene:
-		return null
-		
-	if not target or not is_instance_valid(target):
-		return null
-	
-	# Create torpedo
-	var torpedo = torpedo_scene.instantiate() as Torpedo
-	if not torpedo:
-		return null
-	
-	# Alternate launch sides
-	var launch_side = current_launch_side
-	current_launch_side *= -1
-	
-	# Set up torpedo
-	torpedo.global_position = global_position
-	torpedo.set_launcher(parent_ship)
-	torpedo.set_target(target)
-	torpedo.set_launch_side(launch_side)
-	
-	torpedoes_launched += 1
-	
-	# Add to scene
+	var torpedo = torpedo_scene.instantiate()
 	get_tree().root.add_child(torpedo)
 	
-	# Track torpedo
-	active_torpedoes.append(torpedo)
-	last_launch_time = Time.get_ticks_msec() / 1000.0
+	# Calculate launch position
+	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
+	var ship_right = Vector2.UP.rotated(parent_ship.rotation + PI/2)
 	
-	# Check if we've fired our max volley for single-volley mode
-	if not continuous_fire and active_torpedoes.size() >= max_torpedoes:
-		volley_fired = true
-		if debug_enabled:
-			print("Single volley complete - %d torpedoes fired" % active_torpedoes.size())
+	var side_offset = ship_right * lateral_offset * side
+	var tube_offset = ship_forward * (tube_index - (tubes_per_side - 1) * 0.5) * tube_spacing
 	
-	return torpedo
-
-func can_launch() -> bool:
-	var current_time = Time.get_ticks_msec() / 1000.0
-	var time_since_last = current_time - last_launch_time
+	torpedo.global_position = parent_ship.global_position + side_offset + tube_offset
 	
-	return (active_torpedoes.size() < max_torpedoes and 
-			time_since_last >= launch_cooldown)
+	# Configure torpedo
+	torpedo.set_target(target)
+	torpedo.set_launcher(parent_ship)
+	torpedo.set_launch_side(side)
+	
+	# Set faction from parent ship
+	if "faction" in parent_ship:
+		torpedo.faction = parent_ship.faction
+	
+	print("Torpedo launched from %s tube %d" % ["starboard" if side == 1 else "port", tube_index])
 
-func reset_volley():
-	volley_fired = false
-	if debug_enabled:
-		print("Volley system reset - can fire again")
+func on_tube_reloaded(tube_id: String):
+	if tube_id.begins_with("port"):
+		port_tubes_ready += 1
+	else:
+		starboard_tubes_ready += 1
+	
+	print("Tube %s reloaded" % tube_id)
 
-func get_debug_info() -> String:
-	var mode_text = "Continuous" if continuous_fire else "Single Volley"
-	var battle_status = "ACTIVE" if auto_launch_enabled else "INACTIVE"
-	var status_text = ""
-	if not continuous_fire:
-		status_text = " (Fired: %s)" % str(volley_fired)
-	return "Torpedoes: %d/%d active, Mode: %s%s, Battle: %s" % [
-		active_torpedoes.size(), max_torpedoes, mode_text, status_text, battle_status
-	]
+func is_valid_target(target: Node2D) -> bool:
+	if not target:
+		return false
+	if not is_instance_valid(target):
+		return false
+	if not target.is_inside_tree():
+		return false
+	if target.has_method("is_alive") and not target.is_alive:
+		return false
+	if target.get("marked_for_death") and target.marked_for_death:
+		return false
+	return true
 
-# Additional interface for BattleManager
-func get_active_torpedo_count() -> int:
-	return active_torpedoes.size()
+func get_ready_tube_count() -> int:
+	return port_tubes_ready + starboard_tubes_ready
 
-func get_max_torpedo_count() -> int:
-	return max_torpedoes
-
-func set_launch_rate(new_interval: float):
-	auto_launch_interval = new_interval
-
-func force_stop_all():
-	# Emergency stop all torpedo launching
-	auto_launch_enabled = false
-	volley_fired = true
+func get_reload_status() -> Dictionary:
+	var status = {
+		"port_ready": port_tubes_ready,
+		"starboard_ready": starboard_tubes_ready,
+		"reloading": {}
+	}
+	
+	for tube_id in reload_timers:
+		if reload_timers[tube_id] > 0:
+			status.reloading[tube_id] = reload_timers[tube_id]
+	
+	return status
