@@ -1,355 +1,284 @@
-# Scripts/Managers/EntityManager.gd - FIXED EVENT TRACKING
+# Scripts/Managers/BattleEventRecorder.gd - PURE OBSERVER
+# Renamed to avoid conflict with autoload EntityManager
 extends Node
+class_name BattleEventRecorder
 
-# Core entity tracking
-var entities: Dictionary = {}  # entity_id -> EntityData
-var entity_id_counter: int = 0
-
-# ENHANCED: Better battle event recording
+# Pure event recording
 var battle_events: Array = []
-var entity_registry: Dictionary = {}  # Full lifecycle tracking
-var bullet_to_pdc_map: Dictionary = {}  # bullet_id -> pdc_id for tracking
+var frame_counter: int = 0
+var battle_start_time: float = 0.0
+var battle_active: bool = false
 
-# Collision deduplication system
-var pending_collisions: Dictionary = {}  # collision_key -> frame_number
-var current_frame: int = 0
-
-# Performance
-var update_interval: float = 0.0166667  # 60 Hz
-var update_timer: float = 0.0
-
-# Map boundaries for auto-cleanup
-var map_bounds: Rect2
-
-# DEBUG CONTROL - Minimal logging only
-@export var debug_enabled: bool = false
-
-class EntityData:
-	var entity_id: String
-	var node_ref: Node2D
-	var entity_type: String  # "player_ship", "enemy_ship", "torpedo", "pdc_bullet"
-	var faction: String       # "friendly" or "hostile"
-	var position: Vector2
-	var last_update: float
-	var source_pdc: String = ""  # For bullets only - which PDC fired this
-	var birth_time: float
-	var is_destroyed: bool = false
-	
-	func _init(id: String, node: Node2D, type: String, fact: String, source: String = ""):
-		entity_id = id
-		node_ref = node
-		entity_type = type
-		faction = fact
-		source_pdc = source
-		position = node.global_position if node else Vector2.ZERO
-		birth_time = Time.get_ticks_msec() / 1000.0
-		last_update = birth_time
+# Entity snapshots for analysis
+var entity_snapshots: Dictionary = {}  # entity_id -> last known data
 
 func _ready():
-	# Set up map boundaries for auto-cleanup
-	var half_size = WorldSettings.map_size_pixels / 2
-	map_bounds = Rect2(-half_size.x, -half_size.y, WorldSettings.map_size_pixels.x, WorldSettings.map_size_pixels.y)
+	# Listen for events
+	add_to_group("battle_observers")
 	
-	print("EntityManager initialized - Battle tracking enabled")
+	print("BattleEventRecorder initialized - Pure observer mode")
 
-func _physics_process(delta):
-	current_frame += 1  # Collision deduplication frame counter
+func _physics_process(_delta):
+	frame_counter += 1
 	
-	update_timer += delta
-	
-	if update_timer >= update_interval:
-		update_timer = 0.0
-		
-		# Clean up invalid entities BEFORE sending reports
-		cleanup_invalid_entities()
-		
-		# Send position reports to all sensor systems
-		var all_positions = []
-		for entity_data in entities.values():
-			if is_instance_valid(entity_data.node_ref) and not entity_data.is_destroyed:
-				all_positions.append({
-					"node": entity_data.node_ref,
-					"position": entity_data.position,
-					"type": entity_data.entity_type,
-					"faction": entity_data.faction
-				})
-		
-		# Update all sensor systems
-		var sensor_systems = get_tree().get_nodes_in_group("sensor_systems")
-		for sensor in sensor_systems:
-			if sensor.has_method("update_contacts"):
-				sensor.update_contacts(all_positions)
-		
-		# Clean up out-of-bounds entities
-		cleanup_out_of_bounds()
+	# Periodic snapshot of battle state
+	if frame_counter % 60 == 0 and battle_active:  # Every second
+		record_battle_snapshot()
 
-# Fixed register_entity function for EntityManager.gd
-
-func register_entity(node: Node2D, type: String, faction: String, source_pdc: String = "") -> String:
-	# Validate the node exists and is valid before registration
-	if not node or not is_instance_valid(node):
-		print("EntityManager: Rejected invalid node for registration")
-		return ""
+# Observer interface - called by entities
+func on_entity_spawned(entity: Node2D, entity_type: String):
+	if not battle_active:
+		start_battle_recording()
 	
-	entity_id_counter += 1
-	var entity_id = type + "_" + str(entity_id_counter)
-	
-	# ENHANCED: Verify the entity_id is unique (paranoid check)
-	var attempts = 0
-	while entities.has(entity_id) and attempts < 100:
-		entity_id_counter += 1
-		entity_id = type + "_" + str(entity_id_counter)
-		attempts += 1
-	
-	if attempts >= 100:
-		print("EntityManager: ERROR - Could not generate unique entity ID!")
-		return ""
-	
-	var entity_data = EntityData.new(entity_id, node, type, faction, source_pdc)
-	entities[entity_id] = entity_data
-	entity_registry[entity_id] = entity_data  # Also track in registry
-	
-	# FIXED: For bullets, maintain direct PDC mapping only if source_pdc is valid
-	if type == "pdc_bullet" and source_pdc != "" and source_pdc.strip_edges() != "":
-		bullet_to_pdc_map[entity_id] = source_pdc
-	
-	# Record birth event with enhanced data
-	record_battle_event({
-		"type": "entity_registered",
+	var entity_id = ""
+	if "torpedo_id" in entity:
+		entity_id = entity.torpedo_id
+	elif "bullet_id" in entity:
+		entity_id = entity.bullet_id
+	elif "pdc_id" in entity:
+		entity_id = entity.pdc_id
+		
+	var event = {
+		"type": "entity_spawned",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"entity_type": entity_type,
 		"entity_id": entity_id,
-		"entity_type": type,
-		"faction": faction,
-		"position": entity_data.position,
-		"source_pdc": source_pdc
-	})
+		"position": entity.global_position,
+		"faction": entity.faction if "faction" in entity else "unknown"
+	}
 	
-	# Set entity_id as a proper property for collision detection
-	node.entity_id = entity_id
+	# Special tracking for bullets
+	if entity_type == "pdc_bullet" and "source_pdc_id" in entity:
+		event["source_pdc"] = entity.source_pdc_id
+		if "target_id" in entity:
+			event["target_id"] = entity.target_id
 	
-	# DEBUG: Log torpedo registrations to track the numbering issue
-	if type == "torpedo":
-		print("EntityManager: Registered %s (counter now: %d)" % [entity_id, entity_id_counter])
+	# Special tracking for torpedoes
+	if entity_type == "torpedo" and "source_ship_id" in entity:
+		event["source_ship"] = entity.source_ship_id
 	
-	return entity_id
+	battle_events.append(event)
+	
+	# Store snapshot
+	entity_snapshots[entity_id] = {
+		"type": entity_type,
+		"faction": event.faction,
+		"spawn_time": event.timestamp,
+		"last_position": entity.global_position,
+		"source_pdc": event.get("source_pdc", ""),
+		"is_alive": true
+	}
 
-func update_entity_position(entity_id: String, new_position: Vector2):
-	if entities.has(entity_id):
-		entities[entity_id].position = new_position
-		entities[entity_id].last_update = Time.get_ticks_msec() / 1000.0
-
-func report_collision(entity1_id: String, entity2_id: String, collision_position: Vector2):
-	# Prevent duplicate collision reports in same frame
-	var collision_key = get_collision_key(entity1_id, entity2_id)
+func on_entity_dying(entity: Node2D, reason: String):
+	var entity_id = ""
+	if "torpedo_id" in entity:
+		entity_id = entity.torpedo_id
+	elif "bullet_id" in entity:
+		entity_id = entity.bullet_id
+	elif "pdc_id" in entity:
+		entity_id = entity.pdc_id
 	
-	if pending_collisions.has(collision_key) and pending_collisions[collision_key] == current_frame:
-		return  # Already processed this collision this frame
+	var entity_type = "unknown"
+	if entity.has_meta("entity_type"):
+		entity_type = entity.get_meta("entity_type")
 	
-	pending_collisions[collision_key] = current_frame
-	
-	# Validate both entities exist and aren't already destroyed
-	if not entities.has(entity1_id) or not entities.has(entity2_id):
-		return
-	
-	var entity1 = entities[entity1_id]
-	var entity2 = entities[entity2_id]
-	
-	if entity1.is_destroyed or entity2.is_destroyed:
-		return  # Already destroyed
-	
-	# Check if this is a hostile collision (different factions)
-	if entity1.faction == entity2.faction:
-		return  # Friendly fire ignored
-	
-	# Determine collision type for logging
-	var collision_type = get_collision_type(entity1.entity_type, entity2.entity_type)
-	
-	# ONLY print meaningful intercepts
-	if collision_type == "torpedo_bullet_intercept":
-		print("Intercept: %s vs %s" % [entity1.entity_type, entity2.entity_type])
-	
-	# ENHANCED: Record collision event with better source tracking
-	var bullet_source_pdc = ""
-	if entity1.entity_type == "pdc_bullet":
-		bullet_source_pdc = bullet_to_pdc_map.get(entity1_id, entity1.source_pdc)
-	elif entity2.entity_type == "pdc_bullet":
-		bullet_source_pdc = bullet_to_pdc_map.get(entity2_id, entity2.source_pdc)
-	
-	record_battle_event({
-		"type": "collision",
-		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"entity1_id": entity1_id,
-		"entity2_id": entity2_id,
-		"entity1_type": entity1.entity_type,
-		"entity2_type": entity2.entity_type,
-		"position": collision_position,
-		"entity1_faction": entity1.faction,
-		"entity2_faction": entity2.faction,
-		"collision_type": collision_type,
-		"bullet_source_pdc": bullet_source_pdc  # Track which PDC made the hit
-	})
-	
-	# IMMEDIATE DESTRUCTION - don't wait for cleanup
-	destroy_entity_safe(entity1_id, "collision")
-	destroy_entity_safe(entity2_id, "collision")
-	
-	# FORCE IMMEDIATE CLEANUP - Remove from tracking immediately
-	entities.erase(entity1_id)
-	entities.erase(entity2_id)
-	
-	# Clean up bullet mapping
-	bullet_to_pdc_map.erase(entity1_id)
-	bullet_to_pdc_map.erase(entity2_id)
-
-func get_collision_type(type1: String, type2: String) -> String:
-	# Classify collision types for analysis
-	if (type1 == "torpedo" and type2 == "pdc_bullet") or (type1 == "pdc_bullet" and type2 == "torpedo"):
-		return "torpedo_bullet_intercept"
-	elif (type1 == "torpedo" and type2 in ["player_ship", "enemy_ship"]) or (type2 == "torpedo" and type1 in ["player_ship", "enemy_ship"]):
-		return "torpedo_ship_impact"
-	else:
-		return "other"
-
-func get_collision_key(id1: String, id2: String) -> String:
-	# Create consistent key regardless of order
-	if id1 < id2:
-		return id1 + "_" + id2
-	else:
-		return id2 + "_" + id1
-
-func destroy_entity_safe(entity_id: String, reason: String):
-	if not entities.has(entity_id):
-		return
-	
-	var entity_data = entities[entity_id]
-	
-	if entity_data.is_destroyed:
-		return
-	
-	# Mark as destroyed to prevent double-destruction
-	entity_data.is_destroyed = true
-	
-	# ONLY print torpedo destructions for battle tracking
-	if entity_data.entity_type == "torpedo":
-		print("Torpedo destroyed: %s (%s)" % [entity_id, reason])
-	
-	# Record destruction event with enhanced data
-	record_battle_event({
+	var event = {
 		"type": "entity_destroyed",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"entity_type": entity_type,
 		"entity_id": entity_id,
-		"entity_type": entity_data.entity_type,
-		"faction": entity_data.faction,
-		"position": entity_data.position,
-		"destruction_reason": reason,
-		"source_pdc": entity_data.source_pdc,
-		"lifetime": (Time.get_ticks_msec() / 1000.0) - entity_data.birth_time
-	})
+		"reason": reason,
+		"position": entity.global_position,
+		"lifetime": 0.0
+	}
 	
-	# Queue the actual node for destruction
-	if is_instance_valid(entity_data.node_ref):
-		entity_data.node_ref.queue_free()
+	# Calculate lifetime if we have spawn data
+	if entity_snapshots.has(entity_id):
+		var snapshot = entity_snapshots[entity_id]
+		event["lifetime"] = event.timestamp - snapshot.spawn_time
+		snapshot.is_alive = false
+	
+	# Special handling for PDC kills
+	if reason == "bullet_impact" and entity.has_meta("last_hit_by"):
+		event["killed_by_pdc"] = entity.get_meta("last_hit_by")
+	
+	# Special handling for torpedo impacts
+	if reason == "target_impact" and entity_id.begins_with("bullet_"):
+		if entity.has_meta("hit_target"):
+			event["hit_target"] = entity.get_meta("hit_target")
+	
+	battle_events.append(event)
 
-func cleanup_invalid_entities():
-	var to_remove = []
-	
-	for entity_id in entities:
-		var entity_data = entities[entity_id]
+func on_entity_moved(entity: Node2D, new_position: Vector2):
+	# Only record for performance - every 10th call
+	if Engine.get_physics_frames() % 10 != 0:
+		return
 		
-		# Check if node is still valid OR if it's marked destroyed
-		if not is_instance_valid(entity_data.node_ref) or entity_data.is_destroyed:
-			if not entity_data.is_destroyed:
-				destroy_entity_safe(entity_id, "node_invalid")
-			to_remove.append(entity_id)
-	
-	# Remove invalid entities from tracking IMMEDIATELY
-	for entity_id in to_remove:
-		entities.erase(entity_id)
-		bullet_to_pdc_map.erase(entity_id)  # Clean up bullet mapping
+	var entity_id = ""
+	if "torpedo_id" in entity:
+		entity_id = entity.torpedo_id
+	elif "bullet_id" in entity:
+		entity_id = entity.bullet_id
+		
+	if entity_snapshots.has(entity_id):
+		entity_snapshots[entity_id].last_position = new_position
 
-func unregister_entity(entity_id: String):
-	if entities.has(entity_id):
-		var entity_data = entities[entity_id]
-		
-		# If not already recorded as destroyed, record it now
-		if not entity_data.is_destroyed:
-			destroy_entity_safe(entity_id, "manual_cleanup")
-		
-		entities.erase(entity_id)
-		bullet_to_pdc_map.erase(entity_id)
-
-func cleanup_out_of_bounds():
-	var to_remove = []
+func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
+	var event = {
+		"type": "intercept",
+		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"bullet_id": bullet.bullet_id if "bullet_id" in bullet else "",
+		"torpedo_id": torpedo.torpedo_id if "torpedo_id" in torpedo else "",
+		"pdc_id": pdc_id,
+		"position": bullet.global_position,
+		"distance_to_ship": 0.0
+	}
 	
-	for entity_id in entities:
-		var entity_data = entities[entity_id]
-		
-		# Skip if already invalid (handled by cleanup_invalid_entities)
-		if not is_instance_valid(entity_data.node_ref):
-			continue
-		
-		# Check if out of bounds
-		if not map_bounds.has_point(entity_data.position):
-			destroy_entity_safe(entity_id, "out_of_bounds")
-			to_remove.append(entity_id)
+	# Calculate distance to ship
+	var pdc_nodes = get_tree().get_nodes_in_group("pdcs")
+	for pdc in pdc_nodes:
+		if pdc.pdc_id == pdc_id:
+			var ship = pdc.get_parent()
+			if ship:
+				event["distance_to_ship"] = bullet.global_position.distance_to(ship.global_position) * WorldSettings.meters_per_pixel
+			break
 	
-	# Remove out-of-bounds entities from tracking
-	for entity_id in to_remove:
-		entities.erase(entity_id)
-		bullet_to_pdc_map.erase(entity_id)
+	battle_events.append(event)
 
-# ENHANCED: Battle data interface with better tracking
+func on_pdc_fired(pdc: Node2D, target: Node2D):
+	var event = {
+		"type": "pdc_fired",
+		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"pdc_id": pdc.pdc_id,
+		"target_id": "",
+		"mount_position": pdc.mount_position
+	}
+	
+	if target and "torpedo_id" in target:
+		event["target_id"] = target.torpedo_id
+	
+	battle_events.append(event)
+
+func record_battle_snapshot():
+	# Count current entities
+	var torpedo_count = 0
+	var bullet_count = 0
+	var active_pdcs = 0
+	
+	# Count torpedoes
+	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+	for torpedo in torpedoes:
+		if "is_alive" in torpedo and torpedo.is_alive:
+			if "marked_for_death" in torpedo and not torpedo.marked_for_death:
+				torpedo_count += 1
+	
+	# Count bullets
+	var bullets = get_tree().get_nodes_in_group("bullets")
+	for bullet in bullets:
+		if "is_alive" in bullet and bullet.is_alive:
+			if "marked_for_death" in bullet and not bullet.marked_for_death:
+				bullet_count += 1
+	
+	# Count active PDCs
+	var pdcs = get_tree().get_nodes_in_group("pdcs")
+	for pdc in pdcs:
+		if pdc.current_target and pdc.is_firing:
+			active_pdcs += 1
+	
+	var snapshot = {
+		"type": "snapshot",
+		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"torpedo_count": torpedo_count,
+		"bullet_count": bullet_count,
+		"active_pdcs": active_pdcs
+	}
+	
+	battle_events.append(snapshot)
+
+func start_battle_recording():
+	battle_active = true
+	battle_start_time = Time.get_ticks_msec() / 1000.0
+	battle_events.clear()
+	entity_snapshots.clear()
+	frame_counter = 0
+	
+	print("BattleEventRecorder: Battle recording started")
+
+func stop_battle_recording():
+	battle_active = false
+	
+	var event = {
+		"type": "battle_ended",
+		"timestamp": Time.get_ticks_msec() / 1000.0,
+		"frame": frame_counter,
+		"duration": (Time.get_ticks_msec() / 1000.0) - battle_start_time
+	}
+	battle_events.append(event)
+	
+	print("BattleEventRecorder: Battle recording stopped")
+
+# Analysis interface
 func get_battle_data() -> Dictionary:
 	return {
 		"events": battle_events.duplicate(),
-		"entity_registry": entity_registry.duplicate(),
-		"bullet_to_pdc_map": bullet_to_pdc_map.duplicate()
+		"entity_snapshots": entity_snapshots.duplicate(),
+		"battle_duration": (Time.get_ticks_msec() / 1000.0) - battle_start_time if battle_active else 0.0
 	}
 
 func clear_battle_data():
 	battle_events.clear()
-	entity_registry.clear()
-	bullet_to_pdc_map.clear()
-	# FIXED: Reset entity counter for clean battle tracking
-	entity_id_counter = 0
-	print("EntityManager: Battle data cleared for new battle")
+	entity_snapshots.clear()
+	frame_counter = 0
+	battle_active = false
 
-func record_battle_event(event_data: Dictionary):
-	battle_events.append(event_data)
+# Analysis helpers
+func get_events_by_type(event_type: String) -> Array:
+	var filtered = []
+	for event in battle_events:
+		if event.type == event_type:
+			filtered.append(event)
+	return filtered
 
-# Enhanced debugging
-func print_debug_summary():
-	var type_counts = {}
-	var active_count = 0
+func get_entity_lifecycle(entity_id: String) -> Dictionary:
+	var lifecycle = {
+		"spawn": null,
+		"death": null,
+		"events": []
+	}
 	
-	for entity_data in entities.values():
-		if not entity_data.is_destroyed:
-			active_count += 1
-			if type_counts.has(entity_data.entity_type):
-				type_counts[entity_data.entity_type] += 1
+	for event in battle_events:
+		if event.get("entity_id", "") == entity_id:
+			if event.type == "entity_spawned":
+				lifecycle.spawn = event
+			elif event.type == "entity_destroyed":
+				lifecycle.death = event
 			else:
-				type_counts[entity_data.entity_type] = 1
+				lifecycle.events.append(event)
 	
-	print("EntityManager: %d active entities, %d total events recorded" % [active_count, battle_events.size()])
+	return lifecycle
 
-# Utility functions remain the same
-func get_all_entities() -> Array:
-	var result = []
-	for entity_data in entities.values():
-		if is_instance_valid(entity_data.node_ref) and not entity_data.is_destroyed:
-			result.append(entity_data)
-	return result
-
-func get_entities_by_type(type: String) -> Array:
-	var result = []
-	for entity_data in entities.values():
-		if entity_data.entity_type == type and is_instance_valid(entity_data.node_ref) and not entity_data.is_destroyed:
-			result.append(entity_data)
-	return result
-
-func get_debug_info() -> String:
-	var active_count = 0
-	for entity_data in entities.values():
-		if not entity_data.is_destroyed:
-			active_count += 1
-	return "Entities: %d active, %d events" % [active_count, battle_events.size()]
+func count_intercepts_by_pdc() -> Dictionary:
+	var pdc_stats = {}
+	
+	# Count all bullets fired by each PDC
+	for event in battle_events:
+		if event.type == "entity_spawned" and event.entity_type == "pdc_bullet":
+			var pdc_id = event.get("source_pdc", "")
+			if pdc_id != "":
+				if not pdc_stats.has(pdc_id):
+					pdc_stats[pdc_id] = {"fired": 0, "hits": 0}
+				pdc_stats[pdc_id].fired += 1
+	
+	# Count successful intercepts
+	for event in battle_events:
+		if event.type == "intercept":
+			var pdc_id = event.pdc_id
+			if pdc_stats.has(pdc_id):
+				pdc_stats[pdc_id].hits += 1
+	
+	return pdc_stats

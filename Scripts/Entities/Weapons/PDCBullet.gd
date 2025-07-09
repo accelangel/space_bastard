@@ -1,55 +1,129 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - FIXED SOURCE TRACKING
+# Scripts/Entities/Weapons/PDCBullet.gd - IMMEDIATE STATE REFACTOR
 extends Area2D
 class_name PDCBullet
 
+# Identity baked into the node
+@export var bullet_id: String = ""
+@export var birth_time: float = 0.0
+@export var faction: String = "friendly"
+@export var source_pdc_id: String = ""
+@export var source_ship_id: String = ""
+@export var target_id: String = ""  # What the PDC was aiming at
+
+# State management
+var is_alive: bool = true
+var marked_for_death: bool = false
+var death_reason: String = ""
+
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
-var faction: String = ""
-var entity_id: String = ""
-var source_pdc_id: String = ""  # FIXED: Better tracking of source PDC
+var max_lifetime: float = 3.0  # Bullets self-destruct after 3 seconds
 
 # References
 @onready var sprite: Sprite2D = $Sprite2D
 
 func _ready():
+	# Generate unique ID if not provided
+	if bullet_id == "":
+		bullet_id = "bullet_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	
+	birth_time = Time.get_ticks_msec() / 1000.0
+	
+	# Add to groups for identification
+	add_to_group("bullets")
+	add_to_group("combat_entities")
+	
+	# Store all identity data as metadata for redundancy
+	set_meta("bullet_id", bullet_id)
+	set_meta("faction", faction)
+	set_meta("entity_type", "pdc_bullet")
+	set_meta("source_pdc_id", source_pdc_id)
+	set_meta("source_ship_id", source_ship_id)
+	set_meta("target_id", target_id)
+	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
 	# Set rotation to match velocity
 	if velocity.length() > 0:
 		rotation = velocity.angle() + 3*PI/2
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_entity_spawned", self, "pdc_bullet")
 
 func _physics_process(delta):
+	# Validate we're still alive
+	if marked_for_death or not is_alive:
+		return
+	
+	# Check lifetime
+	var current_time = Time.get_ticks_msec() / 1000.0
+	if current_time - birth_time > max_lifetime:
+		mark_for_destruction("max_lifetime")
+		return
+	
 	# Move bullet
 	global_position += velocity * delta
 	
-	# Update EntityManager
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager and entity_id:
-		entity_manager.update_entity_position(entity_id, global_position)
+	# Check if out of bounds
+	var half_size = WorldSettings.map_size_pixels / 2
+	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
+		mark_for_destruction("out_of_bounds")
+		return
+	
+	# Notify observers of position update (less frequently for performance)
+	if Engine.get_physics_frames() % 10 == 0:  # Every 10 frames
+		get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
+
+func mark_for_destruction(reason: String):
+	if marked_for_death:
+		return  # Already dying
+	
+	marked_for_death = true
+	is_alive = false
+	death_reason = reason
+	
+	# Disable immediately
+	set_physics_process(false)
+	if has_node("CollisionShape2D"):
+		$CollisionShape2D.disabled = true
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
+	
+	# Safe cleanup
+	queue_free()
 
 func _on_area_entered(area: Area2D):
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if not entity_manager or not entity_id:
+	if marked_for_death:
 		return
 	
-	var other_entity_id = ""
-	
-	# Get entity_id from the other object - try multiple methods
-	if area.has_meta("entity_id"):
-		other_entity_id = area.get_meta("entity_id")
-	elif "entity_id" in area and area.entity_id != "":
-		other_entity_id = area.entity_id
-	else:
-		# Can't identify the other entity, skip collision
+	# Check if it's a valid collision target
+	if not area.is_in_group("combat_entities"):
 		return
 	
-	# Validate that we have both IDs
-	if other_entity_id == "" or entity_id == "":
+	# Don't collide with same faction
+	if area.get("faction") == faction:
 		return
 	
-	# Report collision - EntityManager will handle destruction
-	entity_manager.report_collision(entity_id, other_entity_id, global_position)
+	# Special handling for torpedoes
+	if area.is_in_group("torpedoes"):
+		# Store hit information on both entities
+		area.set_meta("last_hit_by", source_pdc_id)
+		var torpedo_id = ""
+		if "torpedo_id" in area:
+			torpedo_id = area.torpedo_id
+		set_meta("hit_target", torpedo_id if torpedo_id != "" else "unknown")
+		
+		# Mark torpedo for destruction
+		if area.has_method("mark_for_destruction"):
+			area.mark_for_destruction("bullet_impact")
+		
+		# Self destruct
+		mark_for_destruction("target_impact")
+		
+		# Notify observers of successful intercept
+		get_tree().call_group("battle_observers", "on_intercept", self, area, source_pdc_id)
 
 func set_velocity(new_velocity: Vector2):
 	velocity = new_velocity
@@ -62,21 +136,31 @@ func set_faction(new_faction: String):
 func set_source_pdc(pdc_id: String):
 	source_pdc_id = pdc_id
 
-# ENHANCED: Initialize bullet with proper source tracking
-func initialize_bullet(bullet_faction: String, pdc_id: String):
+func set_source_ship(ship_id: String):
+	source_ship_id = ship_id
+
+func set_target(target_entity_id: String):
+	target_id = target_entity_id
+
+# Initialize bullet with all tracking information
+func initialize_bullet(bullet_faction: String, pdc_id: String, ship_id: String, target: String):
 	faction = bullet_faction
 	source_pdc_id = pdc_id
+	source_ship_id = ship_id
+	target_id = target
 	
-	# Register with EntityManager, ensuring source PDC is properly tracked
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		entity_id = entity_manager.register_entity(self, "pdc_bullet", faction, pdc_id)
-		# FIXED: Also store on the node for collision detection
-		set_meta("entity_id", entity_id)
-		set_meta("source_pdc_id", pdc_id)
+	# Update metadata
+	set_meta("source_pdc_id", source_pdc_id)
+	set_meta("source_ship_id", source_ship_id)
+	set_meta("target_id", target_id)
 
-func _exit_tree():
-	# Unregister from EntityManager when destroyed
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager and entity_id:
-		entity_manager.unregister_entity(entity_id)
+# For debugging and tracking
+func get_identity() -> Dictionary:
+	return {
+		"bullet_id": bullet_id,
+		"source_pdc": source_pdc_id,
+		"source_ship": source_ship_id,
+		"target": target_id,
+		"faction": faction,
+		"age": (Time.get_ticks_msec() / 1000.0) - birth_time
+	}

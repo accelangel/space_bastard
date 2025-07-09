@@ -1,27 +1,37 @@
-# Scripts/Entities/Weapons/Torpedo.gd - FIXED SIGNAL CONNECTION
+# Scripts/Entities/Weapons/Torpedo.gd - IMMEDIATE STATE REFACTOR
 extends Area2D
 class_name Torpedo
 
+# Identity baked into the node
+@export var torpedo_id: String = ""
+@export var birth_time: float = 0.0
+@export var faction: String = "hostile"
+@export var source_ship_id: String = ""
+
+# State management
+var is_alive: bool = true
+var marked_for_death: bool = false
+var death_reason: String = ""
+
 # Core properties
-var entity_id: String
-var faction: String = "friendly"
-var target_node: Node2D
+var target_node: Node2D  # Direct reference, validated each frame
+var launcher_ship: Node2D
 
 # Torpedo specifications
 @export var max_acceleration: float = 1430.0    # 150 Gs in m/s²
 
-# ENHANCED LAUNCH SYSTEM
+# Launch system
 @export var lateral_launch_velocity: float = 60.0   # Lateral impulse (m/s)
 @export var lateral_launch_distance: float = 80.0   # Distance to travel laterally (meters)
 @export var engine_ignition_delay: float = 1.6     # Seconds before engines ignite
 
-# SMOOTH TRANSITION SYSTEM
-@export var transition_duration: float = 1.6        # Time to smoothly transition guidance
-@export var rotation_transition_duration: float = 3.2 # Time to smoothly rotate to velocity direction
-@export var guidance_ramp_duration: float = 0.8      # Time to ramp up guidance strength
+# Smooth transition system
+@export var transition_duration: float = 1.6
+@export var rotation_transition_duration: float = 3.2
+@export var guidance_ramp_duration: float = 0.8
 
 # Launch state tracking
-var launch_side: int = 1  # 1 for right, -1 for left
+var launch_side: int = 1
 var engines_ignited: bool = false
 var launch_start_time: float = 0.0
 var lateral_distance_traveled: float = 0.0
@@ -38,18 +48,17 @@ var target_rotation: float = 0.0
 var initial_rotation: float = 0.0
 
 # Intercept guidance parameters
-@export var navigation_constant: float = 3.0     # Proportional navigation gain
-@export var direct_weight: float = 0.05          # Direct intercept influence
-@export var speed_threshold: float = 200.0       # m/s - speed threshold for guidance
+@export var navigation_constant: float = 3.0
+@export var direct_weight: float = 0.05
+@export var speed_threshold: float = 200.0
 
 # Direct intercept PID parameters
-@export var kp: float = 800.0        # Proportional gain
-@export var ki: float = 50.0         # Integral gain
-@export var kd: float = 150.0        # Derivative gain
+@export var kp: float = 800.0
+@export var ki: float = 50.0
+@export var kd: float = 150.0
 
 # Physics state
 var velocity_mps: Vector2 = Vector2.ZERO
-var launcher_ship: Node2D
 
 # Guidance state
 var previous_los: Vector2 = Vector2.ZERO
@@ -59,47 +68,56 @@ var integral_error: Vector2 = Vector2.ZERO
 var integral_decay: float = 0.95
 
 func _ready():
-	launch_start_time = Time.get_ticks_msec() / 1000.0
+	# Generate unique ID if not provided
+	if torpedo_id == "":
+		torpedo_id = "torpedo_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# Add to torpedoes group for identification
+	birth_time = Time.get_ticks_msec() / 1000.0
+	launch_start_time = birth_time
+	
+	# Add to groups for identification
 	add_to_group("torpedoes")
+	add_to_group("combat_entities")
 	
-	if not target_node:
-		print("Torpedo: No target provided, self-destructing")
-		queue_free()
+	# Store all identity data as metadata for redundancy
+	set_meta("torpedo_id", torpedo_id)
+	set_meta("faction", faction)
+	set_meta("entity_type", "torpedo")
+	set_meta("source_ship_id", source_ship_id)
+	
+	# Validate target
+	if not is_valid_target(target_node):
+		print("Torpedo %s: No valid target, self-destructing" % torpedo_id)
+		mark_for_destruction("no_target")
 		return
 	
-	# REMOVED: Signal connection that was failing and causing the issue
-	# The FireControlManager will handle target cleanup through sensor updates instead
-	
-	# Register with EntityManager
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager:
-		if launcher_ship and "faction" in launcher_ship:
-			faction = launcher_ship.faction
-		entity_id = entity_manager.register_entity(self, "torpedo", faction)
-	
-	# LATERAL LAUNCH SETUP
+	# Launch setup
 	var ship_forward = Vector2.UP
 	if launcher_ship:
 		ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
+		if "entity_id" in launcher_ship:
+			source_ship_id = launcher_ship.entity_id
 	
 	initial_facing_direction = ship_forward
 	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
 	
-	# Launch velocity is LATERAL (sideways) to the ship
 	velocity_mps = side_direction * lateral_launch_velocity
-	
-	# Torpedo FACES the same direction as the ship
 	rotation = ship_forward.angle()
 	initial_rotation = rotation
 	
-	# Connect collision - Route through EntityManager
+	# Connect collision
 	area_entered.connect(_on_area_entered)
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_entity_spawned", self, "torpedo")
 
 func _physics_process(delta):
-	# Target validation - if target was destroyed, continue ballistically
-	if target_node and not is_instance_valid(target_node):
+	# Validate we're still alive
+	if marked_for_death or not is_alive:
+		return
+	
+	# Validate target every frame
+	if not is_valid_target(target_node):
 		target_node = null
 	
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -116,34 +134,61 @@ func _physics_process(delta):
 		engine_ignition_time = current_time
 	
 	# Apply appropriate movement logic based on engine state
-	if engines_ignited:
+	if engines_ignited and target_node:
 		# Update transition progress
 		var time_since_ignition = current_time - engine_ignition_time
 		transition_progress = clamp(time_since_ignition / transition_duration, 0.0, 1.0)
 		rotation_progress = clamp(time_since_ignition / rotation_transition_duration, 0.0, 1.0)
 		guidance_strength = clamp(time_since_ignition / guidance_ramp_duration, 0.0, 1.0)
 		
-		# GUIDANCE: Only calculate if we have a valid target
-		var commanded_acceleration = Vector2.ZERO
-		if target_node:
-			commanded_acceleration = calculate_smooth_guidance(delta)
-		
+		# Calculate guidance
+		var commanded_acceleration = calculate_smooth_guidance(delta)
 		velocity_mps += commanded_acceleration * delta
 		
-		# SMOOTH ROTATION: Gradually rotate from initial direction to velocity direction
+		# Smooth rotation
 		update_smooth_rotation(delta)
 	else:
-		# LATERAL LAUNCH PHASE: Continue lateral movement
+		# Lateral launch phase
 		rotation = initial_facing_direction.angle()
 	
 	# Convert to pixel movement and update position
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
 	global_position += velocity_pixels_per_second * delta
 	
-	# Update EntityManager
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if entity_manager and entity_id:
-		entity_manager.update_entity_position(entity_id, global_position)
+	# Notify observers of position update
+	get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
+
+func is_valid_target(target: Node2D) -> bool:
+	if not target:
+		return false
+	if not is_instance_valid(target):
+		return false
+	if not target.is_inside_tree():
+		return false
+	if target.has_method("is_alive") and not target.is_alive:
+		return false
+	if target.get("marked_for_death") and target.marked_for_death:
+		return false
+	return true
+
+func mark_for_destruction(reason: String):
+	if marked_for_death:
+		return  # Already dying
+	
+	marked_for_death = true
+	is_alive = false
+	death_reason = reason
+	
+	# Disable immediately
+	set_physics_process(false)
+	if has_node("CollisionShape2D"):
+		$CollisionShape2D.disabled = true
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
+	
+	# Safe cleanup
+	queue_free()
 
 func should_ignite_engines(time_since_launch: float) -> bool:
 	var distance_criteria_met = lateral_distance_traveled >= lateral_launch_distance
@@ -165,7 +210,6 @@ func update_smooth_rotation(delta: float):
 	var rotation_speed = 3.0 * (1.0 + rotation_progress)
 	rotation = rotate_toward(rotation, current_target, rotation_speed * delta)
 
-# ALL GUIDANCE FUNCTIONS PRESERVED WITH TARGET VALIDATION
 func calculate_smooth_guidance(delta: float) -> Vector2:
 	if not engines_ignited or not target_node:
 		return Vector2.ZERO
@@ -207,7 +251,7 @@ func calculate_smooth_guidance(delta: float) -> Vector2:
 func calculate_proportional_navigation(delta: float) -> Vector2:
 	if not target_node:
 		return Vector2.ZERO
-		
+	
 	var target_pos = target_node.global_position
 	var target_vel = _get_target_velocity()
 	
@@ -240,7 +284,7 @@ func calculate_proportional_navigation(delta: float) -> Vector2:
 func calculate_direct_intercept(delta: float) -> Vector2:
 	if not target_node:
 		return Vector2.ZERO
-		
+	
 	var target_pos = target_node.global_position
 	var target_vel = _get_target_velocity()
 	
@@ -312,24 +356,22 @@ func _get_target_velocity() -> Vector2:
 	return Vector2.ZERO
 
 func _on_area_entered(area: Area2D):
-	# FIXED: Route collision through EntityManager
-	var entity_manager = get_node_or_null("/root/EntityManager")
-	if not entity_manager or not entity_id:
+	if marked_for_death:
 		return
 	
-	var other_entity_id = ""
-	
-	# Get entity_id from the other object
-	if area.has_meta("entity_id"):
-		other_entity_id = area.get_meta("entity_id")
-	elif "entity_id" in area and area.entity_id != "":
-		other_entity_id = area.entity_id
-	else:
-		# NO WARNING - too spammy
-		return
-	
-	# Report collision - EntityManager will handle destruction
-	entity_manager.report_collision(entity_id, other_entity_id, global_position)
+	# Check if it's a valid collision target
+	if area.is_in_group("combat_entities"):
+		# Don't collide with same faction
+		if area.get("faction") == faction:
+			return
+		
+		# Store hit information on the target
+		if area.has_method("mark_for_destruction"):
+			area.set_meta("last_hit_by", torpedo_id)
+			area.mark_for_destruction("torpedo_impact")
+		
+		# Self destruct
+		mark_for_destruction("target_impact")
 
 # Methods called by launcher
 func set_target(target: Node2D):
@@ -337,9 +379,18 @@ func set_target(target: Node2D):
 
 func set_launcher(ship: Node2D):
 	launcher_ship = ship
+	if ship and "faction" in ship:
+		faction = ship.faction
 
 func set_launch_side(side: int):
 	launch_side = side
 
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
+
+# For PDC targeting
+func get_current_position() -> Vector2:
+	return global_position
+
+func get_predicted_position(time_ahead: float) -> Vector2:
+	return global_position + (velocity_mps / WorldSettings.meters_per_pixel) * time_ahead

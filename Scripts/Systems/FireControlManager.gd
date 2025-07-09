@@ -1,53 +1,29 @@
-# Scripts/Systems/FireControlManager.gd - FIXED WITH FORCE STOP
+# Scripts/Systems/FireControlManager.gd - IMMEDIATE QUERIES REFACTOR
 extends Node2D
 class_name FireControlManager
+
+# PDC Registry (these are stable)
+var registered_pdcs: Dictionary = {}  # pdc_id -> PDC node
 
 # System configuration
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 5.0
-@export var max_simultaneous_engagements: int = 10
 
 # Target assessment thresholds
 @export var critical_time_threshold: float = 2.0
 @export var short_time_threshold: float = 5.0
 @export var medium_time_threshold: float = 15.0
 
-# Multi-PDC coordination
-@export var difficult_intercept_threshold: float = 0.3
-@export var multi_pdc_assignment_bonus: float = 1.5
-
-# PDC Registry
-var registered_pdcs: Dictionary = {}
-var pdc_assignments: Dictionary = {}
-var target_assignments: Dictionary = {}
-
-# Target tracking - SIMPLIFIED WITHOUT SIGNALS
-var tracked_targets: Dictionary = {}
-var target_priorities: Array = []
-
 # System state
 var parent_ship: Node2D
 var sensor_system: SensorSystem
 var ship_faction: String = "friendly"
-var ship_forward_direction: Vector2 = Vector2.UP
 
 # Performance optimization
 var update_interval: float = 0.05
 var update_timer: float = 0.0
 
-# Simple target data structure - focused only on fire control
-class TargetData:
-	var target_id: String
-	var node_ref: Node2D
-	var last_position: Vector2
-	var last_velocity: Vector2
-	var time_to_impact: float
-	var intercept_point: Vector2
-	var feasibility_score: float
-	var priority_score: float
-	var assigned_pdcs: Array = []
-	var is_critical: bool = false
-	var distance_meters: float = 0.0
+# No tracked_targets! No stored references!
 
 func _ready():
 	parent_ship = get_parent()
@@ -58,469 +34,233 @@ func _ready():
 			ship_faction = parent_ship.faction
 		discover_pdcs()
 	
+	# Add to groups
+	add_to_group("fire_control_systems")
+	
 	print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
 
 func discover_pdcs():
 	for child in parent_ship.get_children():
-		if child.has_method("get_capabilities"):
+		if child.has_method("get_capabilities") and child.has_method("set_target"):
 			register_pdc(child)
 
 func register_pdc(pdc_node: Node2D):
 	var pdc_id = pdc_node.pdc_id
 	registered_pdcs[pdc_id] = pdc_node
-	pdc_assignments[pdc_id] = ""
 	pdc_node.set_fire_control_manager(self)
+	print("Registered PDC: %s" % pdc_id)
 
 func _physics_process(delta):
 	if not sensor_system:
 		return
-	
-	ship_forward_direction = Vector2.UP.rotated(parent_ship.rotation)
 	
 	update_timer += delta
 	if update_timer < update_interval:
 		return
 	update_timer = 0.0
 	
-	# Main fire control loop
-	update_target_tracking()
-	assess_all_threats()
-	optimize_pdc_assignments()
-	execute_fire_missions()
+	# Get current torpedo snapshot
+	var torpedoes = get_valid_torpedoes()
+	
+	# Assign PDCs based on current state
+	assign_pdcs_immediate(torpedoes)
 
-func update_target_tracking():
-	var current_torpedoes = sensor_system.get_all_enemy_torpedoes()
+func get_valid_torpedoes() -> Array:
+	var valid_torpedoes = []
 	
-	# ONLY print when targets change significantly
-	var old_count = tracked_targets.size()
+	# Query scene tree for current torpedoes
+	var all_torpedoes = get_tree().get_nodes_in_group("torpedoes")
 	
-	# Clear old contacts
-	var valid_target_ids = []
+	for torpedo in all_torpedoes:
+		if is_valid_combat_entity(torpedo):
+			# Calculate current threat data
+			var threat_data = assess_threat_immediate(torpedo)
+			if threat_data.is_engageable:
+				valid_torpedoes.append({
+					"node": torpedo,
+					"threat_data": threat_data
+				})
 	
-	# Update existing targets and collect valid IDs
-	for torpedo in current_torpedoes:
-		if is_instance_valid(torpedo):
-			var torpedo_id = get_torpedo_id(torpedo)
-			valid_target_ids.append(torpedo_id)
-			
-			if tracked_targets.has(torpedo_id):
-				# Update existing target
-				update_target_data(tracked_targets[torpedo_id])
-			else:
-				# Add new target
-				add_new_target(torpedo)
+	# Sort by priority
+	valid_torpedoes.sort_custom(func(a, b): 
+		return a.threat_data.priority > b.threat_data.priority
+	)
 	
-	# Remove targets that no longer exist in sensor data
-	var targets_to_remove = []
-	for target_id in tracked_targets:
-		if not target_id in valid_target_ids:
-			targets_to_remove.append(target_id)
-	
-	# Clean up removed targets
-	for target_id in targets_to_remove:
-		remove_target(target_id)
-	
-	# ONLY print when target count changes
-	var new_count = tracked_targets.size()
-	if new_count != old_count:
-		print("FireControl: Now tracking %d targets (was %d)" % [new_count, old_count])
+	return valid_torpedoes
 
+func is_valid_combat_entity(entity: Node2D) -> bool:
+	if not entity:
+		return false
+	if not is_instance_valid(entity):
+		return false
+	if not entity.is_inside_tree():
+		return false
+	if entity.get("marked_for_death"):
+		return false
+	if entity.get("faction") == ship_faction:
+		return false
+	return true
 
-func add_new_target(torpedo: Node2D):
-	if not is_instance_valid(torpedo):
-		return
-		
-	var target_data = TargetData.new()
-	target_data.target_id = get_torpedo_id(torpedo)
-	target_data.node_ref = torpedo
-	
-	update_target_data(target_data)
-	tracked_targets[target_data.target_id] = target_data
-
-func update_target_data(target_data: TargetData):
-	if not is_instance_valid(target_data.node_ref):
-		return
-		
-	var torpedo = target_data.node_ref
-	target_data.last_position = torpedo.global_position
-	target_data.last_velocity = get_torpedo_velocity(torpedo)
-	
+func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	var ship_pos = parent_ship.global_position
-	var relative_pos = target_data.last_position - ship_pos
-	var relative_vel = target_data.last_velocity - get_ship_velocity()
-	target_data.distance_meters = relative_pos.length() * WorldSettings.meters_per_pixel
-	
-	var closing_speed = -relative_vel.dot(relative_pos.normalized())
-	if closing_speed > 0:
-		target_data.time_to_impact = target_data.distance_meters / closing_speed
-	else:
-		target_data.time_to_impact = 999.0
-	
-	target_data.intercept_point = calculate_intercept_point(torpedo)
-	
-	if target_data.distance_meters <= engagement_range_meters:
-		target_data.feasibility_score = calculate_intercept_feasibility(target_data)
-	else:
-		target_data.feasibility_score = 0.0
-	
-	target_data.is_critical = target_data.time_to_impact < critical_time_threshold and target_data.distance_meters <= engagement_range_meters
-
-func calculate_intercept_point(torpedo: Node2D) -> Vector2:
-	if not is_instance_valid(torpedo):
-		return Vector2.ZERO
-		
 	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = get_torpedo_velocity(torpedo) / WorldSettings.meters_per_pixel
+	var torpedo_vel = torpedo.get("velocity_mps")
 	
-	var avg_pdc_pos = get_average_pdc_position()
-	var distance = avg_pdc_pos.distance_to(torpedo_pos)
-	var bullet_time = distance * WorldSettings.meters_per_pixel / 800.0
+	# Calculate everything fresh
+	var distance = ship_pos.distance_to(torpedo_pos)
+	var distance_meters = distance * WorldSettings.meters_per_pixel
 	
-	return torpedo_pos + torpedo_vel * bullet_time
+	# Get relative velocity
+	var to_ship = (ship_pos - torpedo_pos).normalized()
+	var closing_velocity = torpedo_vel.dot(to_ship) if torpedo_vel else 0.0
+	
+	var time_to_impact = INF
+	if closing_velocity > 0:
+		time_to_impact = distance_meters / closing_velocity
+	
+	# Check if within engagement envelope
+	var is_engageable = (
+		distance_meters <= engagement_range_meters and
+		time_to_impact < 30.0 and
+		closing_velocity > 0
+	)
+	
+	# Calculate priority
+	var priority = 0.0
+	if is_engageable:
+		if time_to_impact < critical_time_threshold:
+			priority = 100.0
+		elif time_to_impact < short_time_threshold:
+			priority = 50.0
+		elif time_to_impact < medium_time_threshold:
+			priority = 25.0
+		else:
+			priority = 10.0
+		
+		# Factor in distance
+		priority *= (1.0 - (distance_meters / engagement_range_meters))
+	
+	return {
+		"is_engageable": is_engageable,
+		"time_to_impact": time_to_impact,
+		"distance": distance,
+		"distance_meters": distance_meters,
+		"closing_velocity": closing_velocity,
+		"priority": priority
+	}
 
-func calculate_intercept_feasibility(target_data: TargetData) -> float:
-	if target_data.distance_meters > engagement_range_meters:
-		return 0.0
+func assign_pdcs_immediate(torpedo_list: Array):
+	# Clear all PDC targets first
+	for pdc in registered_pdcs.values():
+		if not pdc.is_valid_target(pdc.current_target):
+			pdc.set_target(null)
 	
-	if not is_instance_valid(target_data.node_ref):
-		return 0.0
+	# Track which PDCs are assigned this frame
+	var assigned_pdcs = {}
 	
-	var ship_to_target = target_data.last_position - parent_ship.global_position
-	var closing_velocity = -target_data.last_velocity.dot(ship_to_target.normalized())
+	# Assign based on current snapshot
+	for torpedo_data in torpedo_list:
+		var torpedo = torpedo_data.node
+		var threat = torpedo_data.threat_data
+		
+		# Skip if all PDCs are busy
+		if assigned_pdcs.size() >= registered_pdcs.size():
+			break
+		
+		# Find best available PDC
+		var best_pdc = find_best_pdc_for_target(torpedo, assigned_pdcs)
+		
+		if best_pdc:
+			best_pdc.set_target(torpedo)
+			assigned_pdcs[best_pdc.pdc_id] = torpedo
+			
+			# Assign second PDC for critical targets
+			if threat.time_to_impact < critical_time_threshold:
+				var second_pdc = find_best_pdc_for_target(torpedo, assigned_pdcs)
+				if second_pdc:
+					second_pdc.set_target(torpedo)
+					assigned_pdcs[second_pdc.pdc_id] = torpedo
+
+func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> Node2D:
+	var best_pdc = null
+	var best_score = -INF
 	
-	if closing_velocity <= 0:
-		return 0.0
-	
-	if target_data.distance_meters < min_intercept_distance_meters:
-		return 0.0
-	
-	var best_feasibility = 0.0
 	for pdc_id in registered_pdcs:
+		# Skip if already assigned
+		if already_assigned.has(pdc_id):
+			continue
+		
 		var pdc = registered_pdcs[pdc_id]
-		var pdc_feasibility = calculate_pdc_target_feasibility(pdc, target_data)
-		best_feasibility = max(best_feasibility, pdc_feasibility)
+		
+		# Skip if PDC is already engaged with a valid target
+		if pdc.current_target and pdc.is_valid_target(pdc.current_target):
+			continue
+		
+		var score = calculate_pdc_efficiency(pdc, torpedo)
+		if score > best_score:
+			best_score = score
+			best_pdc = pdc
 	
-	return best_feasibility
+	return best_pdc
 
-func calculate_pdc_target_feasibility(pdc: Node2D, target_data: TargetData) -> float:
-	var pdc_pos = pdc.get_muzzle_world_position()
-	var to_intercept = target_data.intercept_point - pdc_pos
-	var world_angle = to_intercept.angle()
-	var required_angle = world_angle - parent_ship.rotation
+func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
+	# Calculate angle to intercept point
+	var torpedo_vel = torpedo.get("velocity_mps")
+	var intercept_point = calculate_intercept_point(pdc.get_muzzle_world_position(), torpedo.global_position, torpedo_vel)
 	
-	# Normalize the required angle to [-PI, PI]
-	while required_angle > PI:
-		required_angle -= TAU
-	while required_angle < -PI:
-		required_angle += TAU
+	var to_intercept = intercept_point - pdc.get_muzzle_world_position()
+	var required_world_angle = to_intercept.angle()
+	var required_ship_angle = required_world_angle - parent_ship.rotation - PI/2
 	
+	# Normalize angle
+	while required_ship_angle > PI:
+		required_ship_angle -= TAU
+	while required_ship_angle < -PI:
+		required_ship_angle += TAU
+	
+	# Calculate rotation needed
 	var current_angle = pdc.current_rotation
-	var rotation_needed = abs(angle_difference(current_angle, required_angle))
+	var rotation_needed = abs(pdc.angle_difference(current_angle, required_ship_angle))
+	
+	# Factor in rotation time
 	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
 	
-	rotation_time += 0.2  # Add small buffer
+	# Score based on how quickly PDC can engage
+	var score = 1.0 / (rotation_time + 0.1)
 	
-	if rotation_time > target_data.time_to_impact:
-		return 0.1
-	
-	var time_margin = target_data.time_to_impact - rotation_time
-	var feasibility = clamp(time_margin / 3.0, 0.1, 1.0)
-	
-	return feasibility
-
-func assess_all_threats():
-	target_priorities.clear()
-	
-	for target_id in tracked_targets:
-		var target_data = tracked_targets[target_id]
-		
-		if not is_instance_valid(target_data.node_ref):
-			continue
-		
-		if target_data.feasibility_score <= 0.0:
-			continue
-		
-		calculate_target_priority(target_data)
-		
-		var inserted = false
-		for i in range(target_priorities.size()):
-			var other_data = tracked_targets[target_priorities[i]]
-			if target_data.priority_score > other_data.priority_score:
-				target_priorities.insert(i, target_id)
-				inserted = true
-				break
-		
-		if not inserted:
-			target_priorities.append(target_id)
-
-func calculate_target_priority(target_data: TargetData):
-	var base_priority = 0.0
-	
-	if target_data.time_to_impact < critical_time_threshold:
-		base_priority = 100.0
-	elif target_data.time_to_impact < short_time_threshold:
-		base_priority = 50.0
-	elif target_data.time_to_impact < medium_time_threshold:
-		base_priority = 25.0
-	else:
-		base_priority = 10.0
-	
-	var time_factor = 1.0 / max(target_data.time_to_impact, 0.1)
-	base_priority *= time_factor
-	base_priority *= target_data.feasibility_score
-	
-	var available_pdcs = get_available_pdc_count()
-	var total_pdcs = registered_pdcs.size()
-	if available_pdcs < total_pdcs * 0.3:
-		base_priority *= 1.5
-	
-	target_data.priority_score = base_priority
-
-func optimize_pdc_assignments():
-	# FIXED: Clean up empty assignments first
-	cleanup_empty_assignments()
-	
-	# Clear all assignments first
-	for pdc_id in pdc_assignments:
-		pdc_assignments[pdc_id] = ""
-	target_assignments.clear()
-	
-	for target_id in target_priorities:
-		# FIXED: Skip empty target IDs
-		if target_id == "" or target_id.strip_edges() == "":
-			continue
-			
-		if not tracked_targets.has(target_id):
-			continue
-			
-		var target_data = tracked_targets[target_id]
-		
-		if not is_instance_valid(target_data.node_ref):
-			continue
-		
-		if target_data.feasibility_score <= 0.0:
-			continue
-		
-		var pdcs_needed = 1
-		if target_data.is_critical:
-			pdcs_needed = 2
-		elif target_data.feasibility_score < difficult_intercept_threshold:
-			pdcs_needed = 2
-		
-		var assigned_pdcs = assign_pdcs_to_target(target_data, pdcs_needed)
-		
-		if assigned_pdcs.size() > 0:
-			target_assignments[target_id] = assigned_pdcs
-			target_data.assigned_pdcs = assigned_pdcs
-
-func assign_pdcs_to_target(target_data: TargetData, pdcs_needed: int) -> Array:
-	var available_pdcs = []
-	var assigned = []
-	
-	# Find all available PDCs and score them for this target
-	for pdc_id in registered_pdcs:
-		if pdc_assignments[pdc_id] == "":
-			var pdc = registered_pdcs[pdc_id]
-			var score = score_pdc_for_target(pdc, target_data)
-			
-			if score > 0.0:
-				available_pdcs.append({"pdc_id": pdc_id, "score": score})
-	
-	# Sort by best score first
-	available_pdcs.sort_custom(func(a, b): return a.score > b.score)
-	
-	# Assign the best PDCs up to the needed count
-	for i in range(min(pdcs_needed, available_pdcs.size())):
-		var pdc_id = available_pdcs[i].pdc_id
-		pdc_assignments[pdc_id] = target_data.target_id
-		assigned.append(pdc_id)
-	
-	return assigned
-
-func score_pdc_for_target(pdc: Node2D, target_data: TargetData) -> float:
-	var pdc_pos = pdc.get_muzzle_world_position()
-	var to_intercept = target_data.intercept_point - pdc_pos
-	var required_angle = to_intercept.angle()
-	
-	var current_angle = pdc.current_rotation
-	var rotation_needed = abs(angle_difference(current_angle, required_angle))
-	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
-	
-	if rotation_time > target_data.time_to_impact * 0.7:
-		return 0.0
-	
-	var rotation_score = 1.0 - (rotation_time / target_data.time_to_impact)
-	
+	# Bonus for PDCs already roughly aimed
 	if rotation_needed < deg_to_rad(30):
-		rotation_score *= 1.5
+		score *= 2.0
 	
-	return rotation_score * target_data.feasibility_score
+	# Penalty for extreme angles
+	if rotation_needed > deg_to_rad(120):
+		score *= 0.5
+	
+	return score
 
-func execute_fire_missions():
-	var active_missions = 0
-	
-	for target_id in target_assignments:
-		# FIXED: Skip empty or invalid target IDs
-		if target_id == "" or target_id.strip_edges() == "":
-			print("FireControl: Skipping empty target ID")
-			continue
-			
-		if not tracked_targets.has(target_id):
-			continue
-			
-		var target_data = tracked_targets[target_id]
-		
-		if not is_instance_valid(target_data.node_ref):
-			continue
-			
-		var assigned_pdcs = target_assignments[target_id]
-		
-		if target_data.distance_meters > engagement_range_meters:
-			continue
-		
-		active_missions += 1
-		
-		for pdc_id in assigned_pdcs:
-			var pdc = registered_pdcs[pdc_id]
-			
-			var firing_angle = calculate_firing_solution(pdc, target_data)
-			
-			var is_emergency = target_data.is_critical
-			pdc.set_target(target_id, firing_angle, is_emergency)
-			
-			if pdc.is_aimed():
-				pdc.authorize_firing()
-	
-	# Print status only when there are missions or when missions end
-	if active_missions == 0 and target_assignments.size() > 0:
-		print("FireControl: No valid missions from %d assignments" % target_assignments.size())
-
-func calculate_firing_solution(pdc: Node2D, target_data: TargetData) -> float:
-	if not is_instance_valid(target_data.node_ref):
-		return 0.0
-		
-	var pdc_pos = pdc.get_muzzle_world_position()
-	var target_pos = target_data.last_position
-	var target_vel = target_data.last_velocity
-	
-	var to_target = target_pos - pdc_pos
+func calculate_intercept_point(shooter_pos: Vector2, target_pos: Vector2, target_vel: Vector2) -> Vector2:
+	# Simple linear intercept calculation
+	var to_target = target_pos - shooter_pos
 	var distance = to_target.length()
 	var distance_meters = distance * WorldSettings.meters_per_pixel
 	
-	var bullet_time = distance_meters / 800.0
+	# Bullet flight time
+	var bullet_time = distance_meters / 1100.0  # PDC bullet velocity
 	
+	# Predict position
 	var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
-	var predicted_pos = target_pos + target_vel_pixels * bullet_time
-	
-	var to_intercept = predicted_pos - pdc_pos
-	var world_angle = to_intercept.angle()
-	
-	var ship_angle = parent_ship.rotation
-	var relative_angle = world_angle - ship_angle
-	
-	while relative_angle > PI:
-		relative_angle -= TAU
-	while relative_angle < -PI:
-		relative_angle += TAU
-	
-	return relative_angle
+	return target_pos + target_vel_pixels * bullet_time
 
-func remove_target(target_id: String):
-	"""Clean removal of target from tracking"""
-	if not tracked_targets.has(target_id):
-		return
-	
-	var target_data = tracked_targets[target_id]
-	
-	# ONLY print when actually removing a target
-	if target_data.assigned_pdcs.size() > 0:
-		print("Target lost: %s, stopping %d PDCs" % [target_id, target_data.assigned_pdcs.size()])
-	
-	# FORCE STOP all PDCs assigned to this target
-	for pdc_id in target_data.assigned_pdcs:
-		if registered_pdcs.has(pdc_id):
-			var pdc = registered_pdcs[pdc_id]
-			pdc.emergency_stop()  # Force immediate stop
-			pdc_assignments[pdc_id] = ""
-	
-	# Clean up tracking
-	tracked_targets.erase(target_id)
-	if target_assignments.has(target_id):
-		target_assignments.erase(target_id)
-	
-	var index = target_priorities.find(target_id)
-	if index >= 0:
-		target_priorities.remove_at(index)
-
-# Utility functions
-func get_available_pdc_count() -> int:
-	var count = 0
-	for pdc_id in pdc_assignments:
-		if pdc_assignments[pdc_id] == "":
-			count += 1
-	return count
-
-func get_average_pdc_position() -> Vector2:
-	var sum = Vector2.ZERO
-	var count = 0
-	
-	for pdc_id in registered_pdcs:
-		var pdc = registered_pdcs[pdc_id]
-		sum += pdc.global_position
-		count += 1
-	
-	return sum / count if count > 0 else parent_ship.global_position
-
-func get_torpedo_id(torpedo: Node2D) -> String:
-	if not is_instance_valid(torpedo):
-		return ""
-	
-	# FIXED: Create more reliable torpedo ID
-	var torpedo_id = "torpedo_" + str(torpedo.get_instance_id())
-	
-	# Validate the ID is not empty
-	if torpedo_id == "torpedo_" or torpedo_id.strip_edges() == "":
-		print("Warning: Generated empty torpedo ID for node: %s" % torpedo.name)
-		return ""
-	
-	return torpedo_id
-
-func get_torpedo_velocity(torpedo: Node2D) -> Vector2:
-	if not is_instance_valid(torpedo):
-		return Vector2.ZERO
-		
-	if torpedo.has_method("get_velocity_mps"):
-		return torpedo.get_velocity_mps()
-	elif "velocity_mps" in torpedo:
-		return torpedo.velocity_mps
-	return Vector2.ZERO
-
-func get_ship_velocity() -> Vector2:
-	if parent_ship and parent_ship.has_method("get_velocity_mps"):
-		return parent_ship.get_velocity_mps()
-	return Vector2.ZERO
-
-func angle_difference(from: float, to: float) -> float:
-	var diff = fmod(to - from, TAU)
-	if diff > PI:
-		diff -= TAU
-	elif diff < -PI:
-		diff += TAU
-	return diff
+func emergency_stop_all():
+	"""Emergency stop all PDCs"""
+	print("FireControl: EMERGENCY STOP ALL")
+	for pdc in registered_pdcs.values():
+		pdc.emergency_stop()
 
 func get_debug_info() -> String:
-	return "Fire Control: %d targets tracked" % tracked_targets.size()
-
-func cleanup_empty_assignments():
-	"""Remove any empty or invalid target assignments"""
-	var assignments_to_remove = []
+	var active_pdcs = 0
+	for pdc in registered_pdcs.values():
+		if pdc.current_target:
+			active_pdcs += 1
 	
-	for target_id in target_assignments:
-		if target_id == "" or target_id.strip_edges() == "" or not tracked_targets.has(target_id):
-			assignments_to_remove.append(target_id)
-	
-	for target_id in assignments_to_remove:
-		target_assignments.erase(target_id)
-		var index = target_priorities.find(target_id)
-		if index >= 0:
-			target_priorities.remove_at(index)
+	return "PDCs: %d/%d active" % [active_pdcs, registered_pdcs.size()]

@@ -1,29 +1,29 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - SIMPLIFIED NAMING
+# Scripts/Entities/Weapons/PDCSystem.gd - IMMEDIATE TARGETING REFACTOR
 extends Node2D
+class_name PDCSystem
+
+# Identity
+@export var pdc_id: String = ""
+var mount_position: Vector2
 
 # PDC Hardware Configuration
 @export var turret_rotation_speed: float = 360.0  # degrees/second
 @export var max_rotation_speed_multiplier: float = 2.0
 @export var bullet_velocity_mps: float = 1100.0
 @export var rounds_per_second: float = 18.0
-@export var max_tracking_error: float = 5.0  # degrees - how accurate we need to be to fire
+@export var max_tracking_error: float = 5.0  # degrees
 
-# Firing state
+# Immediate state - no stored IDs
+var current_target: Node2D = null
 var is_firing: bool = false
 var fire_timer: float = 0.0
 var current_rotation: float = 0.0
 var target_rotation: float = 0.0
 var emergency_slew: bool = false
 
-# PDC Identity - SIMPLIFIED
-var pdc_id: String = ""
-var mount_position: Vector2
-var current_status: String = "IDLE"
-
-# Target tracking
-var current_target_id: String = ""
-var target_distance_meters: float = 0.0
-var fire_authorized: bool = false
+# State management
+var is_alive: bool = true
+var marked_for_death: bool = false
 
 # References
 var parent_ship: Node2D
@@ -35,30 +35,31 @@ var muzzle_point: Marker2D
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
-# DEBUG CONTROL - Reduced to minimum
-@export var debug_enabled: bool = false
-
-# FIXED ORIENTATION CONSTANTS
+# Constants
 const SPRITE_POINTS_UP: bool = true
 const IDLE_FACES_SHIP_FORWARD: bool = true
 const COORDINATE_CORRECTION: float = PI
 
 func _ready():
+	# Generate ID if not provided
+	if pdc_id == "":
+		pdc_id = "pdc_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	
 	parent_ship = get_parent()
 	setup_sprite_references()
 	mount_position = position
 	
-	# FIXED: Use the actual node name from the scene
-	pdc_id = name  # Just use "PDC1", "PDC2", etc. from the scene
+	# Add to groups
+	add_to_group("pdcs")
+	add_to_group("combat_entities")
 	
-	# Ensure it's not empty
-	if pdc_id == "" or pdc_id == "PDC":
-		pdc_id = "PDC_%d_%d" % [int(position.x), int(position.y)]
+	# Store identity as metadata
+	set_meta("pdc_id", pdc_id)
+	set_meta("entity_type", "pdc")
 	
 	set_idle_rotation()
 	
-	if debug_enabled:
-		print("PDC initialized: %s at position %s" % [pdc_id, mount_position])
+	print("PDC initialized: %s at position %s" % [pdc_id, mount_position])
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -86,7 +87,31 @@ func set_idle_rotation():
 	
 	update_sprite_rotation()
 
+# Validation helper
+func is_valid_target(target: Node2D) -> bool:
+	if not target:
+		return false
+	if not is_instance_valid(target):
+		return false
+	if not target.has_method("mark_for_destruction"):
+		return false
+	if target.get("marked_for_death"):
+		return false
+	if not target.is_inside_tree():
+		return false
+	return true
+
 func _physics_process(delta):
+	if marked_for_death or not is_alive:
+		return
+	
+	# Validate target every frame
+	if not is_valid_target(current_target):
+		current_target = null
+		stop_firing()
+		return
+	
+	# Rest of PDC logic
 	update_turret_rotation(delta)
 	handle_firing(delta)
 
@@ -129,68 +154,72 @@ func calculate_sprite_rotation() -> float:
 		return base_rotation + PI/2 + COORDINATE_CORRECTION
 
 func handle_firing(delta):
-	var should_fire = (
-		current_target_id != "" and 
-		fire_authorized and 
-		is_aimed()
-	)
-	
-	if should_fire:
-		if not is_firing:
-			start_firing()
-		
-		if is_firing:
-			fire_timer += delta
-			var fire_interval = 1.0 / rounds_per_second
-			
-			if fire_timer >= fire_interval:
-				fire_bullet()
-				fire_timer = 0.0
-	else:
-		if is_firing:
-			stop_firing()
-
-func set_target(target_id: String, target_angle: float, is_emergency: bool = false):
-	# FIXED: Don't accept empty target IDs
-	if target_id == "" or target_id.strip_edges() == "":
-		emergency_stop()
+	if not is_valid_target(current_target):
+		stop_firing()
 		return
 	
-	# ONLY print when switching targets, not every update
-	if current_target_id != target_id:
-		if current_target_id != "":
-			print("PDC %s: %s -> %s" % [pdc_id, get_short_target_name(current_target_id), get_short_target_name(target_id)])
-		else:
-			print("PDC %s: acquiring %s" % [pdc_id, get_short_target_name(target_id)])
+	var should_fire = is_aimed() and is_firing
 	
-	current_target_id = target_id
-	target_rotation = target_angle - PI/2  # Apply -90° correction
-	emergency_slew = is_emergency
-	fire_authorized = false
-	current_status = "TRACKING"
+	if should_fire:
+		fire_timer += delta
+		var fire_interval = 1.0 / rounds_per_second
+		
+		if fire_timer >= fire_interval:
+			fire_bullet()
+			fire_timer = 0.0
+	else:
+		fire_timer = 0.0
 
-func authorize_firing():
-	if current_target_id != "" and is_aimed():
-		fire_authorized = true
-		current_status = "READY"
+func set_target(new_target: Node2D):
+	# Direct node reference, no IDs
+	if is_valid_target(new_target):
+		# Only print when actually changing targets
+		if current_target != new_target:
+			var old_name = current_target.get("torpedo_id") if current_target else "none"
+			var new_name = new_target.get("torpedo_id")
+			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
+		
+		current_target = new_target
+		update_target_angle()
+		
+		# Start firing if we're aimed
+		if is_aimed():
+			start_firing()
+	else:
+		print("PDC %s: Invalid target provided" % pdc_id)
+		current_target = null
+		stop_firing()
+
+func update_target_angle():
+	if not is_valid_target(current_target):
+		return
+	
+	var to_target = current_target.global_position - get_muzzle_world_position()
+	var world_angle = to_target.angle()
+	target_rotation = world_angle - parent_ship.rotation - PI/2
+	
+	# Normalize the angle
+	while target_rotation > PI:
+		target_rotation -= TAU
+	while target_rotation < -PI:
+		target_rotation += TAU
+	
+	# Check if we need emergency slew
+	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
+	emergency_slew = angle_diff > deg_to_rad(90)
 
 func start_firing():
-	if not fire_authorized or not is_aimed():
+	if not is_valid_target(current_target):
 		return
 	
 	is_firing = true
-	current_status = "FIRING"
-	fire_timer = 0.0
+	print("PDC %s: Weapons free on %s" % [pdc_id, current_target.get("torpedo_id")])
 
 func stop_firing():
-	# ONLY print when actually stopping (not when already idle)
-	if is_firing or current_target_id != "":
-		print("PDC %s: stop firing" % pdc_id)
-	
+	if is_firing:
+		print("PDC %s: Ceasing fire" % pdc_id)
 	is_firing = false
-	fire_authorized = false
-	current_status = "IDLE"
-	current_target_id = ""
+	fire_timer = 0.0
 	set_idle_rotation()
 
 func is_aimed() -> bool:
@@ -200,9 +229,8 @@ func is_aimed() -> bool:
 func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
-# ENHANCED: Better bullet creation with simple PDC tracking
 func fire_bullet():
-	if not bullet_scene:
+	if not bullet_scene or not is_valid_target(current_target):
 		return
 	
 	var bullet = bullet_scene.instantiate()
@@ -210,29 +238,34 @@ func fire_bullet():
 	
 	bullet.global_position = get_muzzle_world_position()
 	
-	# CORRECTED FIRE DIRECTION
-	var current_rotation_for_firing = current_rotation - PI/2
-	var world_angle = current_rotation_for_firing + parent_ship.rotation
-	var fire_direction = Vector2.from_angle(world_angle)
+	# Calculate firing solution with prediction
+	var target_velocity = Vector2.ZERO
+	if current_target.has_method("get_velocity_mps"):
+		target_velocity = current_target.get_velocity_mps()
 	
+	var to_target = current_target.global_position - bullet.global_position
+	var distance = to_target.length()
+	var bullet_time = (distance * WorldSettings.meters_per_pixel) / bullet_velocity_mps
+	
+	# Predict where target will be
+	var predicted_pos = current_target.global_position + (target_velocity / WorldSettings.meters_per_pixel) * bullet_time
+	var fire_direction = (predicted_pos - bullet.global_position).normalized()
+	
+	# Set bullet velocity (include ship velocity for proper physics)
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
-	# FIXED: Simple bullet initialization with clear PDC ID
-	if bullet.has_method("initialize_bullet") and parent_ship and "faction" in parent_ship:
-		bullet.initialize_bullet(parent_ship.faction, pdc_id)
-		if debug_enabled:
-			print("Bullet fired by %s (entity_id will be assigned by EntityManager)" % pdc_id)
-	else:
-		# Fallback
-		if bullet.has_method("set_faction"):
-			bullet.set_faction(parent_ship.faction)
-		if bullet.has_method("set_source_pdc"):
-			bullet.set_source_pdc(pdc_id)
+	# Initialize bullet with full tracking info
+	if bullet.has_method("initialize_bullet"):
+		var ship_id = parent_ship.get("entity_id") if parent_ship else ""
+		var target_id = current_target.get("torpedo_id") if current_target else ""
+		bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, target_id)
 	
-	if bullet.has_method("set_velocity"):
-		bullet.set_velocity(bullet_velocity_pixels)
+	bullet.set_velocity(bullet_velocity_pixels)
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_pdc_fired", self, current_target)
 
 func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
@@ -254,26 +287,23 @@ func angle_difference(from: float, to: float) -> float:
 		diff += TAU
 	return diff
 
-# Helper functions for cleaner debug output
-func get_short_target_name(target_id: String) -> String:
-	if "_" in target_id:
-		var parts = target_id.split("_")
-		if parts.size() >= 2:
-			return parts[0] + "_" + parts[-1].substr(-4)  # Type + last 4 digits
-	return target_id.substr(-4)
+func emergency_stop():
+	print("PDC %s: EMERGENCY STOP" % pdc_id)
+	current_target = null
+	stop_firing()
+	emergency_slew = false
+	set_idle_rotation()
 
 # Status reporting
 func get_status() -> Dictionary:
 	return {
 		"pdc_id": pdc_id,
-		"status": current_status,
+		"status": "FIRING" if is_firing else "TRACKING" if current_target else "IDLE",
 		"current_rotation": current_rotation,
 		"target_rotation": target_rotation,
 		"tracking_error": get_tracking_error(),
 		"is_aimed": is_aimed(),
-		"fire_authorized": fire_authorized,
-		"is_firing": is_firing,
-		"current_target": current_target_id,
+		"has_target": current_target != null,
 		"mount_position": mount_position
 	}
 
@@ -289,12 +319,16 @@ func get_capabilities() -> Dictionary:
 func set_fire_control_manager(manager: Node):
 	fire_control_manager = manager
 
-func emergency_stop():
-	# ALWAYS print emergency stops
-	print("PDC %s: EMERGENCY STOP" % pdc_id)
-	stop_firing()
-	emergency_slew = false
-	fire_authorized = false
-	current_status = "IDLE"
-	current_target_id = ""  # Clear target immediately
-	set_idle_rotation()
+# For immediate state system
+func mark_for_destruction(reason: String):
+	if marked_for_death:
+		return
+	
+	marked_for_death = true
+	is_alive = false
+	
+	emergency_stop()
+	set_physics_process(false)
+	
+	# Notify observers
+	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
