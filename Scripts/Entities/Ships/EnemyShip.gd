@@ -1,5 +1,5 @@
 # Scripts/Ships/EnemyShip.gd - IMMEDIATE STATE REFACTOR
-extends CharacterBody2D
+extends Area2D
 class_name EnemyShip
 
 # Ship identity - self-managed
@@ -208,7 +208,7 @@ func mark_for_destruction(reason: String):
 func get_velocity_mps() -> Vector2:
 	if movement_component:
 		return movement_component.get_velocity_mps()
-	return velocity * WorldSettings.meters_per_pixel
+	return Vector2.ZERO  # Area2D doesn't have built-in velocity
 
 func get_faction() -> String:
 	return faction

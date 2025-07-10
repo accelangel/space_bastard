@@ -1,5 +1,5 @@
 # Scripts/Ships/PlayerShip.gd - IMMEDIATE STATE REFACTOR
-extends CharacterBody2D
+extends Area2D
 class_name PlayerShip
 
 # Ship identity - self-managed
@@ -246,7 +246,7 @@ func update_ui_death():
 func get_velocity_mps() -> Vector2:
 	if movement_component:
 		return movement_component.get_velocity_mps()
-	return velocity * WorldSettings.meters_per_pixel
+	return Vector2.ZERO  # Area2D doesn't have built-in velocity
 
 func get_faction() -> String:
 	return faction
