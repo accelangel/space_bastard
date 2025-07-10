@@ -1,4 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - IMMEDIATE QUERIES REFACTOR
+# Scripts/Systems/FireControlManager.gd - CLEANED VERSION
 extends Node2D
 class_name FireControlManager
 
@@ -23,7 +23,8 @@ var ship_faction: String = "friendly"
 var update_interval: float = 0.05
 var update_timer: float = 0.0
 
-# No tracked_targets! No stored references!
+# Debug control - set to false for minimal output
+@export var debug_enabled: bool = false
 
 func _ready():
 	parent_ship = get_parent()
@@ -62,6 +63,12 @@ func _physics_process(delta):
 	# Get current torpedo snapshot
 	var torpedoes = get_valid_torpedoes()
 	
+	# Print basic status only if debug enabled
+	if debug_enabled and torpedoes.size() > 0:
+		print("FireControl %s: Found %d torpedoes in scene, ship faction: %s" % [
+			parent_ship.name, torpedoes.size(), ship_faction
+		])
+	
 	# Assign PDCs based on current state
 	assign_pdcs_immediate(torpedoes)
 
@@ -80,11 +87,20 @@ func get_valid_torpedoes() -> Array:
 					"node": torpedo,
 					"threat_data": threat_data
 				})
+			elif debug_enabled and torpedo.faction != ship_faction:
+				# Only print rejection messages if debug is enabled
+				print("FireControl %s: Rejected torpedo %s (faction: %s)" % [
+					parent_ship.name, torpedo.torpedo_id, torpedo.faction
+				])
 	
 	# Sort by priority
 	valid_torpedoes.sort_custom(func(a, b): 
 		return a.threat_data.priority > b.threat_data.priority
 	)
+	
+	# Only print if we found valid torpedoes and debug is enabled
+	if debug_enabled and valid_torpedoes.size() > 0:
+		print("FireControl %s: Found %d valid torpedoes" % [parent_ship.name, valid_torpedoes.size()])
 	
 	return valid_torpedoes
 
@@ -210,7 +226,9 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 	
 	var to_intercept = intercept_point - pdc.get_muzzle_world_position()
 	var required_world_angle = to_intercept.angle()
-	var required_ship_angle = required_world_angle - parent_ship.rotation - PI/2
+	
+	# Convert to ship-relative angle (matching PDC's coordinate system)
+	var required_ship_angle = required_world_angle - parent_ship.rotation + PI/2
 	
 	# Normalize angle
 	while required_ship_angle > PI:

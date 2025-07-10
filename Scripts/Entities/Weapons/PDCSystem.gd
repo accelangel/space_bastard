@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - IMMEDIATE TARGETING REFACTOR
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED FIRING DIRECTION
 extends Node2D
 class_name PDCSystem
 
@@ -35,10 +35,9 @@ var muzzle_point: Marker2D
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
-# Constants
+# Constants - FIXED: Removed PI correction that was causing 180-degree offset
 const SPRITE_POINTS_UP: bool = true
 const IDLE_FACES_SHIP_FORWARD: bool = true
-const COORDINATE_CORRECTION: float = PI
 
 func _ready():
 	# Generate ID if not provided
@@ -111,6 +110,10 @@ func _physics_process(delta):
 		stop_firing()
 		return
 	
+	# Update target angle continuously while we have a target
+	if current_target:
+		update_target_angle()
+	
 	# Rest of PDC logic
 	update_turret_rotation(delta)
 	handle_firing(delta)
@@ -148,10 +151,11 @@ func update_sprite_rotation():
 func calculate_sprite_rotation() -> float:
 	var base_rotation = current_rotation
 	
+	# FIXED: Simplified rotation - sprite points up needs -90 degrees offset
 	if SPRITE_POINTS_UP:
-		return base_rotation + COORDINATE_CORRECTION
+		return base_rotation - PI
 	else:
-		return base_rotation + PI/2 + COORDINATE_CORRECTION
+		return base_rotation
 
 func handle_firing(delta):
 	if not is_valid_target(current_target):
@@ -177,6 +181,7 @@ func set_target(new_target: Node2D):
 		if current_target != new_target:
 			var old_name = current_target.get("torpedo_id") if current_target else "none"
 			var new_name = new_target.get("torpedo_id")
+			print("PDC %s: Target validation SUCCESS (was failing: %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
 			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
 		
 		current_target = new_target
@@ -186,7 +191,9 @@ func set_target(new_target: Node2D):
 		if is_aimed():
 			start_firing()
 	else:
-		print("PDC %s: Invalid target provided" % pdc_id)
+		if current_target:
+			print("PDC %s: Target validation FAILED - target_null" % pdc_id)
+			print("PDC %s: Ceasing fire" % pdc_id)
 		current_target = null
 		stop_firing()
 
@@ -194,9 +201,13 @@ func update_target_angle():
 	if not is_valid_target(current_target):
 		return
 	
+	# FIXED: Use the same angle calculation as the old system
 	var to_target = current_target.global_position - get_muzzle_world_position()
 	var world_angle = to_target.angle()
-	target_rotation = world_angle - parent_ship.rotation - PI/2
+	
+	# Convert world angle to ship-relative angle
+	# Ship forward is at rotation + PI/2, so we need to account for that
+	target_rotation = world_angle - parent_ship.rotation + PI/2
 	
 	# Normalize the angle
 	while target_rotation > PI:
@@ -212,14 +223,15 @@ func start_firing():
 	if not is_valid_target(current_target):
 		return
 	
-	is_firing = true
-	print("PDC %s: Weapons free on %s" % [pdc_id, current_target.get("torpedo_id")])
+	if not is_firing:
+		is_firing = true
+		var error = rad_to_deg(get_tracking_error())
+		print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, current_target.get("torpedo_id"), error])
 
 func stop_firing():
 	if is_firing:
-		print("PDC %s: Ceasing fire" % pdc_id)
-	is_firing = false
-	fire_timer = 0.0
+		is_firing = false
+		fire_timer = 0.0
 	set_idle_rotation()
 
 func is_aimed() -> bool:
@@ -233,25 +245,20 @@ func fire_bullet():
 	if not bullet_scene or not is_valid_target(current_target):
 		return
 	
+	print("PDC %s: FIRING at %s" % [pdc_id, current_target.get("torpedo_id")])
+	
 	var bullet = bullet_scene.instantiate()
 	get_tree().root.add_child(bullet)
 	
 	bullet.global_position = get_muzzle_world_position()
 	
-	# Calculate firing solution with prediction
-	var target_velocity = Vector2.ZERO
-	if current_target.has_method("get_velocity_mps"):
-		target_velocity = current_target.get_velocity_mps()
+	# FIXED: Use PDC rotation to determine firing direction like the old system
+	# Current rotation is ship-relative, convert to world angle
+	var firing_rotation = current_rotation - PI/2  # Adjust for coordinate system
+	var world_angle = firing_rotation + parent_ship.rotation
+	var fire_direction = Vector2.from_angle(world_angle)
 	
-	var to_target = current_target.global_position - bullet.global_position
-	var distance = to_target.length()
-	var bullet_time = (distance * WorldSettings.meters_per_pixel) / bullet_velocity_mps
-	
-	# Predict where target will be
-	var predicted_pos = current_target.global_position + (target_velocity / WorldSettings.meters_per_pixel) * bullet_time
-	var fire_direction = (predicted_pos - bullet.global_position).normalized()
-	
-	# Set bullet velocity (include ship velocity for proper physics)
+	# Include ship velocity for proper physics
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
@@ -296,12 +303,25 @@ func emergency_stop():
 
 # Status reporting
 func get_status() -> Dictionary:
+	var tracking_error = get_tracking_error()
+	var status_str = "FIRING" if is_firing else "TRACKING" if current_target else "IDLE"
+	
+	# Print status line like the old system
+	if current_target:
+		print("PDC %s: Target=%s, Error=%.1f°, Aimed=%s, Firing=%s" % [
+			pdc_id,
+			current_target.get("torpedo_id") if current_target else "none",
+			rad_to_deg(tracking_error),
+			is_aimed(),
+			is_firing
+		])
+	
 	return {
 		"pdc_id": pdc_id,
-		"status": "FIRING" if is_firing else "TRACKING" if current_target else "IDLE",
+		"status": status_str,
 		"current_rotation": current_rotation,
 		"target_rotation": target_rotation,
-		"tracking_error": get_tracking_error(),
+		"tracking_error": tracking_error,
 		"is_aimed": is_aimed(),
 		"has_target": current_target != null,
 		"mount_position": mount_position

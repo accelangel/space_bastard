@@ -1,4 +1,4 @@
-# Scripts/Managers/BattleEventRecorder.gd - PURE OBSERVER
+# Scripts/Systems/BattleEventRecorder.gd - FIXED EVENT TRACKING
 extends Node
 class_name BattleEventRecorder
 
@@ -10,6 +10,9 @@ var battle_active: bool = false
 
 # Entity snapshots for analysis
 var entity_snapshots: Dictionary = {}  # entity_id -> last known data
+
+# Debug flag
+@export var debug_enabled: bool = false
 
 func _ready():
 	# Listen for events
@@ -29,15 +32,10 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 	if not battle_active:
 		start_battle_recording()
 	
-	var entity_id = ""
-	if "torpedo_id" in entity:
-		entity_id = entity.torpedo_id
-	elif "bullet_id" in entity:
-		entity_id = entity.bullet_id
-	elif "pdc_id" in entity:
-		entity_id = entity.pdc_id
-	elif "entity_id" in entity:
-		entity_id = entity.entity_id
+	var entity_id = get_entity_id(entity)
+	
+	if debug_enabled:
+		print("BattleRecorder: Entity spawned - %s (%s)" % [entity_id, entity_type])
 		
 	var event = {
 		"type": "entity_spawned",
@@ -72,19 +70,11 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 	}
 
 func on_entity_dying(entity: Node2D, reason: String):
-	var entity_id = ""
-	if "torpedo_id" in entity:
-		entity_id = entity.torpedo_id
-	elif "bullet_id" in entity:
-		entity_id = entity.bullet_id
-	elif "pdc_id" in entity:
-		entity_id = entity.pdc_id
-	elif "entity_id" in entity:
-		entity_id = entity.entity_id
+	var entity_id = get_entity_id(entity)
+	var entity_type = get_entity_type(entity)
 	
-	var entity_type = "unknown"
-	if entity.has_meta("entity_type"):
-		entity_type = entity.get_meta("entity_type")
+	if debug_enabled:
+		print("BattleRecorder: Entity dying - %s (%s) reason: %s" % [entity_id, entity_type, reason])
 	
 	var event = {
 		"type": "entity_destroyed",
@@ -119,16 +109,15 @@ func on_entity_moved(entity: Node2D, new_position: Vector2):
 	if Engine.get_physics_frames() % 10 != 0:
 		return
 		
-	var entity_id = ""
-	if "torpedo_id" in entity:
-		entity_id = entity.torpedo_id
-	elif "bullet_id" in entity:
-		entity_id = entity.bullet_id
+	var entity_id = get_entity_id(entity)
 		
 	if entity_snapshots.has(entity_id):
 		entity_snapshots[entity_id].last_position = new_position
 
 func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
+	if debug_enabled:
+		print("BattleRecorder: Intercept! PDC %s hit torpedo %s" % [pdc_id, get_entity_id(torpedo)])
+		
 	var event = {
 		"type": "intercept",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
@@ -152,6 +141,10 @@ func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 	battle_events.append(event)
 
 func on_pdc_fired(pdc: Node2D, target: Node2D):
+	if debug_enabled:
+		var target_id = get_entity_id(target) if target else "none"
+		print("BattleRecorder: PDC %s fired at %s" % [pdc.pdc_id, target_id])
+		
 	var event = {
 		"type": "pdc_fired",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
@@ -161,8 +154,8 @@ func on_pdc_fired(pdc: Node2D, target: Node2D):
 		"mount_position": pdc.mount_position
 	}
 	
-	if target and "torpedo_id" in target:
-		event["target_id"] = target.torpedo_id
+	if target:
+		event["target_id"] = get_entity_id(target)
 	
 	battle_events.append(event)
 
@@ -175,16 +168,14 @@ func record_battle_snapshot():
 	# Count torpedoes
 	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
 	for torpedo in torpedoes:
-		if "is_alive" in torpedo and torpedo.is_alive:
-			if "marked_for_death" in torpedo and not torpedo.marked_for_death:
-				torpedo_count += 1
+		if is_instance_valid(torpedo) and not torpedo.get("marked_for_death"):
+			torpedo_count += 1
 	
 	# Count bullets
 	var bullets = get_tree().get_nodes_in_group("bullets")
 	for bullet in bullets:
-		if "is_alive" in bullet and bullet.is_alive:
-			if "marked_for_death" in bullet and not bullet.marked_for_death:
-				bullet_count += 1
+		if is_instance_valid(bullet) and not bullet.get("marked_for_death"):
+			bullet_count += 1
 	
 	# Count active PDCs
 	var pdcs = get_tree().get_nodes_in_group("pdcs")
@@ -200,6 +191,11 @@ func record_battle_snapshot():
 		"bullet_count": bullet_count,
 		"active_pdcs": active_pdcs
 	}
+	
+	if debug_enabled:
+		print("BattleRecorder: Snapshot - Torpedoes: %d, Bullets: %d, Active PDCs: %d" % [
+			torpedo_count, bullet_count, active_pdcs
+		])
 	
 	battle_events.append(snapshot)
 
@@ -224,6 +220,33 @@ func stop_battle_recording():
 	battle_events.append(event)
 	
 	print("BattleEventRecorder: Battle recording stopped")
+
+# Helper functions
+func get_entity_id(entity: Node2D) -> String:
+	if "torpedo_id" in entity:
+		return entity.torpedo_id
+	elif "bullet_id" in entity:
+		return entity.bullet_id
+	elif "pdc_id" in entity:
+		return entity.pdc_id
+	elif "entity_id" in entity:
+		return entity.entity_id
+	else:
+		return "unknown_%d" % entity.get_instance_id()
+
+func get_entity_type(entity: Node2D) -> String:
+	if entity.has_meta("entity_type"):
+		return entity.get_meta("entity_type")
+	elif entity.is_in_group("torpedoes"):
+		return "torpedo"
+	elif entity.is_in_group("bullets"):
+		return "pdc_bullet"
+	elif entity.is_in_group("pdcs"):
+		return "pdc"
+	elif entity.is_in_group("ships"):
+		return "ship"
+	else:
+		return "unknown"
 
 # Analysis interface
 func get_battle_data() -> Dictionary:
@@ -251,6 +274,11 @@ func count_intercepts_by_pdc() -> Dictionary:
 				if not pdc_stats.has(pdc_id):
 					pdc_stats[pdc_id] = {"fired": 0, "hits": 0}
 				pdc_stats[pdc_id].fired += 1
+		elif event.type == "pdc_fired":
+			var pdc_id = event.pdc_id
+			if not pdc_stats.has(pdc_id):
+				pdc_stats[pdc_id] = {"fired": 0, "hits": 0}
+			# Don't count here since we count on entity_spawned
 	
 	# Count successful intercepts
 	for event in battle_events:
@@ -258,5 +286,11 @@ func count_intercepts_by_pdc() -> Dictionary:
 			var pdc_id = event.pdc_id
 			if pdc_stats.has(pdc_id):
 				pdc_stats[pdc_id].hits += 1
+		elif event.type == "entity_destroyed" and event.entity_type == "torpedo":
+			# Also count if torpedo was destroyed by bullet impact
+			if event.reason == "bullet_impact" and event.has("killed_by_pdc"):
+				var pdc_id = event.killed_by_pdc
+				if pdc_stats.has(pdc_id):
+					pdc_stats[pdc_id].hits += 1
 	
 	return pdc_stats

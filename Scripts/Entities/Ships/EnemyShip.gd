@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/EnemyShip.gd - SIMPLIFIED VERSION
+# Scripts/Entities/Ships/EnemyShip.gd - FIXED - NO TORPEDO LAUNCHER
 extends Area2D
 class_name EnemyShip
 
@@ -21,7 +21,7 @@ var marked_for_death: bool = false
 # Child nodes
 @onready var sensor_system: SensorSystem = $SensorSystem
 @onready var fire_control_manager = $FireControlManager
-@onready var pdc_systems: Array = []
+var pdc_systems: Array = []
 
 # Test movement
 var test_acceleration: bool = true

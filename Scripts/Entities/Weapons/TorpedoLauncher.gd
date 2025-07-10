@@ -1,12 +1,12 @@
-# Scripts/Systems/TorpedoLauncher.gd - IMMEDIATE STATE REFACTOR
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - BATTLE INTEGRATION
 extends Node2D
 class_name TorpedoLauncher
 
 # Launcher configuration
 @export var launcher_id: String = ""
-@export var tubes_per_side: int = 2
+@export var tubes_per_side: int = 4  # Default to 4 for 8 total torpedoes
 @export var reload_time: float = 10.0
-@export var launch_sequence_delay: float = 0.2
+@export var launch_sequence_delay: float = 0.3
 
 # Tube spacing configuration
 @export var tube_spacing: float = 30.0
@@ -25,6 +25,10 @@ var torpedo_scene = preload("res://Scenes/Torpedo.tscn")
 var launch_queue: Array = []
 var launch_timer: float = 0.0
 
+# Battle integration
+var total_torpedoes_to_launch: int = 0
+var torpedoes_launched: int = 0
+
 func _ready():
 	parent_ship = get_parent()
 	
@@ -41,7 +45,10 @@ func _ready():
 		reload_timers["port_%d" % i] = 0.0
 		reload_timers["starboard_%d" % i] = 0.0
 	
-	print("Torpedo launcher initialized: %s with %d tubes per side" % [launcher_id, tubes_per_side])
+	# Add to group for BattleManager to find
+	add_to_group("torpedo_launchers")
+	
+	print("Torpedo launcher initialized: will launch %d torpedoes" % (tubes_per_side * 2))
 
 func _physics_process(delta):
 	# Process reload timers
@@ -59,8 +66,13 @@ func _physics_process(delta):
 			var launch_data = launch_queue.pop_front()
 			_launch_single_torpedo(launch_data.target, launch_data.side, launch_data.tube_index)
 			launch_timer = launch_sequence_delay
+			
+			# Track progress for battle
+			torpedoes_launched += 1
+			if torpedoes_launched <= total_torpedoes_to_launch:
+				print("Torpedo %d/%d launched" % [torpedoes_launched, total_torpedoes_to_launch])
 
-func fire_torpedo(target: Node2D):
+func fire_torpedo(target: Node2D, count: int = -1):
 	if not is_valid_target(target):
 		print("Invalid target provided to torpedo launcher")
 		return
@@ -69,6 +81,16 @@ func fire_torpedo(target: Node2D):
 	if total_ready == 0:
 		print("No torpedo tubes ready")
 		return
+	
+	# If count not specified, fire all ready tubes
+	if count == -1:
+		count = total_ready
+	else:
+		count = min(count, total_ready)
+	
+	# Track total for battle reporting
+	total_torpedoes_to_launch = count
+	torpedoes_launched = 0
 	
 	# Determine which side to fire from based on target position
 	var to_target = target.global_position - global_position
@@ -85,8 +107,6 @@ func fire_torpedo(target: Node2D):
 	else:
 		queue_side_launch(target, -1)  # Port
 		queue_side_launch(target, 1)  # Starboard
-	
-	print("Firing %d torpedoes at target" % launch_queue.size())
 
 func queue_side_launch(target: Node2D, side: int):
 	var ready_count = starboard_tubes_ready if side == 1 else port_tubes_ready
@@ -132,16 +152,12 @@ func _launch_single_torpedo(target: Node2D, side: int, tube_index: int):
 	# Set faction from parent ship
 	if "faction" in parent_ship:
 		torpedo.faction = parent_ship.faction
-	
-	print("Torpedo launched from %s tube %d" % ["starboard" if side == 1 else "port", tube_index])
 
 func on_tube_reloaded(tube_id: String):
 	if tube_id.begins_with("port"):
 		port_tubes_ready += 1
 	else:
 		starboard_tubes_ready += 1
-	
-	print("Tube %s reloaded" % tube_id)
 
 func is_valid_target(target: Node2D) -> bool:
 	if not target:
@@ -171,3 +187,12 @@ func get_reload_status() -> Dictionary:
 			status.reloading[tube_id] = reload_timers[tube_id]
 	
 	return status
+
+# Battle integration methods
+func start_battle_firing():
+	# Not used in current implementation
+	pass
+	
+func stop_battle_firing():
+	# Clear any pending launches
+	launch_queue.clear()

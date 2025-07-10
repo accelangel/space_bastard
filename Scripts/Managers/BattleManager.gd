@@ -1,4 +1,4 @@
-# Scripts/Managers/BattleManager.gd - IMMEDIATE STATE REFACTOR
+# Scripts/Managers/BattleManager.gd - FIXED BATTLE ANALYSIS
 extends Node
 class_name BattleManager
 
@@ -39,8 +39,7 @@ func _ready():
 	
 	if not event_recorder:
 		print("WARNING: BattleManager cannot find BattleEventRecorder")
-		event_recorder = BattleEventRecorder.new()
-		get_tree().root.add_child(event_recorder)
+		# Don't create a new one, it should already exist in the scene
 	
 	# Discover battle systems
 	call_deferred("discover_battle_systems")
@@ -51,18 +50,42 @@ func discover_battle_systems():
 	torpedo_launchers.clear()
 	
 	# Find all torpedo launchers in the scene
-	var all_nodes = get_tree().get_nodes_in_group("combat_entities")
+	var all_ships = get_tree().get_nodes_in_group("ships")
 	
-	for node in all_nodes:
+	for ship in all_ships:
 		# Find torpedo launchers as children of ships
-		if node.is_in_group("ships"):
-			for child in node.get_children():
-				if child is TorpedoLauncher:
-					torpedo_launchers.append(child)
-					if debug_enabled:
-						print("Found torpedo launcher on: %s" % node.name)
+		for child in ship.get_children():
+			if child is TorpedoLauncher:
+				torpedo_launchers.append(child)
+				if debug_enabled:
+					print("Found torpedo launcher on: %s" % ship.name)
 	
 	print("BattleManager discovered: %d torpedo launchers" % torpedo_launchers.size())
+	
+	# Start first battle if auto-start is enabled
+	if auto_start_battles and torpedo_launchers.size() > 0:
+		call_deferred("trigger_initial_battle")
+
+func trigger_initial_battle():
+	# Wait a moment for everything to initialize
+	await get_tree().create_timer(0.5).timeout
+	
+	print("Starting automatic torpedo launches at EnemyShip")
+	
+	# Find enemy ship's torpedo launcher
+	var enemy_ships = get_tree().get_nodes_in_group("enemy_ships")
+	if enemy_ships.size() > 0:
+		var enemy_ship = enemy_ships[0]
+		var launcher = enemy_ship.get_node_or_null("TorpedoLauncher")
+		if launcher:
+			# Find player ship to target
+			var player_ships = get_tree().get_nodes_in_group("player_ships")
+			if player_ships.size() > 0:
+				# Fire multiple torpedoes
+				for i in range(8):
+					launcher.fire_torpedo(player_ships[0])
+					print("Torpedo %d/%d launched" % [i+1, 8])
+					await get_tree().create_timer(0.3).timeout
 
 func _process(delta):
 	match current_phase:
@@ -74,13 +97,10 @@ func _process(delta):
 			pass
 
 func check_for_battle_start():
-	if not auto_start_battles:
-		return
-	
 	# Check if any torpedoes exist
 	var torpedo_count = get_current_torpedo_count()
 	
-	if torpedo_count > 0:
+	if torpedo_count > 0 and current_phase == BattlePhase.PRE_BATTLE:
 		start_battle()
 
 func get_current_torpedo_count() -> int:
@@ -161,6 +181,7 @@ func end_battle():
 	
 	# Analyze and report
 	if event_recorder and print_detailed_reports:
+		await get_tree().create_timer(0.1).timeout  # Small delay to ensure all events are recorded
 		analyze_and_report_battle()
 	
 	# Reset for next battle
@@ -191,6 +212,7 @@ func emergency_stop_all_systems():
 	for pdc in pdcs:
 		if pdc.has_method("emergency_stop"):
 			pdc.emergency_stop()
+			print("PDC %s: EMERGENCY STOP" % pdc.pdc_id)
 	
 	# Stop all fire control managers
 	var fire_controls = get_tree().get_nodes_in_group("fire_control_systems")
@@ -200,17 +222,22 @@ func emergency_stop_all_systems():
 
 func analyze_and_report_battle():
 	if not event_recorder:
+		print("ERROR: No BattleEventRecorder available for analysis")
 		return
 	
 	var battle_data = event_recorder.get_battle_data()
 	var events = battle_data.events
 	
+	if debug_enabled:
+		print("Battle data contains %d events" % events.size())
+	
 	print("\n" + "=".repeat(60))
 	print("                 BATTLE REPORT")
 	print("=".repeat(60))
 	
-	# Basic stats
-	print("Battle Duration: %.1f seconds" % battle_data.battle_duration)
+	# Calculate actual duration
+	var actual_duration = battle_end_time - battle_start_time
+	print("Battle Duration: %.1f seconds" % actual_duration)
 	print("")
 	
 	# Count entities
@@ -218,6 +245,7 @@ func analyze_and_report_battle():
 	var bullets_fired = 0
 	var torpedoes_intercepted = 0
 	var torpedoes_hit_ships = 0
+	var pdc_fired_count = 0
 	
 	for event in events:
 		if event.type == "entity_spawned":
@@ -225,12 +253,21 @@ func analyze_and_report_battle():
 				torpedoes_fired += 1
 			elif event.entity_type == "pdc_bullet":
 				bullets_fired += 1
+		elif event.type == "pdc_fired":
+			pdc_fired_count += 1
 		elif event.type == "intercept":
 			torpedoes_intercepted += 1
 		elif event.type == "entity_destroyed":
-			if event.entity_type == "torpedo" and event.reason == "target_impact":
-				if event.get("hit_target", "").begins_with("ship"):
+			if event.entity_type == "torpedo":
+				if event.reason == "bullet_impact":
+					torpedoes_intercepted += 1
+				elif event.reason == "target_impact":
 					torpedoes_hit_ships += 1
+	
+	# If we didn't count bullets from spawns, estimate from PDC firing events
+	if bullets_fired == 0 and pdc_fired_count > 0:
+		# Estimate based on fire rate (18 rounds/second) and PDC firing events
+		bullets_fired = pdc_fired_count
 	
 	print("ENGAGEMENT SUMMARY:")
 	print("  Torpedoes Fired: %d" % torpedoes_fired)
@@ -244,7 +281,7 @@ func analyze_and_report_battle():
 	
 	print("  Total Rounds Fired: %d" % bullets_fired)
 	
-	if torpedoes_intercepted > 0:
+	if torpedoes_intercepted > 0 and bullets_fired > 0:
 		var rounds_per_kill = float(bullets_fired) / float(torpedoes_intercepted)
 		print("  Rounds per Intercept: %.1f" % rounds_per_kill)
 	

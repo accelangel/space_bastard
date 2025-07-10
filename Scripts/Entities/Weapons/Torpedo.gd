@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - IMMEDIATE STATE REFACTOR
+# Scripts/Entities/Weapons/Torpedo.gd - NO SHIP COLLISIONS
 extends Area2D
 class_name Torpedo
 
@@ -105,7 +105,7 @@ func _ready():
 	rotation = ship_forward.angle()
 	initial_rotation = rotation
 	
-	# Connect collision
+	# Connect collision - BUT ONLY FOR PDC BULLETS, NOT SHIPS
 	area_entered.connect(_on_area_entered)
 	
 	# Notify observers
@@ -359,19 +359,28 @@ func _on_area_entered(area: Area2D):
 	if marked_for_death:
 		return
 	
-	# Check if it's a valid collision target
-	if area.is_in_group("combat_entities"):
+	# COLLIDE WITH PDC BULLETS
+	if area.is_in_group("bullets"):
 		# Don't collide with same faction
 		if area.get("faction") == faction:
 			return
 		
-		# Store hit information on the target
-		if area.has_method("mark_for_destruction"):
-			area.set_meta("last_hit_by", torpedo_id)
-			area.mark_for_destruction("torpedo_impact")
+		# Store hit information on the bullet (it will handle the collision)
+		area.set_meta("hit_target", torpedo_id)
 		
 		# Self destruct
-		mark_for_destruction("target_impact")
+		mark_for_destruction("bullet_impact")
+		return
+	
+	# COLLIDE WITH SHIPS (torpedo dies, ship survives)
+	if area.is_in_group("ships"):
+		# Don't collide with same faction (friendly fire protection)
+		if area.get("faction") == faction:
+			return
+		
+		print("Torpedo %s hit ship %s" % [torpedo_id, area.get("entity_id")])
+		# Torpedo is destroyed, ship survives (testing phase)
+		mark_for_destruction("ship_impact")
 
 # Methods called by launcher
 func set_target(target: Node2D):
