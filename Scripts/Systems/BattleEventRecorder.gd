@@ -1,5 +1,4 @@
 # Scripts/Managers/BattleEventRecorder.gd - PURE OBSERVER
-# Renamed to avoid conflict with autoload EntityManager
 extends Node
 class_name BattleEventRecorder
 
@@ -37,6 +36,8 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		entity_id = entity.bullet_id
 	elif "pdc_id" in entity:
 		entity_id = entity.pdc_id
+	elif "entity_id" in entity:
+		entity_id = entity.entity_id
 		
 	var event = {
 		"type": "entity_spawned",
@@ -78,6 +79,8 @@ func on_entity_dying(entity: Node2D, reason: String):
 		entity_id = entity.bullet_id
 	elif "pdc_id" in entity:
 		entity_id = entity.pdc_id
+	elif "entity_id" in entity:
+		entity_id = entity.entity_id
 	
 	var entity_type = "unknown"
 	if entity.has_meta("entity_type"):
@@ -237,31 +240,6 @@ func clear_battle_data():
 	battle_active = false
 
 # Analysis helpers
-func get_events_by_type(event_type: String) -> Array:
-	var filtered = []
-	for event in battle_events:
-		if event.type == event_type:
-			filtered.append(event)
-	return filtered
-
-func get_entity_lifecycle(entity_id: String) -> Dictionary:
-	var lifecycle = {
-		"spawn": null,
-		"death": null,
-		"events": []
-	}
-	
-	for event in battle_events:
-		if event.get("entity_id", "") == entity_id:
-			if event.type == "entity_spawned":
-				lifecycle.spawn = event
-			elif event.type == "entity_destroyed":
-				lifecycle.death = event
-			else:
-				lifecycle.events.append(event)
-	
-	return lifecycle
-
 func count_intercepts_by_pdc() -> Dictionary:
 	var pdc_stats = {}
 	

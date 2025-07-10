@@ -4,7 +4,7 @@
 [ext_resource type="Texture2D" uid="uid://bctq41y8vay8u" path="res://Art/PlayerShip.png" id="1_k28x5"]
 [ext_resource type="Script" path="res://Scripts/Entities/Weapons/TorpedoLauncher.gd" id="2_lovhs"]
 [ext_resource type="Script" path="res://Scripts/Systems/SensorSystem.gd" id="5_dplm1"]
-[ext_resource type="Script" path="res://Scripts/Systems/FireControlManager.gd" id="5_qjl7e"]
+[ext_resource type="Script" path="res://Scripts/Managers/FireControlManager.gd" id="5_qjl7e"]
 [ext_resource type="PackedScene" uid="uid://vi2i12x2q47s" path="res://Scenes/PDC.tscn" id="6_n2ig7"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_j8x4e"]

@@ -4,7 +4,7 @@
 [ext_resource type="Texture2D" uid="uid://b7jytf3dc0hbn" path="res://Art/EnemyShip.png" id="1_pf77x"]
 [ext_resource type="PackedScene" uid="uid://vi2i12x2q47s" path="res://Scenes/PDC.tscn" id="3_s8ewm"]
 [ext_resource type="Script" path="res://Scripts/Systems/SensorSystem.gd" id="4_8qbgp"]
-[ext_resource type="Script" path="res://Scripts/Systems/FireControlManager.gd" id="5_xl005"]
+[ext_resource type="Script" path="res://Scripts/Managers/FireControlManager.gd" id="5_xl005"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
 radius = 28.6304

@@ -1,45 +1,46 @@
-# Scripts/Ships/EnemyShip.gd - IMMEDIATE STATE REFACTOR
+# Scripts/Entities/Ships/EnemyShip.gd - SIMPLIFIED VERSION
 extends Area2D
 class_name EnemyShip
 
-# Ship identity - self-managed
-@export var entity_id: String = ""
+# Ship properties
+@export var acceleration_gs: float = 1.5
+@export var rotation_speed: float = 2.0
 @export var faction: String = "hostile"
-@export var ship_class: String = "Unknown"
-@export var ship_name: String = "Hostile Contact"
 
-# State management
+# Movement
+var acceleration_mps2: float
+var velocity_mps: Vector2 = Vector2.ZERO
+var movement_direction: Vector2 = Vector2.ZERO
+
+# Identity
+var entity_id: String = ""
+var ship_name: String = "Hostile Contact"
 var is_alive: bool = true
 var marked_for_death: bool = false
-var death_reason: String = ""
 
-# Components
-@onready var health_component: Node = $HealthComponent
-@onready var movement_component: Node = $MovementComponent
-@onready var weapon_system: Node2D = $WeaponSystem
+# Child nodes
 @onready var sensor_system: SensorSystem = $SensorSystem
-@onready var ship_visuals: Node2D = $ShipVisuals
-@onready var collision_shape: CollisionShape2D = $CollisionShape2D
+@onready var fire_control_manager = $FireControlManager
+@onready var pdc_systems: Array = []
 
-# Combat state
-var current_target: Node2D = null
-var last_target_check: float = 0.0
-var target_check_interval: float = 2.0
+# Test movement
+var test_acceleration: bool = true
+var test_direction: Vector2 = Vector2(1, -1).normalized()
+var test_gs: float = 0.02
 
-# Movement parameters
-@export var max_speed: float = 300.0
-@export var acceleration: float = 100.0
-@export var turn_rate: float = 2.0
-
-# Weapon parameters
-@export var engagement_range: float = 800.0
-@export var fire_rate: float = 0.5
-var time_since_last_shot: float = 0.0
+# DEBUG CONTROL
+@export var debug_enabled: bool = false
 
 func _ready():
-	# Generate unique ID if not provided
-	if entity_id == "":
-		entity_id = "enemy_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	acceleration_mps2 = acceleration_gs * 9.81
+	
+	# Generate unique ID
+	entity_id = "enemy_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	
+	# Find all PDC systems
+	for child in get_children():
+		if child.has_method("get_capabilities"):
+			pdc_systems.append(child)
 	
 	# Self-identify
 	add_to_group("ships")
@@ -50,134 +51,48 @@ func _ready():
 	set_meta("entity_id", entity_id)
 	set_meta("faction", faction)
 	set_meta("entity_type", "enemy_ship")
-	set_meta("ship_class", ship_class)
-	
-	# Connect health component
-	if health_component:
-		health_component.died.connect(_on_health_component_died)
-		health_component.damaged.connect(_on_health_component_damaged)
-	
-	# Initialize components
-	if movement_component:
-		movement_component.max_speed = max_speed
-		movement_component.acceleration = acceleration
-		movement_component.turn_rate = turn_rate
 	
 	# Notify observers of spawn
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "enemy_ship")
 	
-	print("Enemy ship spawned: %s (%s)" % [ship_name, entity_id])
+	# Set up test acceleration
+	if test_acceleration:
+		set_acceleration(test_gs)
+		set_movement_direction(test_direction)
+		if debug_enabled:
+			print("EnemyShip starting test acceleration at %.3fG" % test_gs)
+	
+	print("Enemy ship spawned: %s" % entity_id)
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
-	
-	# Validate current target
-	if not is_valid_target(current_target):
-		current_target = null
-	
-	# Periodic target acquisition
-	last_target_check += delta
-	if last_target_check >= target_check_interval:
-		acquire_target()
-		last_target_check = 0.0
-	
-	# Movement AI
-	if current_target and movement_component:
-		var target_pos = current_target.global_position
-		var distance = global_position.distance_to(target_pos)
 		
-		if distance > engagement_range * 0.8:
-			# Move closer
-			movement_component.move_to_position(target_pos)
-		elif distance < engagement_range * 0.4:
-			# Back away
-			var away_direction = (global_position - target_pos).normalized()
-			var retreat_pos = global_position + away_direction * 200
-			movement_component.move_to_position(retreat_pos)
-		else:
-			# Orbit at optimal range
-			movement_component.stop()
+	# Update movement
+	var acceleration_vector = movement_direction * acceleration_mps2
+	velocity_mps += acceleration_vector * delta
+	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
+	global_position += velocity_pixels_per_second * delta
 	
-	# Weapon handling
-	time_since_last_shot += delta
-	if current_target and can_fire():
-		fire_at_target()
+	# Notify sensor systems of our position for immediate state
+	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "enemy_ship", faction)
 
-func is_valid_target(target: Node2D) -> bool:
-	if not target:
-		return false
-	if not is_instance_valid(target):
-		return false
-	if not target.is_inside_tree():
-		return false
-	if target.has_method("is_alive") and not target.is_alive:
-		return false
-	if target.get("marked_for_death") and target.marked_for_death:
-		return false
-	if target.get("faction") == faction:
-		return false
-	return true
+func set_movement_direction(new_direction: Vector2):
+	movement_direction = new_direction.normalized()
 
-func acquire_target():
-	# Get all potential targets
-	var potential_targets = []
-	
-	# Check player ships
-	var player_ships = get_tree().get_nodes_in_group("player_ships")
-	for ship in player_ships:
-		if is_valid_target(ship):
-			potential_targets.append(ship)
-	
-	# Find closest target
-	var best_target = null
-	var best_distance = INF
-	
-	for target in potential_targets:
-		var distance = global_position.distance_to(target.global_position)
-		if distance < best_distance and distance <= engagement_range:
-			best_distance = distance
-			best_target = target
-	
-	if best_target != current_target:
-		current_target = best_target
-		if current_target:
-			var target_id = "unknown"
-			if "entity_id" in current_target:
-				target_id = current_target.entity_id
-			print("%s: Engaging %s" % [entity_id, target_id])
+func set_acceleration(gs: float):
+	acceleration_gs = gs
+	acceleration_mps2 = acceleration_gs * 9.81
 
-func can_fire() -> bool:
-	if not current_target:
-		return false
-	
-	var distance = global_position.distance_to(current_target.global_position)
-	return distance <= engagement_range and time_since_last_shot >= fire_rate
+func get_velocity_mps() -> Vector2:
+	return velocity_mps
 
-func fire_at_target():
-	if not weapon_system or not current_target:
-		return
-	
-	# Fire torpedoes if available
-	for child in weapon_system.get_children():
-		if child.has_method("fire_torpedo"):
-			child.fire_torpedo(current_target)
-			time_since_last_shot = 0.0
-			break
-
-func take_damage(amount: float, _damage_source: String = ""):
-	if health_component:
-		health_component.take_damage(amount)
-
-func _on_health_component_died():
-	mark_for_destruction("destroyed")
-
-func _on_health_component_damaged(_amount: float):
-	# Visual feedback for damage
-	if ship_visuals:
-		var tween = create_tween()
-		tween.tween_property(ship_visuals, "modulate", Color.RED, 0.1)
-		tween.tween_property(ship_visuals, "modulate", Color.WHITE, 0.1)
+func toggle_test_acceleration():
+	test_acceleration = !test_acceleration
+	if test_acceleration:
+		set_movement_direction(test_direction)
+	else:
+		set_movement_direction(Vector2.ZERO)
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
@@ -185,30 +100,18 @@ func mark_for_destruction(reason: String):
 	
 	marked_for_death = true
 	is_alive = false
-	death_reason = reason
 	
 	# Disable physics
 	set_physics_process(false)
-	if collision_shape:
-		collision_shape.disabled = true
+	var collision = get_node_or_null("CollisionShape2D")
+	if collision:
+		collision.disabled = true
 	
 	# Notify observers
 	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
 	
-	# Death animation
-	if ship_visuals:
-		var tween = create_tween()
-		tween.tween_property(ship_visuals, "scale", Vector2.ZERO, 0.5)
-		tween.tween_property(ship_visuals, "modulate:a", 0.0, 0.5)
-		tween.tween_callback(queue_free)
-	else:
-		queue_free()
-
-# Interface methods for other systems
-func get_velocity_mps() -> Vector2:
-	if movement_component:
-		return movement_component.get_velocity_mps()
-	return Vector2.ZERO  # Area2D doesn't have built-in velocity
+	# Simple destruction
+	queue_free()
 
 func get_faction() -> String:
 	return faction

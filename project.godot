@@ -17,7 +17,6 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 [autoload]
 
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
-EntityManager="*res://Scripts/Managers/EntityManager.gd"
 
 [display]
 
