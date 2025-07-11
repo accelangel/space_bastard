@@ -200,6 +200,10 @@ func record_battle_snapshot():
 	battle_events.append(snapshot)
 
 func start_battle_recording():
+	# FIXED: Make idempotent to prevent double-start issues
+	if battle_active:
+		return  # Already recording
+		
 	battle_active = true
 	battle_start_time = Time.get_ticks_msec() / 1000.0
 	battle_events.clear()
@@ -274,23 +278,25 @@ func count_intercepts_by_pdc() -> Dictionary:
 				if not pdc_stats.has(pdc_id):
 					pdc_stats[pdc_id] = {"fired": 0, "hits": 0}
 				pdc_stats[pdc_id].fired += 1
-		elif event.type == "pdc_fired":
-			var pdc_id = event.pdc_id
-			if not pdc_stats.has(pdc_id):
-				pdc_stats[pdc_id] = {"fired": 0, "hits": 0}
-			# Don't count here since we count on entity_spawned
 	
-	# Count successful intercepts
+	# Track which torpedoes were hit to avoid double counting
+	var torpedoes_hit_by_pdc = {}
+	
+	# Count successful intercepts - FIXED: Avoid double counting
 	for event in battle_events:
 		if event.type == "intercept":
 			var pdc_id = event.pdc_id
-			if pdc_stats.has(pdc_id):
+			var torpedo_id = event.get("torpedo_id", "")
+			if pdc_stats.has(pdc_id) and not torpedoes_hit_by_pdc.has(torpedo_id):
 				pdc_stats[pdc_id].hits += 1
+				torpedoes_hit_by_pdc[torpedo_id] = pdc_id
 		elif event.type == "entity_destroyed" and event.entity_type == "torpedo":
-			# Also count if torpedo was destroyed by bullet impact
+			# Only count if torpedo was destroyed by bullet impact AND not already counted
 			if event.reason == "bullet_impact" and event.has("killed_by_pdc"):
 				var pdc_id = event.killed_by_pdc
-				if pdc_stats.has(pdc_id):
+				var torpedo_id = event.entity_id
+				if pdc_stats.has(pdc_id) and not torpedoes_hit_by_pdc.has(torpedo_id):
 					pdc_stats[pdc_id].hits += 1
+					torpedoes_hit_by_pdc[torpedo_id] = pdc_id
 	
 	return pdc_stats

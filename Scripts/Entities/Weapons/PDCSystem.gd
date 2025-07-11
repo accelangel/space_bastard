@@ -142,11 +142,12 @@ func update_sprite_rotation():
 		sprite.rotation = sprite_rotation
 
 func calculate_sprite_rotation() -> float:
-	# FIXED: Correct sprite rotation calculation
-	# The sprite art points up and is positioned correctly in the scene
-	# current_rotation is already the ship-relative angle we want to aim
-	# So we just use it directly
-	return current_rotation
+	# User's fix for idle direction: current_rotation + PI
+	# When firing, add PI/2 to correct 90-degree counter-clockwise offset
+	if is_firing and current_target:
+		return current_rotation + PI + PI/2
+	else:
+		return current_rotation + PI
 
 func handle_firing(delta):
 	if not is_valid_target(current_target):
@@ -238,9 +239,18 @@ func fire_bullet():
 	print("PDC %s: FIRING at %s" % [pdc_id, current_target.get("torpedo_id")])
 	
 	var bullet = bullet_scene.instantiate()
-	get_tree().root.add_child(bullet)
 	
+	# FIXED: Set bullet properties BEFORE adding to scene tree
+	# This ensures the BattleEventRecorder gets correct data when _ready() is called
 	bullet.global_position = get_muzzle_world_position()
+	
+	# Initialize bullet with full tracking info BEFORE adding to scene
+	var ship_id = parent_ship.get("entity_id") if parent_ship else ""
+	var target_id = current_target.get("torpedo_id") if current_target else ""
+	bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, target_id)
+	
+	# Now add to scene (this will call _ready() with proper data)
+	get_tree().root.add_child(bullet)
 	
 	# FIXED: Use PDC rotation to determine firing direction
 	# Current rotation is ship-relative, convert to world angle
@@ -251,12 +261,6 @@ func fire_bullet():
 	var ship_velocity = get_ship_velocity()
 	var bullet_velocity = fire_direction * bullet_velocity_mps + ship_velocity
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
-	
-	# Initialize bullet with full tracking info
-	if bullet.has_method("initialize_bullet"):
-		var ship_id = parent_ship.get("entity_id") if parent_ship else ""
-		var target_id = current_target.get("torpedo_id") if current_target else ""
-		bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, target_id)
 	
 	bullet.set_velocity(bullet_velocity_pixels)
 	

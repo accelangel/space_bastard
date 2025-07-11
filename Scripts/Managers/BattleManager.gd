@@ -205,12 +205,14 @@ func analyze_and_report_battle():
 	print("Battle Duration: %.1f seconds" % actual_duration)
 	print("")
 	
-	# Count entities
+	# Count entities - FIXED: Avoid double counting
 	var torpedoes_fired = 0
 	var bullets_fired = 0
 	var torpedoes_intercepted = 0
 	var torpedoes_hit_ships = 0
-	var pdc_fired_count = 0
+	
+	# Track torpedo outcomes to avoid double counting
+	var torpedo_outcomes = {}  # torpedo_id -> "intercepted" or "hit_ship"
 	
 	for event in events:
 		if event.type == "entity_spawned":
@@ -218,20 +220,24 @@ func analyze_and_report_battle():
 				torpedoes_fired += 1
 			elif event.entity_type == "pdc_bullet":
 				bullets_fired += 1
-		elif event.type == "pdc_fired":
-			pdc_fired_count += 1
 		elif event.type == "intercept":
-			torpedoes_intercepted += 1
+			# Mark torpedo as intercepted
+			if event.has("torpedo_id"):
+				torpedo_outcomes[event.torpedo_id] = "intercepted"
 		elif event.type == "entity_destroyed":
 			if event.entity_type == "torpedo":
-				if event.reason == "bullet_impact":
-					torpedoes_intercepted += 1
-				elif event.reason == "ship_impact":
-					torpedoes_hit_ships += 1
+				var torpedo_id = event.entity_id
+				if event.reason == "bullet_impact" and not torpedo_outcomes.has(torpedo_id):
+					torpedo_outcomes[torpedo_id] = "intercepted"
+				elif event.reason == "ship_impact" and not torpedo_outcomes.has(torpedo_id):
+					torpedo_outcomes[torpedo_id] = "hit_ship"
 	
-	# If we didn't count bullets from spawns, estimate from PDC firing events
-	if bullets_fired == 0 and pdc_fired_count > 0:
-		bullets_fired = pdc_fired_count
+	# Count final outcomes
+	for outcome in torpedo_outcomes.values():
+		if outcome == "intercepted":
+			torpedoes_intercepted += 1
+		elif outcome == "hit_ship":
+			torpedoes_hit_ships += 1
 	
 	print("ENGAGEMENT SUMMARY:")
 	print("  Torpedoes Fired: %d" % torpedoes_fired)
