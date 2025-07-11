@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleEventRecorder.gd - FIXED EVENT TRACKING
+# Scripts/Systems/BattleEventRecorder.gd - FIXED INITIALIZATION
 extends Node
 class_name BattleEventRecorder
 
@@ -15,7 +15,7 @@ var entity_snapshots: Dictionary = {}  # entity_id -> last known data
 @export var debug_enabled: bool = false
 
 func _ready():
-	# Listen for events
+	# FIXED: Add to group immediately at start of _ready
 	add_to_group("battle_observers")
 	
 	print("BattleEventRecorder initialized - Pure observer mode")

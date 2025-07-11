@@ -1,4 +1,4 @@
-# Scripts/Managers/BattleManager.gd - FIXED BATTLE ANALYSIS
+# Scripts/Managers/BattleManager.gd - FIXED BATTLE SUMMARY
 extends Node
 class_name BattleManager
 
@@ -19,7 +19,6 @@ var battle_end_delay: float = 3.0
 
 # System references
 var event_recorder: BattleEventRecorder
-var torpedo_launchers: Array = []
 
 # Settings
 @export var auto_start_battles: bool = true
@@ -30,43 +29,25 @@ func _ready():
 	# Add to group for easy finding
 	add_to_group("battle_managers")
 	
-	# Find or create BattleEventRecorder
+	# Use deferred call to find BattleEventRecorder after all nodes are ready
+	call_deferred("find_battle_event_recorder")
+	
+	print("BattleManager initialized - Battle orchestration ready")
+
+func find_battle_event_recorder():
+	"""Find BattleEventRecorder after all nodes have called _ready()"""
 	var recorder_nodes = get_tree().get_nodes_in_group("battle_observers")
 	for node in recorder_nodes:
 		if node is BattleEventRecorder:
 			event_recorder = node
+			if debug_enabled:
+				print("BattleManager found BattleEventRecorder")
 			break
 	
 	if not event_recorder:
-		print("WARNING: BattleManager cannot find BattleEventRecorder")
-		# Don't create a new one, it should already exist in the scene
-	
-	# Discover battle systems
-	call_deferred("discover_battle_systems")
-	
-	print("BattleManager initialized - Battle orchestration ready")
-
-func discover_battle_systems():
-	torpedo_launchers.clear()
-	
-	# Find all torpedo launchers in the scene
-	var all_ships = get_tree().get_nodes_in_group("ships")
-	
-	for ship in all_ships:
-		# Find torpedo launchers as children of ships
-		for child in ship.get_children():
-			if child is TorpedoLauncher:
-				torpedo_launchers.append(child)
-				if debug_enabled:
-					print("Found torpedo launcher on: %s" % ship.name)
-	
-	print("BattleManager discovered: %d torpedo launchers" % torpedo_launchers.size())
-	
-	# Don't auto-start battles - wait for player input
-
-func trigger_initial_battle():
-	# This function is no longer needed - battles start when player fires torpedoes
-	pass
+		print("ERROR: BattleManager cannot find BattleEventRecorder - battle reports will not work")
+	else:
+		print("BattleManager connected to BattleEventRecorder")
 
 func _process(delta):
 	match current_phase:
@@ -160,10 +141,13 @@ func end_battle():
 	print("=== BATTLE ENDED ===")
 	print("Duration: %.1f seconds" % (battle_end_time - battle_start_time))
 	
-	# Analyze and report
-	if event_recorder and print_detailed_reports:
-		await get_tree().create_timer(0.1).timeout  # Small delay to ensure all events are recorded
+	# FIXED: Always generate battle report if we have event recorder
+	if event_recorder:
+		# Small delay to ensure all events are recorded
+		await get_tree().create_timer(0.2).timeout
 		analyze_and_report_battle()
+	else:
+		print("ERROR: Cannot generate battle report - no BattleEventRecorder found")
 	
 	# Reset for next battle
 	call_deferred("reset_for_next_battle")
@@ -242,12 +226,11 @@ func analyze_and_report_battle():
 			if event.entity_type == "torpedo":
 				if event.reason == "bullet_impact":
 					torpedoes_intercepted += 1
-				elif event.reason == "target_impact":
+				elif event.reason == "ship_impact":
 					torpedoes_hit_ships += 1
 	
 	# If we didn't count bullets from spawns, estimate from PDC firing events
 	if bullets_fired == 0 and pdc_fired_count > 0:
-		# Estimate based on fire rate (18 rounds/second) and PDC firing events
 		bullets_fired = pdc_fired_count
 	
 	print("ENGAGEMENT SUMMARY:")

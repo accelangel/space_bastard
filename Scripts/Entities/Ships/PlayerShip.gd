@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - SIMPLIFIED VERSION
+# Scripts/Entities/Ships/PlayerShip.gd - AUTO BATTLE START
 extends Area2D
 class_name PlayerShip
 
@@ -27,6 +27,11 @@ var marked_for_death: bool = false
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(1, -1).normalized()
 var test_gs: float = 1.0
+
+# Auto battle system
+var auto_battle_started: bool = false
+var battle_start_delay: float = 2.0  # Delay before firing torpedoes
+var battle_timer: float = 0.0
 
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
@@ -69,15 +74,31 @@ func _physics_process(delta):
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
 	global_position += velocity_pixels_per_second * delta
 	
+	# Auto battle system - start firing torpedoes after delay
+	if not auto_battle_started:
+		battle_timer += delta
+		if battle_timer >= battle_start_delay:
+			start_auto_battle()
+	
 	# Notify sensor systems of our position for immediate state
 	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "player_ship", faction)
+
+func start_auto_battle():
+	"""Automatically fire torpedoes to start the battle"""
+	if auto_battle_started:
+		return
+		
+	auto_battle_started = true
+	print("Auto-starting battle - firing torpedoes")
+	fire_torpedoes_at_enemy()
 
 func _input(event):
 	if marked_for_death or not is_alive:
 		return
 	
-	# Fire torpedoes on spacebar
+	# Manual fire torpedoes on spacebar (still available for testing)
 	if event.is_action_pressed("ui_accept"):
+		print("Manual torpedo launch triggered")
 		fire_torpedoes_at_enemy()
 
 func fire_torpedoes_at_enemy():

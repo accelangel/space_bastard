@@ -1,4 +1,4 @@
-# Scripts/Systems/FireControlManager.gd - CLEANED VERSION
+# Scripts/Managers/FireControlManager.gd - CLEANED VERSION
 extends Node2D
 class_name FireControlManager
 
@@ -9,7 +9,7 @@ var registered_pdcs: Dictionary = {}  # pdc_id -> PDC node
 @export var engagement_range_meters: float = 15000.0
 @export var min_intercept_distance_meters: float = 5.0
 
-# Target assessment thresholds
+# Target assessment thresholds  
 @export var critical_time_threshold: float = 2.0
 @export var short_time_threshold: float = 5.0
 @export var medium_time_threshold: float = 15.0

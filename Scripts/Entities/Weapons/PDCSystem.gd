@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED FIRING DIRECTION
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED SPRITE ROTATION
 extends Node2D
 class_name PDCSystem
 
@@ -34,10 +34,6 @@ var muzzle_point: Marker2D
 
 # Preload bullet scene
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
-
-# Constants - FIXED: Removed PI correction that was causing 180-degree offset
-const SPRITE_POINTS_UP: bool = true
-const IDLE_FACES_SHIP_FORWARD: bool = true
 
 func _ready():
 	# Generate ID if not provided
@@ -77,12 +73,9 @@ func set_idle_rotation():
 		target_rotation = 0.0
 		return
 	
-	if IDLE_FACES_SHIP_FORWARD:
-		current_rotation = 0.0
-		target_rotation = 0.0
-	else:
-		current_rotation = PI/2
-		target_rotation = PI/2
+	# Idle position faces ship forward (0 rotation)
+	current_rotation = 0.0
+	target_rotation = 0.0
 	
 	update_sprite_rotation()
 
@@ -113,10 +106,6 @@ func _physics_process(delta):
 	# Update target angle continuously while we have a target
 	if current_target:
 		update_target_angle()
-		
-		# Debug print every second
-		if Engine.get_physics_frames() % 60 == 0:
-			debug_print_angles()
 	
 	# Rest of PDC logic
 	update_turret_rotation(delta)
@@ -153,13 +142,11 @@ func update_sprite_rotation():
 		sprite.rotation = sprite_rotation
 
 func calculate_sprite_rotation() -> float:
-	var base_rotation = current_rotation
-	
-	# FIXED: Simplified rotation - sprite points up needs -90 degrees offset
-	if SPRITE_POINTS_UP:
-		return base_rotation - PI
-	else:
-		return base_rotation
+	# FIXED: Correct sprite rotation calculation
+	# The sprite art points up and is positioned correctly in the scene
+	# current_rotation is already the ship-relative angle we want to aim
+	# So we just use it directly
+	return current_rotation
 
 func handle_firing(delta):
 	if not is_valid_target(current_target):
@@ -170,8 +157,6 @@ func handle_firing(delta):
 	if is_aimed() and not is_firing:
 		start_firing()
 	elif not is_aimed() and is_firing:
-		# Stop firing if we lose aim
-		print("PDC %s: Lost aim, ceasing fire" % pdc_id)
 		stop_firing()
 	
 	# Fire bullets if we're firing and aimed
@@ -197,11 +182,9 @@ func set_target(new_target: Node2D):
 		
 		current_target = new_target
 		update_target_angle()
-		# Don't check if aimed yet - let handle_firing() do that
 	else:
 		if current_target:
 			print("PDC %s: Target validation FAILED - target_null" % pdc_id)
-			print("PDC %s: Ceasing fire" % pdc_id)
 		current_target = null
 		stop_firing()
 
@@ -334,16 +317,3 @@ func get_capabilities() -> Dictionary:
 
 func set_fire_control_manager(manager: Node):
 	fire_control_manager = manager
-
-# Add debug function
-func debug_print_angles():
-	if current_target:
-		var to_target = current_target.global_position - get_muzzle_world_position()
-		var world_angle = to_target.angle()
-		print("PDC %s Debug:" % pdc_id)
-		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
-		print("  Target world angle: %.1f°" % rad_to_deg(world_angle))
-		print("  Target rotation (ship-relative): %.1f°" % rad_to_deg(target_rotation))
-		print("  Current rotation: %.1f°" % rad_to_deg(current_rotation))
-		print("  Tracking error: %.1f°" % rad_to_deg(get_tracking_error()))
-		print("  Is aimed: %s (threshold: %.1f°)" % [is_aimed(), rad_to_deg(max_tracking_error)])

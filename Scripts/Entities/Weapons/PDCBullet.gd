@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - IMMEDIATE STATE REFACTOR
+# Scripts/Entities/Weapons/PDCBullet.gd - CLEANED VERSION
 extends Area2D
 class_name PDCBullet
 
@@ -18,9 +18,6 @@ var death_reason: String = ""
 # Bullet properties
 var velocity: Vector2 = Vector2.ZERO
 var max_lifetime: float = 3.0  # Bullets self-destruct after 3 seconds
-
-# References
-@onready var sprite: Sprite2D = $Sprite2D
 
 func _ready():
 	# Generate unique ID if not provided
