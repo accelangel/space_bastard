@@ -113,6 +113,10 @@ func _physics_process(delta):
 	# Update target angle continuously while we have a target
 	if current_target:
 		update_target_angle()
+		
+		# Debug print every second
+		if Engine.get_physics_frames() % 60 == 0:
+			debug_print_angles()
 	
 	# Rest of PDC logic
 	update_turret_rotation(delta)
@@ -162,9 +166,16 @@ func handle_firing(delta):
 		stop_firing()
 		return
 	
-	var should_fire = is_aimed() and is_firing
+	# Check if aimed and start firing if not already
+	if is_aimed() and not is_firing:
+		start_firing()
+	elif not is_aimed() and is_firing:
+		# Stop firing if we lose aim
+		print("PDC %s: Lost aim, ceasing fire" % pdc_id)
+		stop_firing()
 	
-	if should_fire:
+	# Fire bullets if we're firing and aimed
+	if is_firing and is_aimed():
 		fire_timer += delta
 		var fire_interval = 1.0 / rounds_per_second
 		
@@ -186,10 +197,7 @@ func set_target(new_target: Node2D):
 		
 		current_target = new_target
 		update_target_angle()
-		
-		# Start firing if we're aimed
-		if is_aimed():
-			start_firing()
+		# Don't check if aimed yet - let handle_firing() do that
 	else:
 		if current_target:
 			print("PDC %s: Target validation FAILED - target_null" % pdc_id)
@@ -201,13 +209,13 @@ func update_target_angle():
 	if not is_valid_target(current_target):
 		return
 	
-	# FIXED: Use the same angle calculation as the old system
+	# Calculate angle to target from PDC position
 	var to_target = current_target.global_position - get_muzzle_world_position()
 	var world_angle = to_target.angle()
 	
 	# Convert world angle to ship-relative angle
-	# Ship forward is at rotation + PI/2, so we need to account for that
-	target_rotation = world_angle - parent_ship.rotation + PI/2
+	# The PDC's 0 rotation should point along ship's forward direction
+	target_rotation = world_angle - parent_ship.rotation
 	
 	# Normalize the angle
 	while target_rotation > PI:
@@ -232,7 +240,6 @@ func stop_firing():
 	if is_firing:
 		is_firing = false
 		fire_timer = 0.0
-	set_idle_rotation()
 
 func is_aimed() -> bool:
 	var angle_diff = abs(angle_difference(current_rotation, target_rotation))
@@ -252,10 +259,9 @@ func fire_bullet():
 	
 	bullet.global_position = get_muzzle_world_position()
 	
-	# FIXED: Use PDC rotation to determine firing direction like the old system
+	# FIXED: Use PDC rotation to determine firing direction
 	# Current rotation is ship-relative, convert to world angle
-	var firing_rotation = current_rotation - PI/2  # Adjust for coordinate system
-	var world_angle = firing_rotation + parent_ship.rotation
+	var world_angle = current_rotation + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	
 	# Include ship velocity for proper physics
@@ -306,16 +312,6 @@ func get_status() -> Dictionary:
 	var tracking_error = get_tracking_error()
 	var status_str = "FIRING" if is_firing else "TRACKING" if current_target else "IDLE"
 	
-	# Print status line like the old system
-	if current_target:
-		print("PDC %s: Target=%s, Error=%.1f°, Aimed=%s, Firing=%s" % [
-			pdc_id,
-			current_target.get("torpedo_id") if current_target else "none",
-			rad_to_deg(tracking_error),
-			is_aimed(),
-			is_firing
-		])
-	
 	return {
 		"pdc_id": pdc_id,
 		"status": status_str,
@@ -339,16 +335,15 @@ func get_capabilities() -> Dictionary:
 func set_fire_control_manager(manager: Node):
 	fire_control_manager = manager
 
-# For immediate state system
-func mark_for_destruction(reason: String):
-	if marked_for_death:
-		return
-	
-	marked_for_death = true
-	is_alive = false
-	
-	emergency_stop()
-	set_physics_process(false)
-	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
+# Add debug function
+func debug_print_angles():
+	if current_target:
+		var to_target = current_target.global_position - get_muzzle_world_position()
+		var world_angle = to_target.angle()
+		print("PDC %s Debug:" % pdc_id)
+		print("  Ship rotation: %.1f°" % rad_to_deg(parent_ship.rotation))
+		print("  Target world angle: %.1f°" % rad_to_deg(world_angle))
+		print("  Target rotation (ship-relative): %.1f°" % rad_to_deg(target_rotation))
+		print("  Current rotation: %.1f°" % rad_to_deg(current_rotation))
+		print("  Tracking error: %.1f°" % rad_to_deg(get_tracking_error()))
+		print("  Is aimed: %s (threshold: %.1f°)" % [is_aimed(), rad_to_deg(max_tracking_error)])

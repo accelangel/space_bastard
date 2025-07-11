@@ -62,30 +62,11 @@ func discover_battle_systems():
 	
 	print("BattleManager discovered: %d torpedo launchers" % torpedo_launchers.size())
 	
-	# Start first battle if auto-start is enabled
-	if auto_start_battles and torpedo_launchers.size() > 0:
-		call_deferred("trigger_initial_battle")
+	# Don't auto-start battles - wait for player input
 
 func trigger_initial_battle():
-	# Wait a moment for everything to initialize
-	await get_tree().create_timer(0.5).timeout
-	
-	print("Starting automatic torpedo launches at EnemyShip")
-	
-	# Find enemy ship's torpedo launcher
-	var enemy_ships = get_tree().get_nodes_in_group("enemy_ships")
-	if enemy_ships.size() > 0:
-		var enemy_ship = enemy_ships[0]
-		var launcher = enemy_ship.get_node_or_null("TorpedoLauncher")
-		if launcher:
-			# Find player ship to target
-			var player_ships = get_tree().get_nodes_in_group("player_ships")
-			if player_ships.size() > 0:
-				# Fire multiple torpedoes
-				for i in range(8):
-					launcher.fire_torpedo(player_ships[0])
-					print("Torpedo %d/%d launched" % [i+1, 8])
-					await get_tree().create_timer(0.3).timeout
+	# This function is no longer needed - battles start when player fires torpedoes
+	pass
 
 func _process(delta):
 	match current_phase:

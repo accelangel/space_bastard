@@ -133,7 +133,15 @@ func _launch_single_torpedo(target: Node2D, side: int, tube_index: int):
 		return
 	
 	var torpedo = torpedo_scene.instantiate()
-	get_tree().root.add_child(torpedo)
+	
+	# Configure torpedo BEFORE adding to scene tree
+	torpedo.set_target(target)
+	torpedo.set_launcher(parent_ship)
+	torpedo.set_launch_side(side)
+	
+	# Set faction from parent ship
+	if "faction" in parent_ship:
+		torpedo.faction = parent_ship.faction
 	
 	# Calculate launch position
 	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
@@ -142,16 +150,9 @@ func _launch_single_torpedo(target: Node2D, side: int, tube_index: int):
 	var side_offset = ship_right * lateral_offset * side
 	var tube_offset = ship_forward * (tube_index - (tubes_per_side - 1) * 0.5) * tube_spacing
 	
+	# Add to scene tree AFTER configuration
+	get_tree().root.add_child(torpedo)
 	torpedo.global_position = parent_ship.global_position + side_offset + tube_offset
-	
-	# Configure torpedo
-	torpedo.set_target(target)
-	torpedo.set_launcher(parent_ship)
-	torpedo.set_launch_side(side)
-	
-	# Set faction from parent ship
-	if "faction" in parent_ship:
-		torpedo.faction = parent_ship.faction
 
 func on_tube_reloaded(tube_id: String):
 	if tube_id.begins_with("port"):
