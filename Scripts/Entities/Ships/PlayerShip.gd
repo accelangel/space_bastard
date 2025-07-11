@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - AUTO BATTLE START
+# Scripts/Entities/Ships/PlayerShip.gd - WITH MULTI-ANGLE TORPEDO SUPPORT
 extends Area2D
 class_name PlayerShip
 
@@ -6,6 +6,9 @@ class_name PlayerShip
 @export var acceleration_gs: float = 0.05
 @export var rotation_speed: float = 2.0
 @export var faction: String = "friendly"
+
+# Torpedo configuration
+@export var use_multi_angle_torpedoes: bool = true
 
 # Movement
 var acceleration_mps2: float
@@ -41,6 +44,18 @@ func _ready():
 	
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	
+	# Configure torpedo launcher for multi-angle torpedoes
+	if torpedo_launcher and use_multi_angle_torpedoes:
+		if torpedo_launcher.has_method("set_torpedo_type"):
+			var multi_angle_type = TorpedoType.new()
+			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
+			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
+			multi_angle_type.approach_angle_offset = 45.0
+			multi_angle_type.arc_strength = 0.7
+			multi_angle_type.maintain_offset_distance = 500.0
+			torpedo_launcher.set_torpedo_type(multi_angle_type)
+			print("Player ship configured for Multi-Angle torpedoes")
 	
 	# Self-identify
 	add_to_group("ships")
@@ -89,7 +104,8 @@ func start_auto_battle():
 		return
 		
 	auto_battle_started = true
-	print("Auto-starting battle - firing torpedoes")
+	print("Auto-starting battle - firing %s torpedoes" % 
+		("Multi-Angle" if use_multi_angle_torpedoes else "Basic"))
 	fire_torpedoes_at_enemy()
 
 func _input(event):
@@ -100,6 +116,30 @@ func _input(event):
 	if event.is_action_pressed("ui_accept"):
 		print("Manual torpedo launch triggered")
 		fire_torpedoes_at_enemy()
+	
+	# Toggle torpedo type on T key
+	if event.is_action_pressed("ui_text_completion_query"):  # T key
+		toggle_torpedo_type()
+
+func toggle_torpedo_type():
+	use_multi_angle_torpedoes = !use_multi_angle_torpedoes
+	
+	if torpedo_launcher and torpedo_launcher.has_method("set_torpedo_type"):
+		if use_multi_angle_torpedoes:
+			var multi_angle_type = TorpedoType.new()
+			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
+			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
+			multi_angle_type.approach_angle_offset = 45.0
+			multi_angle_type.arc_strength = 0.7
+			multi_angle_type.maintain_offset_distance = 500.0
+			torpedo_launcher.set_torpedo_type(multi_angle_type)
+		else:
+			var basic_type = TorpedoType.new()
+			basic_type.torpedo_name = "Basic Torpedo"
+			basic_type.flight_pattern = TorpedoType.FlightPattern.BASIC
+			torpedo_launcher.set_torpedo_type(basic_type)
+		
+		print("Switched to %s torpedoes" % ("Multi-Angle" if use_multi_angle_torpedoes else "Basic"))
 
 func fire_torpedoes_at_enemy():
 	if not torpedo_launcher:

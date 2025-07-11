@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleEventRecorder.gd - FIXED INITIALIZATION
+# Scripts/Systems/BattleEventRecorder.gd - FIXED TORPEDO COUNT
 extends Node
 class_name BattleEventRecorder
 
@@ -11,11 +11,14 @@ var battle_active: bool = false
 # Entity snapshots for analysis
 var entity_snapshots: Dictionary = {}  # entity_id -> last known data
 
+# Track entities spawned before battle officially started
+var pre_battle_entities: Array = []
+
 # Debug flag
 @export var debug_enabled: bool = false
 
 func _ready():
-	# FIXED: Add to group immediately at start of _ready
+	# Add to group immediately at start of _ready
 	add_to_group("battle_observers")
 	
 	print("BattleEventRecorder initialized - Pure observer mode")
@@ -29,9 +32,6 @@ func _physics_process(_delta):
 
 # Observer interface - called by entities
 func on_entity_spawned(entity: Node2D, entity_type: String):
-	if not battle_active:
-		start_battle_recording()
-	
 	var entity_id = get_entity_id(entity)
 	
 	if debug_enabled:
@@ -57,7 +57,18 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 	if entity_type == "torpedo" and "source_ship_id" in entity:
 		event["source_ship"] = entity.source_ship_id
 	
-	battle_events.append(event)
+	# FIXED: If battle hasn't started yet, store in pre-battle array
+	if not battle_active:
+		pre_battle_entities.append(event)
+		# Auto-start battle on first torpedo
+		if entity_type == "torpedo":
+			start_battle_recording()
+			# Add all pre-battle entities to the main events array
+			for pre_event in pre_battle_entities:
+				battle_events.append(pre_event)
+			pre_battle_entities.clear()
+	else:
+		battle_events.append(event)
 	
 	# Store snapshot
 	entity_snapshots[entity_id] = {
@@ -200,14 +211,13 @@ func record_battle_snapshot():
 	battle_events.append(snapshot)
 
 func start_battle_recording():
-	# FIXED: Make idempotent to prevent double-start issues
+	# Make idempotent to prevent double-start issues
 	if battle_active:
 		return  # Already recording
 		
 	battle_active = true
 	battle_start_time = Time.get_ticks_msec() / 1000.0
-	battle_events.clear()
-	entity_snapshots.clear()
+	# Don't clear events - we might have pre-battle events
 	frame_counter = 0
 	
 	print("BattleEventRecorder: Battle recording started")
@@ -263,8 +273,17 @@ func get_battle_data() -> Dictionary:
 func clear_battle_data():
 	battle_events.clear()
 	entity_snapshots.clear()
+	pre_battle_entities.clear()
 	frame_counter = 0
 	battle_active = false
+
+# Get accurate torpedo count from spawn events
+func get_actual_torpedo_count() -> int:
+	var torpedo_count = 0
+	for event in battle_events:
+		if event.type == "entity_spawned" and event.entity_type == "torpedo":
+			torpedo_count += 1
+	return torpedo_count
 
 # Analysis helpers
 func count_intercepts_by_pdc() -> Dictionary:
@@ -282,7 +301,7 @@ func count_intercepts_by_pdc() -> Dictionary:
 	# Track which torpedoes were hit to avoid double counting
 	var torpedoes_hit_by_pdc = {}
 	
-	# Count successful intercepts - FIXED: Avoid double counting
+	# Count successful intercepts - Avoid double counting
 	for event in battle_events:
 		if event.type == "intercept":
 			var pdc_id = event.pdc_id

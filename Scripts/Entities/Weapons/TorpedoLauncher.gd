@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoLauncher.gd - BATTLE INTEGRATION
+# Scripts/Entities/Weapons/TorpedoLauncher.gd - WITH TORPEDO TYPE SUPPORT
 extends Node2D
 class_name TorpedoLauncher
 
@@ -11,6 +11,9 @@ class_name TorpedoLauncher
 # Tube spacing configuration
 @export var tube_spacing: float = 30.0
 @export var lateral_offset: float = 60.0
+
+# Torpedo type configuration
+@export var torpedo_type: TorpedoType
 
 # Launch state
 var port_tubes_ready: int
@@ -45,10 +48,19 @@ func _ready():
 		reload_timers["port_%d" % i] = 0.0
 		reload_timers["starboard_%d" % i] = 0.0
 	
+	# Load default torpedo type if none specified
+	if not torpedo_type:
+		torpedo_type = TorpedoType.new()
+		torpedo_type.torpedo_name = "Basic Torpedo"
+		torpedo_type.flight_pattern = TorpedoType.FlightPattern.BASIC
+	
 	# Add to group for BattleManager to find
 	add_to_group("torpedo_launchers")
 	
-	print("Torpedo launcher initialized: will launch %d torpedoes" % (tubes_per_side * 2))
+	print("Torpedo launcher initialized: will launch %d %s torpedoes" % [
+		tubes_per_side * 2, 
+		torpedo_type.torpedo_name
+	])
 
 func _physics_process(delta):
 	# Process reload timers
@@ -139,6 +151,10 @@ func _launch_single_torpedo(target: Node2D, side: int, tube_index: int):
 	torpedo.set_launcher(parent_ship)
 	torpedo.set_launch_side(side)
 	
+	# Set torpedo type if the torpedo supports it
+	if torpedo.has_method("set_torpedo_type"):
+		torpedo.set_torpedo_type(torpedo_type)
+	
 	# Set faction from parent ship
 	if "faction" in parent_ship:
 		torpedo.faction = parent_ship.faction
@@ -188,6 +204,10 @@ func get_reload_status() -> Dictionary:
 			status.reloading[tube_id] = reload_timers[tube_id]
 	
 	return status
+
+func set_torpedo_type(type: TorpedoType):
+	torpedo_type = type
+	print("Torpedo launcher now using: %s" % type.torpedo_name)
 
 # Battle integration methods
 func start_battle_firing():

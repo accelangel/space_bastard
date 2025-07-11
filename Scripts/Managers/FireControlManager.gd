@@ -1,4 +1,4 @@
-# Scripts/Managers/FireControlManager.gd - CLEANED VERSION
+# Scripts/Managers/FireControlManager.gd - FIXED TO NOT SHOOT BEHIND SHIP
 extends Node2D
 class_name FireControlManager
 
@@ -33,19 +33,25 @@ func _ready():
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
 		if "faction" in parent_ship:
 			ship_faction = parent_ship.faction
-		discover_pdcs()
+		# Defer PDC discovery to ensure they're initialized
+		call_deferred("discover_pdcs")
 	
 	# Add to groups
 	add_to_group("fire_control_systems")
-	
-	print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
 
 func discover_pdcs():
 	for child in parent_ship.get_children():
 		if child.has_method("get_capabilities") and child.has_method("set_target"):
 			register_pdc(child)
+	
+	print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
 
 func register_pdc(pdc_node: Node2D):
+	# Make sure PDC has an ID
+	if not pdc_node.get("pdc_id") or pdc_node.pdc_id == "":
+		print("WARNING: PDC has no ID, skipping registration")
+		return
+		
 	var pdc_id = pdc_node.pdc_id
 	registered_pdcs[pdc_id] = pdc_node
 	pdc_node.set_fire_control_manager(self)
@@ -130,6 +136,22 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	var to_ship = (ship_pos - torpedo_pos).normalized()
 	var closing_velocity = torpedo_vel.dot(to_ship) if torpedo_vel else 0.0
 	
+	# FIXED: Check if torpedo is behind ship and moving away
+	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
+	var to_torpedo = (torpedo_pos - ship_pos).normalized()
+	var is_behind = ship_forward.dot(to_torpedo) < -0.5  # More than 90 degrees behind
+	
+	# If torpedo is behind ship and not approaching, it's not a threat
+	if is_behind and closing_velocity <= 0:
+		return {
+			"is_engageable": false,
+			"time_to_impact": INF,
+			"distance": distance,
+			"distance_meters": distance_meters,
+			"closing_velocity": closing_velocity,
+			"priority": 0.0
+		}
+	
 	var time_to_impact = INF
 	if closing_velocity > 0:
 		time_to_impact = distance_meters / closing_velocity
@@ -138,7 +160,8 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	var is_engageable = (
 		distance_meters <= engagement_range_meters and
 		time_to_impact < 30.0 and
-		closing_velocity > 0
+		closing_velocity > 0 and
+		not is_behind  # Don't engage torpedoes behind us
 	)
 	
 	# Calculate priority
@@ -224,8 +247,17 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 	var torpedo_vel = torpedo.get("velocity_mps")
 	var intercept_point = calculate_intercept_point(pdc.get_muzzle_world_position(), torpedo.global_position, torpedo_vel)
 	
-	var to_intercept = intercept_point - pdc.get_muzzle_world_position()
-	var required_world_angle = to_intercept.angle()
+	# FIXED: Check if intercept point is behind ship
+	var ship_pos = parent_ship.global_position
+	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
+	var to_intercept = intercept_point - ship_pos
+	
+	# If intercept point is behind ship, return very low score
+	if ship_forward.dot(to_intercept) < 0:
+		return -1000.0  # Effectively never choose this
+	
+	var to_intercept_from_pdc = intercept_point - pdc.get_muzzle_world_position()
+	var required_world_angle = to_intercept_from_pdc.angle()
 	
 	# Convert to ship-relative angle (matching PDC's coordinate system)
 	var required_ship_angle = required_world_angle - parent_ship.rotation + PI/2
