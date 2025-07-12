@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - FIXED WITH SPEED LIMIT AND PROPER MULTI-ANGLE
+# Scripts/Entities/Weapons/Torpedo.gd - PROPER SINGLE-THRUST PHYSICS
 extends Area2D
 class_name Torpedo
 
@@ -33,17 +33,15 @@ var transition_progress: float = 0.0
 var rotation_progress: float = 0.0
 var guidance_strength: float = 0.0
 
-# Target rotation tracking
-var target_rotation: float = 0.0
-var initial_rotation: float = 0.0
+# PROPER PHYSICS STATE
+var velocity_mps: Vector2 = Vector2.ZERO
+var orientation: float = 0.0  # The direction the torpedo is pointing
+var max_speed_mps: float = 2000.0  # Default 2 km/s
+var max_rotation_rate: float = deg_to_rad(180.0)  # degrees per second
 
 # Multi-angle specific state
 var desired_approach_angle: float = 0.0  # Radians
 var arc_phase: float = 0.0  # 0 = maintain offset, 1 = final approach
-
-# Physics state
-var velocity_mps: Vector2 = Vector2.ZERO
-var max_speed_mps: float = 200.0  # RESTORED SPEED LIMIT
 
 # Guidance state
 var previous_los: Vector2 = Vector2.ZERO
@@ -91,15 +89,15 @@ func _ready():
 	initial_facing_direction = ship_forward
 	var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
 	
+	# Initial lateral velocity for launch
 	velocity_mps = side_direction * torpedo_type.lateral_launch_velocity
-	rotation = ship_forward.angle()
-	initial_rotation = rotation
+	
+	# Set initial orientation to ship forward
+	orientation = ship_forward.angle()
+	rotation = orientation
 	
 	# Set up approach angle for multi-angle torpedoes
 	if torpedo_type.flight_pattern == TorpedoType.FlightPattern.MULTI_ANGLE:
-		# Launch side determines which side we approach from
-		# launch_side: 1 = starboard, -1 = port
-		# We want opposite approach angles for visual distinction
 		desired_approach_angle = deg_to_rad(torpedo_type.approach_angle_offset) * launch_side
 		print("Torpedo %s (%s) launching with %s approach angle" % [
 			torpedo_id, 
@@ -143,26 +141,57 @@ func _physics_process(delta):
 		rotation_progress = clamp(time_since_ignition / torpedo_type.rotation_transition_duration, 0.0, 1.0)
 		guidance_strength = clamp(time_since_ignition / torpedo_type.guidance_ramp_duration, 0.0, 1.0)
 		
-		# Calculate guidance based on flight pattern
-		var commanded_acceleration = Vector2.ZERO
+		# Calculate desired orientation based on flight pattern
+		var desired_orientation = 0.0
 		match torpedo_type.flight_pattern:
 			TorpedoType.FlightPattern.BASIC:
-				commanded_acceleration = calculate_smooth_guidance(delta)
+				desired_orientation = calculate_basic_guidance_orientation(delta)
 			TorpedoType.FlightPattern.MULTI_ANGLE:
-				commanded_acceleration = calculate_multi_angle_guidance(delta)
+				desired_orientation = calculate_multi_angle_guidance_orientation(delta)
 			_:
-				commanded_acceleration = calculate_smooth_guidance(delta)
+				desired_orientation = calculate_basic_guidance_orientation(delta)
 		
-		velocity_mps += commanded_acceleration * delta
+		# Apply rotation limits
+		var rotation_diff = angle_difference(orientation, desired_orientation)
+		var max_rotation = max_rotation_rate * delta * guidance_strength
 		
-		# APPLY SPEED LIMIT
+		if abs(rotation_diff) > max_rotation:
+			orientation += sign(rotation_diff) * max_rotation
+		else:
+			orientation = desired_orientation
+		
+		# Normalize orientation
+		while orientation > PI:
+			orientation -= TAU
+		while orientation < -PI:
+			orientation += TAU
+		
+		# APPLY THRUST IN THE DIRECTION WE'RE POINTING
+		var thrust_direction = Vector2.from_angle(orientation)
+		var thrust_force = thrust_direction * torpedo_type.max_acceleration * guidance_strength
+		
+		# Update velocity
+		velocity_mps += thrust_force * delta
+		
+		# Apply speed limit
 		if velocity_mps.length() > max_speed_mps:
 			velocity_mps = velocity_mps.normalized() * max_speed_mps
 		
-		# Smooth rotation
-		update_smooth_rotation(delta)
+		# Debug info every second
+		if Engine.get_physics_frames() % 60 == 0:
+			var distance_to_target = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+			var orientation_error = rad_to_deg(abs(angle_difference(orientation, velocity_mps.angle())))
+			print("Torpedo %s: Speed %.1f m/s, Distance %.1f m, Orientation error: %.1f°" % [
+				torpedo_id, 
+				velocity_mps.length(),
+				distance_to_target,
+				orientation_error
+			])
+		
+		# Update visual rotation to match orientation
+		rotation = orientation
 	else:
-		# Lateral launch phase
+		# Lateral launch phase - no thrust
 		rotation = initial_facing_direction.angle()
 	
 	# Convert to pixel movement and update position
@@ -178,6 +207,68 @@ func _physics_process(delta):
 	
 	# Notify observers of position update
 	get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
+
+func calculate_basic_guidance_orientation(_delta: float) -> float:
+	if not target_node:
+		return orientation
+	
+	# Calculate intercept point
+	var target_pos = target_node.global_position
+	var target_vel = _get_target_velocity()
+	var intercept_point = calculate_intercept_point(global_position, velocity_mps, target_pos, target_vel)
+	
+	# Point directly at intercept
+	var to_intercept = intercept_point - global_position
+	return to_intercept.angle()
+
+func calculate_multi_angle_guidance_orientation(_delta: float) -> float:
+	if not target_node:
+		return orientation
+	
+	var target_pos = target_node.global_position
+	var target_vel = _get_target_velocity()
+	var to_target = target_pos - global_position
+	var distance_to_target_meters = to_target.length() * WorldSettings.meters_per_pixel
+	
+	# Calculate intercept point
+	var intercept_point = calculate_intercept_point(global_position, velocity_mps, target_pos, target_vel)
+	var to_intercept = intercept_point - global_position
+	
+	# Phase transitions based on distance
+	if distance_to_target_meters < 500.0:
+		arc_phase = 1.0  # Full direct
+	elif distance_to_target_meters < 1500.0:
+		arc_phase = (distance_to_target_meters - 500.0) / 1000.0
+	else:
+		arc_phase = 0.0  # Full arc
+	
+	# Base angle to intercept
+	var intercept_angle = to_intercept.angle()
+	
+	# Apply arc offset
+	var effective_arc_strength = torpedo_type.arc_strength * (1.0 - arc_phase)
+	var angle_offset = desired_approach_angle * effective_arc_strength
+	
+	# CRITICAL: At high speeds, we need to lead the target MORE
+	# Calculate how far off our current velocity is from ideal
+	var velocity_angle = velocity_mps.angle()
+	var ideal_angle = intercept_angle + angle_offset
+	var velocity_error = angle_difference(velocity_angle, ideal_angle)
+	
+	# Point ahead of where we want to go to compensate for momentum
+	# The faster we're going, the more we need to lead
+	var speed_factor = velocity_mps.length() / 1000.0  # Normalize to 1km/s
+	var lead_angle = velocity_error * (0.5 + speed_factor * 0.5)  # Lead by 50-100% of error
+	
+	return ideal_angle + lead_angle
+
+func angle_difference(from: float, to: float) -> float:
+	var diff = to - from
+	while diff > PI:
+		diff -= TAU
+	while diff < -PI:
+		diff += TAU
+	return diff
 
 func is_valid_target(target: Node2D) -> bool:
 	if not target:
@@ -221,184 +312,20 @@ func ignite_engines():
 	if target_node:
 		var to_target = (target_node.global_position - global_position).normalized()
 		previous_los = to_target
-
-func update_smooth_rotation(delta: float):
-	if velocity_mps.length() < 10.0:
-		return
-	
-	target_rotation = velocity_mps.angle()
-	var current_target = lerp_angle(initial_rotation, target_rotation, rotation_progress)
-	var rotation_speed = 3.0 * (1.0 + rotation_progress)
-	rotation = rotate_toward(rotation, current_target, rotation_speed * delta)
-
-func calculate_multi_angle_guidance(_delta: float) -> Vector2:
-	if not engines_ignited or not target_node:
-		return Vector2.ZERO
-	
-	var target_pos = target_node.global_position
-	var to_target = target_pos - global_position
-	var distance_to_target_meters = to_target.length() * WorldSettings.meters_per_pixel
-	
-	# FIXED: More aggressive arc approach
-	# Phase transitions:
-	# - Far away (>1000m): Strong arc
-	# - Medium (500-1000m): Reduce arc  
-	# - Close (<500m): Direct approach
-	if distance_to_target_meters < 500.0:
-		arc_phase = 1.0  # Full direct
-	elif distance_to_target_meters < 1000.0:
-		arc_phase = (1000.0 - distance_to_target_meters) / 500.0  # Gradual transition
-	else:
-		arc_phase = 0.0  # Full arc
-	
-	# FIXED: Create a proper arc trajectory
-	var direct_angle = to_target.angle()
-	
-	# Calculate desired heading based on phase
-	var desired_heading: Vector2
-	
-	if arc_phase < 0.5:  # Still in arc phase
-		# Create perpendicular approach vector
-		var perpendicular = Vector2(-to_target.y, to_target.x).normalized()
-		# Choose direction based on which side we're approaching from
-		if desired_approach_angle > 0:  # Right side approach
-			perpendicular = -perpendicular
-		
-		# Blend between perpendicular and direct based on distance
-		var blend = arc_phase * 2.0  # 0 to 1 during first half of arc_phase
-		desired_heading = perpendicular.lerp(to_target.normalized(), blend)
-	else:  # Transitioning to direct
-		# Direct approach with slight offset
-		var offset_angle = desired_approach_angle * (1.0 - arc_phase)
-		desired_heading = Vector2.from_angle(direct_angle + offset_angle)
-	
-	# Calculate acceleration to achieve desired heading
-	var current_heading = velocity_mps.normalized()
-	var heading_error = desired_heading - current_heading
-	
-	# Strong lateral acceleration for arc
-	var lateral_accel = heading_error * torpedo_type.max_acceleration * 0.8
-	
-	# Forward thrust to maintain speed
-	var forward_accel = current_heading * torpedo_type.max_acceleration * 0.2
-	
-	var total_accel = lateral_accel + forward_accel
-	
-	# Limit to max acceleration
-	if total_accel.length() > torpedo_type.max_acceleration:
-		total_accel = total_accel.normalized() * torpedo_type.max_acceleration
-	
-	return total_accel * guidance_strength
-
-func calculate_smooth_guidance(delta: float) -> Vector2:
-	if not engines_ignited or not target_node:
-		return Vector2.ZERO
-	
-	var pn_command = calculate_proportional_navigation(delta)
-	var direct_command = calculate_direct_intercept(delta)
-	
-	var current_speed = velocity_mps.length()
-	var distance_to_target = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-	
-	var effective_direct_weight = torpedo_type.direct_weight
-	
-	if current_speed < torpedo_type.speed_threshold * 0.5:
-		effective_direct_weight = min(1.0, torpedo_type.direct_weight + 0.4)
-	
-	if distance_to_target < 200.0:
-		effective_direct_weight = min(1.0, torpedo_type.direct_weight + 0.3)
-	
-	var pn_weight = 1.0 - effective_direct_weight
-	var guidance_command = pn_command * pn_weight + direct_command * effective_direct_weight
-	
-	var gentle_steering = Vector2.ZERO
-	if transition_progress < 1.0:
-		var to_target = (target_node.global_position - global_position).normalized()
-		var current_velocity_normalized = velocity_mps.normalized()
-		var perpendicular = Vector2(-current_velocity_normalized.y, current_velocity_normalized.x)
-		var steering_amount = to_target.dot(perpendicular)
-		gentle_steering = perpendicular * steering_amount * torpedo_type.max_acceleration * 0.3
-	
-	var transition_factor = smoothstep(0.0, 1.0, transition_progress)
-	var final_command = lerp(gentle_steering, guidance_command, transition_factor)
-	final_command *= guidance_strength
-	
-	if final_command.length() > torpedo_type.max_acceleration:
-		final_command = final_command.normalized() * torpedo_type.max_acceleration
-	
-	return final_command
-
-func calculate_proportional_navigation(delta: float) -> Vector2:
-	if not target_node:
-		return Vector2.ZERO
-	
-	var target_pos = target_node.global_position
-	var target_vel = _get_target_velocity()
-	
-	var los_vector = target_pos - global_position
-	var range_to_target = los_vector.length()
-	
-	if range_to_target < 1.0:
-		return Vector2.ZERO
-	
-	var los_unit = los_vector / range_to_target
-	
-	var los_rate_vector = Vector2.ZERO
-	if previous_los.length() > 0.1 and delta > 0:
-		var los_change = los_unit - previous_los
-		los_rate_vector = los_change / delta
-	
-	previous_los = los_unit
-	
-	var relative_velocity = target_vel - velocity_mps
-	var closing_velocity = -relative_velocity.dot(los_unit)
-	
-	if closing_velocity <= 0:
-		return Vector2.ZERO
-	
-	var lateral_command = torpedo_type.navigation_constant * closing_velocity
-	var acceleration_command = los_rate_vector * lateral_command
-	
-	return acceleration_command
-
-func calculate_direct_intercept(delta: float) -> Vector2:
-	if not target_node:
-		return Vector2.ZERO
-	
-	var target_pos = target_node.global_position
-	var target_vel = _get_target_velocity()
-	
-	var intercept_point = calculate_intercept_point(global_position, velocity_mps, target_pos, target_vel)
-	
-	var error = intercept_point - global_position
-	var error_magnitude = error.length()
-	
-	if error_magnitude < 1.0:
-		return Vector2.ZERO
-	
-	var proportional = error * torpedo_type.kp
-	integral_error = integral_error * integral_decay + error * delta
-	var integral = integral_error * torpedo_type.ki
-	var derivative = (error - previous_error) / delta * torpedo_type.kd
-	previous_error = error
-	
-	var pid_command = proportional + integral + derivative
-	
-	if pid_command.length() > torpedo_type.max_acceleration:
-		pid_command = pid_command.normalized() * torpedo_type.max_acceleration
-	
-	return pid_command
+		print("Torpedo %s: Engines ignited! Max acceleration: %.1f m/s²" % [torpedo_id, torpedo_type.max_acceleration])
 
 func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, target_pos: Vector2, target_vel: Vector2) -> Vector2:
 	var relative_pos = target_pos - shooter_pos
 	var relative_vel = target_vel - shooter_vel
 	
+	# If target not moving relative to us, aim directly at it
 	if relative_vel.length() < 1.0:
 		return target_pos
 	
-	# Use actual max speed, not unlimited acceleration-based speed
-	var torpedo_speed = min(max_speed_mps, velocity_mps.length() + 50.0)  # Current speed + some acceleration headroom
+	# Use current speed or 80% of max, whichever is higher
+	var torpedo_speed = max(velocity_mps.length(), max_speed_mps * 0.8)
 	
+	# Quadratic equation for intercept
 	var a = relative_vel.dot(relative_vel) - torpedo_speed * torpedo_speed
 	var b = 2.0 * relative_pos.dot(relative_vel)
 	var c = relative_pos.dot(relative_pos)
@@ -406,7 +333,9 @@ func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, targe
 	var discriminant = b * b - 4.0 * a * c
 	
 	if discriminant < 0.0 or abs(a) < 0.01:
-		return target_pos
+		# No intercept solution, aim ahead of target
+		var time_estimate = relative_pos.length() / torpedo_speed
+		return target_pos + target_vel * time_estimate
 	
 	var t1 = (-b + sqrt(discriminant)) / (2.0 * a)
 	var t2 = (-b - sqrt(discriminant)) / (2.0 * a)
@@ -418,9 +347,10 @@ func calculate_intercept_point(shooter_pos: Vector2, shooter_vel: Vector2, targe
 		intercept_time = t1
 	elif t2 > 0:
 		intercept_time = t2
-	
-	if intercept_time <= 0:
-		return target_pos
+	else:
+		# Both solutions negative, aim ahead
+		var time_estimate = relative_pos.length() / torpedo_speed
+		return target_pos + target_vel * time_estimate
 	
 	return target_pos + target_vel * intercept_time
 

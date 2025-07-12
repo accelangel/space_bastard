@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED SPRITE ROTATION
+# Scripts/Entities/Weapons/PDCSystem.gd - FIXED CRASH AND SPRITE ROTATION
 extends Node2D
 class_name PDCSystem
 
@@ -79,17 +79,22 @@ func set_idle_rotation():
 	
 	update_sprite_rotation()
 
-# Validation helper
+# Validation helper - FIXED to handle freed objects safely
 func is_valid_target(target: Node2D) -> bool:
 	if not target:
 		return false
+	# CRITICAL FIX: Check if object is queued for deletion first
 	if not is_instance_valid(target):
 		return false
+	# Additional safety check for freed objects
+	if target.is_queued_for_deletion():
+		return false
+	if not target.is_inside_tree():
+		return false
+	# Now safe to check properties
 	if not target.has_method("mark_for_destruction"):
 		return false
 	if target.get("marked_for_death"):
-		return false
-	if not target.is_inside_tree():
 		return false
 	return true
 
@@ -97,19 +102,18 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# Validate target every frame
-	if not is_valid_target(current_target):
+	# Validate target every frame - FIXED to clear invalid targets safely
+	if current_target != null and not is_valid_target(current_target):
+		# Target has become invalid, clear it
 		current_target = null
 		stop_firing()
 		return
 	
-	# Update target angle continuously while we have a target
+	# Only process if we have a valid target
 	if current_target:
 		update_target_angle()
-	
-	# Rest of PDC logic
-	update_turret_rotation(delta)
-	handle_firing(delta)
+		update_turret_rotation(delta)
+		handle_firing(delta)
 
 func update_turret_rotation(delta):
 	if not rotation_pivot and not sprite:
@@ -172,12 +176,19 @@ func handle_firing(delta):
 		fire_timer = 0.0
 
 func set_target(new_target: Node2D):
+	# FIXED: Extra validation before setting target
+	if new_target != null and not is_valid_target(new_target):
+		print("PDC %s: Attempted to set invalid target, ignoring" % pdc_id)
+		current_target = null
+		stop_firing()
+		return
+	
 	# Direct node reference, no IDs
 	if is_valid_target(new_target):
 		# Only print when actually changing targets
 		if current_target != new_target:
 			var old_name = current_target.get("torpedo_id") if current_target else "none"
-			var new_name = new_target.get("torpedo_id")
+			var new_name = new_target.get("torpedo_id") if new_target else "unknown"
 			print("PDC %s: Target validation SUCCESS (was failing: %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
 			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
 		

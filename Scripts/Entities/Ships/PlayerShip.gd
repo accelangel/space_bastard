@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - WITH MULTI-ANGLE TORPEDO SUPPORT
+# Scripts/Entities/Ships/PlayerShip.gd - WITH FIXED MULTI-ANGLE TORPEDO SUPPORT
 extends Area2D
 class_name PlayerShip
 
@@ -51,9 +51,10 @@ func _ready():
 			var multi_angle_type = TorpedoType.new()
 			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
 			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
-			multi_angle_type.approach_angle_offset = 45.0
-			multi_angle_type.arc_strength = 0.7
+			multi_angle_type.approach_angle_offset = 30.0  # Reduced from 45
+			multi_angle_type.arc_strength = 0.3  # Much lower default
 			multi_angle_type.maintain_offset_distance = 500.0
+			multi_angle_type.navigation_constant = 4.0  # Slightly higher for better tracking
 			torpedo_launcher.set_torpedo_type(multi_angle_type)
 			print("Player ship configured for Multi-Angle torpedoes")
 	
@@ -129,9 +130,10 @@ func toggle_torpedo_type():
 			var multi_angle_type = TorpedoType.new()
 			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
 			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
-			multi_angle_type.approach_angle_offset = 45.0
-			multi_angle_type.arc_strength = 0.7
+			multi_angle_type.approach_angle_offset = 30.0  # Reduced from 45
+			multi_angle_type.arc_strength = 0.3  # Much lower default
 			multi_angle_type.maintain_offset_distance = 500.0
+			multi_angle_type.navigation_constant = 4.0  # Slightly higher for better tracking
 			torpedo_launcher.set_torpedo_type(multi_angle_type)
 		else:
 			var basic_type = TorpedoType.new()

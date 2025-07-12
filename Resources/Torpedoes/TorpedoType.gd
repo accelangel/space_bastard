@@ -29,7 +29,7 @@ enum FlightPattern {
 @export_group("Guidance Parameters")
 @export var navigation_constant: float = 3.0
 @export var direct_weight: float = 0.05
-@export var speed_threshold: float = 200.0
+@export var speed_threshold: float = 200000.0
 
 # Direct intercept PID parameters
 @export_group("PID Settings")
