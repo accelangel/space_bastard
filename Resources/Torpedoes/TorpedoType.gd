@@ -22,7 +22,7 @@ enum FlightPattern {
 # Multi-angle specific settings
 @export_group("Multi-Angle Settings")
 @export var approach_angle_offset: float = 45.0  # Degrees from direct path
-@export var arc_strength: float = 0.7  # How strongly to curve the path
+@export var arc_strength: float = 10  # How strongly to curve the path
 @export var maintain_offset_distance: float = 500.0  # Meters to maintain offset
 
 # Intercept guidance parameters

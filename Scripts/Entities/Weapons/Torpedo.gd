@@ -149,7 +149,7 @@ func _physics_process(delta):
 			TorpedoType.FlightPattern.BASIC:
 				commanded_acceleration = calculate_smooth_guidance(delta)
 			TorpedoType.FlightPattern.MULTI_ANGLE:
-				commanded_acceleration = calculate_multi_angle_guidance(_delta)
+				commanded_acceleration = calculate_multi_angle_guidance(delta)
 			_:
 				commanded_acceleration = calculate_smooth_guidance(delta)
 		
