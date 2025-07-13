@@ -86,12 +86,10 @@ func set_idle_rotation():
 func is_valid_target(target: Node2D) -> bool:
 	if not target:
 		return false
-	# CRITICAL FIX: Check if object is queued for deletion first
+	# CRITICAL FIX: Check if object is freed FIRST before ANY method calls
 	if not is_instance_valid(target):
 		return false
-	# Additional safety check for freed objects
-	if target.is_queued_for_deletion():
-		return false
+	# Only after instance validation can we safely call methods
 	if not target.is_inside_tree():
 		return false
 	# Now safe to check properties
@@ -105,12 +103,17 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive or not enabled:
 		return
 	
-	# Validate target every frame - FIXED to clear invalid targets safely
-	if current_target != null and not is_valid_target(current_target):
-		# Target has become invalid, clear it
-		current_target = null
-		stop_firing()
-		return
+	# CRITICAL FIX: Check instance validity BEFORE passing to any function
+	if current_target != null:
+		if not is_instance_valid(current_target):
+			# Target has been freed, clear it properly
+			set_target(null)
+			return
+		# Now safe to check other validity conditions
+		if not is_valid_target(current_target):
+			# Target has become invalid for other reasons
+			set_target(null)
+			return
 	
 	# Only process if we have a valid target
 	if current_target:
@@ -157,6 +160,11 @@ func calculate_sprite_rotation() -> float:
 		return current_rotation + PI
 
 func handle_firing(delta):
+	# Extra safety check
+	if not current_target or not is_instance_valid(current_target):
+		stop_firing()
+		return
+		
 	if not is_valid_target(current_target):
 		stop_firing()
 		return
@@ -190,8 +198,10 @@ func set_target(new_target: Node2D):
 	if is_valid_target(new_target):
 		# Only print when actually changing targets
 		if current_target != new_target:
-			var old_name = current_target.get("torpedo_id") if current_target else "none"
-			var new_name = new_target.get("torpedo_id") if new_target else "unknown"
+			# Safe property access with validation
+			var old_name = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "none"
+			var new_name = new_target.get("torpedo_id") if new_target and is_instance_valid(new_target) else "unknown"
+			
 			print("PDC %s: Target validation SUCCESS (was %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
 			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
 		
@@ -204,6 +214,10 @@ func set_target(new_target: Node2D):
 		stop_firing()
 
 func update_target_angle():
+	# Extra safety check
+	if not current_target or not is_instance_valid(current_target):
+		return
+		
 	if not is_valid_target(current_target):
 		return
 	
@@ -226,13 +240,19 @@ func update_target_angle():
 	emergency_slew = angle_diff > deg_to_rad(90)
 
 func start_firing():
+	# Extra safety check
+	if not current_target or not is_instance_valid(current_target):
+		return
+		
 	if not is_valid_target(current_target):
 		return
 	
 	if not is_firing:
 		is_firing = true
 		var error = rad_to_deg(get_tracking_error())
-		print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, current_target.get("torpedo_id"), error])
+		# Safe property access
+		var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
+		print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, target_id, error])
 
 func stop_firing():
 	if is_firing:
@@ -247,10 +267,17 @@ func get_tracking_error() -> float:
 	return abs(angle_difference(current_rotation, target_rotation))
 
 func fire_bullet():
-	if not bullet_scene or not is_valid_target(current_target):
+	# Extra safety check
+	if not bullet_scene or not current_target or not is_instance_valid(current_target):
+		return
+		
+	if not is_valid_target(current_target):
 		return
 	
-	print("PDC %s: FIRING at %s" % [pdc_id, current_target.get("torpedo_id")])
+	# Safe property access for target ID
+	var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
+	
+	print("PDC %s: FIRING at %s" % [pdc_id, target_id])
 	
 	var bullet = bullet_scene.instantiate()
 	
@@ -260,8 +287,8 @@ func fire_bullet():
 	
 	# Initialize bullet with full tracking info BEFORE adding to scene
 	var ship_id = parent_ship.get("entity_id") if parent_ship else ""
-	var target_id = current_target.get("torpedo_id") if current_target else ""
-	bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, target_id)
+	var torpedo_target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else ""
+	bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, torpedo_target_id)
 	
 	# Now add to scene (this will call _ready() with proper data)
 	get_tree().root.add_child(bullet)

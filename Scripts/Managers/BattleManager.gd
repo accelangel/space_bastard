@@ -213,39 +213,64 @@ func analyze_and_report_battle():
 	var bullets_fired = 0
 	var torpedoes_intercepted = 0
 	var torpedoes_hit_ships = 0
+	var torpedoes_out_of_bounds = 0
+	var torpedoes_missed_other = 0
 	
 	# Track torpedo outcomes to avoid double counting
-	var torpedo_outcomes = {}  # torpedo_id -> "intercepted" or "hit_ship"
+	var torpedo_outcomes = {}  # torpedo_id -> outcome type
 	
+	# First pass: count spawns
 	for event in events:
 		if event.type == "entity_spawned":
 			if event.entity_type == "torpedo":
 				torpedoes_fired += 1
 			elif event.entity_type == "pdc_bullet":
 				bullets_fired += 1
-		elif event.type == "intercept":
+	
+	# Second pass: track outcomes
+	for event in events:
+		if event.type == "intercept":
 			# Mark torpedo as intercepted
 			if event.has("torpedo_id"):
 				torpedo_outcomes[event.torpedo_id] = "intercepted"
 		elif event.type == "entity_destroyed":
 			if event.entity_type == "torpedo":
 				var torpedo_id = event.entity_id
-				if event.reason == "bullet_impact" and not torpedo_outcomes.has(torpedo_id):
-					torpedo_outcomes[torpedo_id] = "intercepted"
-				elif event.reason == "ship_impact" and not torpedo_outcomes.has(torpedo_id):
-					torpedo_outcomes[torpedo_id] = "hit_ship"
+				# Only count if we haven't already counted this torpedo
+				if not torpedo_outcomes.has(torpedo_id):
+					if event.reason == "bullet_impact":
+						torpedo_outcomes[torpedo_id] = "intercepted"
+					elif event.reason == "ship_impact":
+						torpedo_outcomes[torpedo_id] = "hit_ship"
+					elif event.reason == "out_of_bounds":
+						torpedo_outcomes[torpedo_id] = "out_of_bounds"
+					elif event.reason == "missed_target":
+						torpedo_outcomes[torpedo_id] = "missed"
+					else:
+						torpedo_outcomes[torpedo_id] = "other"
 	
 	# Count final outcomes
 	for outcome in torpedo_outcomes.values():
-		if outcome == "intercepted":
-			torpedoes_intercepted += 1
-		elif outcome == "hit_ship":
-			torpedoes_hit_ships += 1
+		match outcome:
+			"intercepted":
+				torpedoes_intercepted += 1
+			"hit_ship":
+				torpedoes_hit_ships += 1
+			"out_of_bounds":
+				torpedoes_out_of_bounds += 1
+			"missed":
+				torpedoes_missed_other += 1
+	
+	# FIXED: Use actual torpedo count from BattleEventRecorder
+	if event_recorder.has_method("get_actual_torpedo_count"):
+		torpedoes_fired = event_recorder.get_actual_torpedo_count()
 	
 	print("ENGAGEMENT SUMMARY:")
 	print("  Torpedoes Fired: %d" % torpedoes_fired)
 	print("  Torpedoes Intercepted: %d" % torpedoes_intercepted)
 	print("  Torpedoes Hit Ships: %d" % torpedoes_hit_ships)
+	print("  Torpedoes Out of Bounds: %d" % torpedoes_out_of_bounds)
+	print("  Torpedoes Missed (other): %d" % torpedoes_missed_other)
 	
 	var intercept_rate = 0.0
 	if torpedoes_fired > 0:
@@ -275,8 +300,15 @@ func analyze_and_report_battle():
 			])
 	
 	print("\nTACTICAL ASSESSMENT:")
-	if torpedoes_hit_ships == 0 and torpedoes_fired > 0:
+	# FIXED: Proper defense assessment
+	if torpedoes_fired == 0:
+		print("  NO TORPEDOES FIRED - No engagement occurred")
+	elif torpedoes_intercepted == torpedoes_fired:
 		print("  PERFECT DEFENSE - All torpedoes intercepted!")
+	elif torpedoes_hit_ships == 0 and torpedoes_intercepted > 0:
+		print("  SUCCESSFUL DEFENSE - No hits on ship, %d/%d intercepted" % [torpedoes_intercepted, torpedoes_fired])
+	elif torpedoes_hit_ships == 0 and torpedoes_intercepted == 0:
+		print("  LUCKY ESCAPE - All %d torpedoes missed on their own!" % torpedoes_fired)
 	elif intercept_rate >= 90.0:
 		print("  EXCELLENT DEFENSE - %.1f%% intercept rate" % intercept_rate)
 	elif intercept_rate >= 75.0:

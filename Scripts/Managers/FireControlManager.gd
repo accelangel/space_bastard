@@ -1,4 +1,4 @@
-# Scripts/Managers/FireControlManager.gd - FIXED TO NOT SHOOT BEHIND SHIP
+# Scripts/Managers/FireControlManager.gd - FIXED TO NOT SHOOT BEHIND SHIP AND HANDLE FREED OBJECTS
 extends Node2D
 class_name FireControlManager
 
@@ -101,10 +101,12 @@ func get_valid_torpedoes() -> Array:
 func is_valid_combat_entity(entity: Node2D) -> bool:
 	if not entity:
 		return false
+	# CRITICAL: Check instance validity FIRST before accessing ANY properties
 	if not is_instance_valid(entity):
 		return false
 	if not entity.is_inside_tree():
 		return false
+	# Now safe to check properties - use get() instead of has()
 	if entity.get("marked_for_death"):
 		return false
 	if entity.get("faction") == ship_faction:
@@ -112,9 +114,20 @@ func is_valid_combat_entity(entity: Node2D) -> bool:
 	return true
 
 func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
+	# Validate torpedo is still valid before accessing properties
+	if not is_instance_valid(torpedo):
+		return {
+			"is_engageable": false,
+			"time_to_impact": INF,
+			"distance": INF,
+			"distance_meters": INF,
+			"closing_velocity": 0.0,
+			"priority": 0.0
+		}
+	
 	var ship_pos = parent_ship.global_position
 	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = torpedo.get("velocity_mps")
+	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.get("velocity_mps") else Vector2.ZERO
 	
 	# Calculate everything fresh
 	var distance = ship_pos.distance_to(torpedo_pos)
@@ -177,10 +190,18 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	}
 
 func assign_pdcs_immediate(torpedo_list: Array):
-	# Clear all PDC targets first
+	# Clear all PDC targets first - with proper validation
 	for pdc in registered_pdcs.values():
-		if not pdc.is_valid_target(pdc.current_target):
-			pdc.set_target(null)
+		if is_instance_valid(pdc) and pdc.has_method("is_valid_target"):
+			# CRITICAL FIX: Check if target is valid before passing to function
+			if pdc.current_target != null:
+				if not is_instance_valid(pdc.current_target):
+					# Target was freed, clear it directly
+					pdc.current_target = null
+					pdc.stop_firing()
+				elif not pdc.is_valid_target(pdc.current_target):
+					# Target is invalid for other reasons
+					pdc.set_target(null)
 	
 	# Track which PDCs are assigned this frame
 	var assigned_pdcs = {}
@@ -188,6 +209,10 @@ func assign_pdcs_immediate(torpedo_list: Array):
 	# Assign based on current snapshot
 	for torpedo_data in torpedo_list:
 		var torpedo = torpedo_data.node
+		# Extra validation before assignment
+		if not is_instance_valid(torpedo):
+			continue
+			
 		var threat = torpedo_data.threat_data
 		
 		# Skip if all PDCs are busy
@@ -197,20 +222,24 @@ func assign_pdcs_immediate(torpedo_list: Array):
 		# Find best available PDC
 		var best_pdc = find_best_pdc_for_target(torpedo, assigned_pdcs)
 		
-		if best_pdc:
+		if best_pdc and is_instance_valid(best_pdc):
 			best_pdc.set_target(torpedo)
 			assigned_pdcs[best_pdc.pdc_id] = torpedo
 			
 			# Assign second PDC for critical targets
 			if threat.time_to_impact < critical_time_threshold:
 				var second_pdc = find_best_pdc_for_target(torpedo, assigned_pdcs)
-				if second_pdc:
+				if second_pdc and is_instance_valid(second_pdc):
 					second_pdc.set_target(torpedo)
 					assigned_pdcs[second_pdc.pdc_id] = torpedo
 
 func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> Node2D:
 	var best_pdc = null
 	var best_score = -INF
+	
+	# Extra validation
+	if not is_instance_valid(torpedo):
+		return null
 	
 	for pdc_id in registered_pdcs:
 		# Skip if already assigned
@@ -219,9 +248,19 @@ func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> 
 		
 		var pdc = registered_pdcs[pdc_id]
 		
-		# Skip if PDC is already engaged with a valid target
-		if pdc.current_target and pdc.is_valid_target(pdc.current_target):
+		# Validate PDC is still valid
+		if not is_instance_valid(pdc):
 			continue
+		
+		# Skip if PDC is already engaged with a valid target
+		if "current_target" in pdc and pdc.current_target:
+			# CRITICAL FIX: Check instance validity before calling is_valid_target
+			if is_instance_valid(pdc.current_target):
+				if pdc.has_method("is_valid_target") and pdc.is_valid_target(pdc.current_target):
+					continue
+			else:
+				# Target was freed, clear it
+				pdc.current_target = null
 		
 		var score = calculate_pdc_efficiency(pdc, torpedo)
 		if score > best_score:
@@ -231,8 +270,14 @@ func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> 
 	return best_pdc
 
 func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
+	# Validate both objects
+	if not is_instance_valid(pdc) or not is_instance_valid(torpedo):
+		return -1000.0
+	
+	# Safe property access
+	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.get("velocity_mps") else Vector2.ZERO
+	
 	# Calculate angle to intercept point
-	var torpedo_vel = torpedo.get("velocity_mps")
 	var intercept_point = calculate_intercept_point(pdc.get_muzzle_world_position(), torpedo.global_position, torpedo_vel)
 	
 	# FIXED: Check if intercept point is behind ship
@@ -294,12 +339,15 @@ func emergency_stop_all():
 	if debug_enabled:
 		print("FireControl: EMERGENCY STOP ALL")
 	for pdc in registered_pdcs.values():
-		pdc.emergency_stop()
+		if is_instance_valid(pdc) and pdc.has_method("emergency_stop"):
+			pdc.emergency_stop()
 
 func get_debug_info() -> String:
 	var active_pdcs = 0
 	for pdc in registered_pdcs.values():
-		if pdc.current_target:
-			active_pdcs += 1
+		if is_instance_valid(pdc) and "current_target" in pdc and pdc.current_target:
+			# Check if target is still valid before counting
+			if is_instance_valid(pdc.current_target):
+				active_pdcs += 1
 	
 	return "PDCs: %d/%d active" % [active_pdcs, registered_pdcs.size()]
