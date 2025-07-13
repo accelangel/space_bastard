@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3 uid="uid://iolvmgmbu42d"]
+[gd_scene load_steps=8 format=3 uid="uid://iolvmgmbu42d"]
 
 [ext_resource type="Script" path="res://Scripts/Systems/GameCamera.gd" id="1_at0gn"]
 [ext_resource type="PackedScene" uid="uid://ihisk0qiusis" path="res://Scenes/EnemyShip.tscn" id="3_to3xv"]
@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" uid="uid://caeufsiepjyek" path="res://Scenes/PlayerShip.tscn" id="4_k7omc"]
 [ext_resource type="Script" path="res://Scripts/Managers/BattleManager.gd" id="5_gi6eu"]
 [ext_resource type="Script" path="res://Scripts/Systems/BattleEventRecorder.gd" id="6_e5oub"]
+[ext_resource type="PackedScene" uid="uid://bm7h0d3d32r42" path="res://Scenes/ModeSelector.tscn" id="7_dsscj"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -51,3 +52,10 @@ script = ExtResource("5_gi6eu")
 
 [node name="BattleEventRecorder" type="Node" parent="."]
 script = ExtResource("6_e5oub")
+
+[node name="ModeSelector" parent="." instance=ExtResource("7_dsscj")]
+custom_minimum_size = Vector2(100, 100)
+offset_left = -1003.0
+offset_top = -916.0
+offset_right = -134.0
+offset_bottom = -656.0

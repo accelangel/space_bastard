@@ -14,7 +14,7 @@ var inactive_alpha: float = 0.5
 # For click animation
 var click_tween: Tween
 
-signal mode_selected(mode: String)
+signal mode_chosen(mode: String)
 
 func _ready():
 	# Position in top-left
@@ -105,7 +105,7 @@ func start_battle_mode():
 		return
 		
 	mode_selected = true
-	emit_signal("mode_selected", "battle")
+	emit_signal("mode_chosen", "battle")
 	
 	print("\n" + "=".repeat(40))
 	print("    BATTLE MODE STARTED")
@@ -131,7 +131,7 @@ func start_pid_tuning():
 		return
 		
 	mode_selected = true
-	emit_signal("mode_selected", "pid_tuning")
+	emit_signal("mode_chosen", "pid_tuning")
 	
 	fade_ui()
 	
