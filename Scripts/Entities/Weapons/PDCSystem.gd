@@ -277,7 +277,7 @@ func fire_bullet():
 	# Safe property access for target ID
 	var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
 	
-	print("PDC %s: FIRING at %s" % [pdc_id, target_id])
+	# print("PDC %s: FIRING at %s" % [pdc_id, target_id])
 	
 	var bullet = bullet_scene.instantiate()
 	

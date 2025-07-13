@@ -119,10 +119,14 @@ func start_battle():
 	battle_start_time = Time.get_ticks_msec() / 1000.0
 	no_torpedoes_timer = 0.0
 	
-	# Clear event recorder data
+	# FIXED: Don't clear if recording has already started (by first torpedo)
 	if event_recorder:
-		event_recorder.clear_battle_data()
-		event_recorder.start_battle_recording()
+		if event_recorder.has_method("is_recording_active") and event_recorder.is_recording_active():
+			print("BattleManager: Event recorder already active - NOT clearing data")
+		else:
+			print("BattleManager: Starting fresh battle recording")
+			event_recorder.clear_battle_data()
+			event_recorder.start_battle_recording()
 	
 	if reports_enabled:
 		print("=== BATTLE STARTED ===")

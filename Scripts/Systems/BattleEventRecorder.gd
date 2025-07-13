@@ -17,11 +17,55 @@ var pre_battle_entities: Array = []
 # Debug flag
 @export var debug_enabled: bool = false
 
+# Public method to check if recording is active
+func is_recording_active() -> bool:
+	return battle_active
+
 func _ready():
 	# Add to group immediately at start of _ready
 	add_to_group("battle_observers")
 	
 	print("BattleEventRecorder initialized - Pure observer mode")
+	
+	# DEFENSIVE CHECK: Look for any torpedoes that spawned before we were ready
+	call_deferred("check_for_existing_torpedoes")
+
+func check_for_existing_torpedoes():
+	"""Check for any torpedoes that spawned before we were ready to observe them"""
+	var existing_torpedoes = get_tree().get_nodes_in_group("torpedoes")
+	
+	if existing_torpedoes.size() > 0:
+		print("DEBUG: check_for_existing_torpedoes() found %d torpedoes in scene" % existing_torpedoes.size())
+		print("DEBUG: Current battle_events count: %d" % battle_events.size())
+		
+		# Process each torpedo as if we just received its spawn notification
+		for torpedo in existing_torpedoes:
+			if is_instance_valid(torpedo) and not torpedo.get("marked_for_death"):
+				var torpedo_id = get_entity_id(torpedo)
+				
+				# Check if we already have this torpedo recorded
+				var already_recorded = false
+				for event in battle_events:
+					if event.type == "entity_spawned" and event.entity_id == torpedo_id:
+						already_recorded = true
+						break
+				
+				# Also check pre-battle entities
+				if not already_recorded:
+					for event in pre_battle_entities:
+						if event.type == "entity_spawned" and event.entity_id == torpedo_id:
+							already_recorded = true
+							break
+				
+				# Also check if already in entity snapshots
+				if not already_recorded and entity_snapshots.has(torpedo_id):
+					already_recorded = true
+				
+				# Only process if not already recorded
+				if not already_recorded:
+					if debug_enabled:
+						print("BattleEventRecorder: Recording missed torpedo spawn: %s" % torpedo_id)
+					on_entity_spawned(torpedo, "torpedo")
 
 func _physics_process(_delta):
 	frame_counter += 1
@@ -62,11 +106,13 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		pre_battle_entities.append(event)
 		# Auto-start battle on first torpedo
 		if entity_type == "torpedo":
+			print("DEBUG: First torpedo %s triggered battle start" % entity_id)
 			start_battle_recording()
 			# Add all pre-battle entities to the main events array
 			for pre_event in pre_battle_entities:
 				battle_events.append(pre_event)
 			pre_battle_entities.clear()
+			print("DEBUG: Battle events after first torpedo: %d" % battle_events.size())
 	else:
 		battle_events.append(event)
 	
@@ -213,6 +259,7 @@ func record_battle_snapshot():
 func start_battle_recording():
 	# Make idempotent to prevent double-start issues
 	if battle_active:
+		print("DEBUG: start_battle_recording - already active, ignoring")
 		return  # Already recording
 		
 	battle_active = true
@@ -271,6 +318,7 @@ func get_battle_data() -> Dictionary:
 	}
 
 func clear_battle_data():
+	print("DEBUG: clear_battle_data called - clearing %d battle events" % battle_events.size())
 	battle_events.clear()
 	entity_snapshots.clear()
 	pre_battle_entities.clear()
@@ -283,6 +331,7 @@ func get_actual_torpedo_count() -> int:
 	for event in battle_events:
 		if event.type == "entity_spawned" and event.entity_type == "torpedo":
 			torpedo_count += 1
+	print("DEBUG: Found %d torpedo spawn events in battle_events" % torpedo_count)
 	return torpedo_count
 
 # Analysis helpers
