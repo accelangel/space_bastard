@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/EnemyShip.gd - FIXED - NO TORPEDO LAUNCHER
+# Scripts/Entities/Ships/EnemyShip.gd - FIXED WITH MOVEMENT CONTROL
 extends Area2D
 class_name EnemyShip
 
@@ -11,6 +11,9 @@ class_name EnemyShip
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2.ZERO
+
+# NEW: Movement control flag
+var movement_enabled: bool = false
 
 # Identity
 var entity_id: String = ""
@@ -55,27 +58,35 @@ func _ready():
 	# Notify observers of spawn
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "enemy_ship")
 	
-	# Set up test acceleration
-	if test_acceleration:
-		set_acceleration(test_gs)
-		set_movement_direction(test_direction)
-		if debug_enabled:
-			print("EnemyShip starting test acceleration at %.3fG" % test_gs)
+	# NEW: Don't start moving until mode selected
+	if debug_enabled:
+		print("EnemyShip spawned - waiting for mode selection")
 	
 	print("Enemy ship spawned: %s" % entity_id)
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
-		
-	# Update movement
-	var acceleration_vector = movement_direction * acceleration_mps2
-	velocity_mps += acceleration_vector * delta
-	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
-	global_position += velocity_pixels_per_second * delta
+	
+	# NEW: Only move if movement enabled
+	if movement_enabled:
+		# Update movement
+		var acceleration_vector = movement_direction * acceleration_mps2
+		velocity_mps += acceleration_vector * delta
+		var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
+		global_position += velocity_pixels_per_second * delta
 	
 	# Notify sensor systems of our position for immediate state
 	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "enemy_ship", faction)
+
+# NEW: Enable movement when mode selected
+func enable_movement():
+	movement_enabled = true
+	if test_acceleration:
+		set_acceleration(test_gs)
+		set_movement_direction(test_direction)
+		if debug_enabled:
+			print("EnemyShip movement enabled at %.3fG" % test_gs)
 
 func set_movement_direction(new_direction: Vector2):
 	movement_direction = new_direction.normalized()
@@ -93,6 +104,15 @@ func toggle_test_acceleration():
 		set_movement_direction(test_direction)
 	else:
 		set_movement_direction(Vector2.ZERO)
+
+# NEW: Reset function for PID tuning
+func reset_for_pid_cycle():
+	global_position = Vector2(55000, -28000)
+	rotation = -2.35619  # -135 degrees
+	velocity_mps = Vector2.ZERO
+	movement_direction = test_direction
+	if movement_enabled and test_acceleration:
+		set_acceleration(test_gs)
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:

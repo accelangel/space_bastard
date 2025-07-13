@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3 uid="uid://bm7h0d3d32r42"]
+
+[ext_resource type="Script" path="res://Scripts/UI/ModeSelector.gd" id="1_ex0lc"]
+
+[node name="ModeSelector" type="Control"]
+z_index = 100
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_ex0lc")

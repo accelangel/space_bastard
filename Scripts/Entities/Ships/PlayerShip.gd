@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - UPDATED WITH PID TUNING
+# Scripts/Entities/Ships/PlayerShip.gd - FIXED WITH UI INTEGRATION
 extends Area2D
 class_name PlayerShip
 
@@ -9,12 +9,15 @@ class_name PlayerShip
 
 # Torpedo configuration
 @export var use_multi_angle_torpedoes: bool = true
-@export var use_simultaneous_impact: bool = false  # New option
+@export var use_simultaneous_impact: bool = false
 
 # Movement
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2.ZERO
+
+# NEW: Movement control flag
+var movement_enabled: bool = false
 
 # Identity
 var entity_id: String = ""
@@ -34,10 +37,11 @@ var test_gs: float = 1.0
 
 # Auto battle system
 var auto_battle_started: bool = false
-var battle_start_delay: float = 2.0  # Delay before firing torpedoes
+var battle_start_delay: float = 2.0
 var battle_timer: float = 0.0
+var battle_timer_enabled: bool = false  # NEW: Control for battle timer
 
-# PID Tuner reference
+# PID Tuner reference - FIXED
 var pid_tuner: Node = null
 
 # DEBUG CONTROL
@@ -49,9 +53,8 @@ func _ready():
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# Find PID tuner if it exists
-	if Engine.has_singleton("TunerSystem"):
-		pid_tuner = Engine.get_singleton("TunerSystem")
+	# FIXED: Proper autoload access
+	pid_tuner = TunerSystem
 	
 	# Configure torpedo launcher for trajectory type
 	if torpedo_launcher:
@@ -71,12 +74,9 @@ func _ready():
 	# Notify observers of spawn
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "player_ship")
 	
-	# Set up test acceleration
-	if test_acceleration:
-		set_acceleration(test_gs)
-		set_movement_direction(test_direction)
-		if debug_enabled:
-			print("PlayerShip starting test acceleration at %.1fG" % test_gs)
+	# NEW: Don't start test acceleration until mode selected
+	if debug_enabled:
+		print("PlayerShip spawned - waiting for mode selection")
 	
 	print("Player ship spawned: %s" % entity_id)
 
@@ -110,22 +110,38 @@ func get_torpedo_mode_name() -> String:
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
-		
-	# Update movement
-	var acceleration_vector = movement_direction * acceleration_mps2
-	velocity_mps += acceleration_vector * delta
-	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
-	global_position += velocity_pixels_per_second * delta
 	
-	# Auto battle system - start firing torpedoes after delay
-	# But not during PID tuning
-	if not auto_battle_started and (!pid_tuner or !pid_tuner.is_tuning_active()):
+	# NEW: Only move if movement enabled
+	if movement_enabled:
+		# Update movement
+		var acceleration_vector = movement_direction * acceleration_mps2
+		velocity_mps += acceleration_vector * delta
+		var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
+		global_position += velocity_pixels_per_second * delta
+	
+	# NEW: Only run battle timer if enabled
+	if battle_timer_enabled and not auto_battle_started:
 		battle_timer += delta
 		if battle_timer >= battle_start_delay:
 			start_auto_battle()
 	
 	# Notify sensor systems of our position for immediate state
 	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "player_ship", faction)
+
+# NEW: Called by ModeSelector when battle mode chosen
+func start_battle_timer():
+	battle_timer_enabled = true
+	battle_timer = 0.0
+	print("Battle timer started - will fire in %.1f seconds" % battle_start_delay)
+
+# NEW: Enable movement when mode selected
+func enable_movement():
+	movement_enabled = true
+	if test_acceleration:
+		set_acceleration(test_gs)
+		set_movement_direction(test_direction)
+		if debug_enabled:
+			print("PlayerShip movement enabled at %.1fG" % test_gs)
 
 func start_auto_battle():
 	"""Automatically fire torpedoes to start the battle"""
@@ -140,20 +156,16 @@ func _input(event):
 	if marked_for_death or not is_alive:
 		return
 	
-	# SPACE key toggles PID tuning
+	# NEW: Only allow manual actions if movement is enabled
+	if not movement_enabled:
+		return
+	
+	# SPACE key - manual torpedo fire only
 	if event.is_action_pressed("ui_accept"):
-		if pid_tuner:
-			if pid_tuner.is_tuning_active():
-				print("Stopping PID tuning...")
-				pid_tuner.stop_tuning()
-			else:
-				print("Starting PID tuning...")
-				pid_tuner.start_tuning()
-		else:
-			# Normal behavior - manual torpedo fire
-			if !pid_tuner or !pid_tuner.is_tuning_active():
-				print("Manual torpedo launch triggered")
-				fire_torpedoes_at_enemy()
+		# Only allow manual torpedo fire if not in any mode
+		if not battle_timer_enabled and (!pid_tuner or !pid_tuner.is_tuning_active()):
+			print("Manual torpedo launch triggered")
+			fire_torpedoes_at_enemy()
 	
 	# Toggle torpedo type on T key
 	if event.is_action_pressed("ui_text_completion_query"):  # T key
@@ -165,8 +177,8 @@ func _input(event):
 		use_multi_angle_torpedoes = false
 		update_torpedo_launcher_settings()
 		print("Switched to Simultaneous Impact mode")
-		# Only fire if not tuning
-		if !pid_tuner or !pid_tuner.is_tuning_active():
+		# Only fire if appropriate
+		if not battle_timer_enabled and (!pid_tuner or !pid_tuner.is_tuning_active()):
 			fire_torpedoes_at_enemy()
 
 func cycle_torpedo_mode():
@@ -231,6 +243,15 @@ func toggle_test_acceleration():
 		set_movement_direction(test_direction)
 	else:
 		set_movement_direction(Vector2.ZERO)
+
+# NEW: Reset function for PID tuning
+func reset_for_pid_cycle():
+	global_position = Vector2(-64000, 35500)
+	rotation = 0.785398  # 45 degrees
+	velocity_mps = Vector2.ZERO
+	movement_direction = test_direction
+	if movement_enabled and test_acceleration:
+		set_acceleration(test_gs)
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
