@@ -39,7 +39,7 @@ script = ExtResource("1_at0gn")
 texture = ExtResource("3_ucvrg")
 
 [node name="EnemyShip" parent="." instance=ExtResource("3_to3xv")]
-position = Vector2(64000, -35500)
+position = Vector2(60000, -33000)
 rotation = -2.35619
 
 [node name="PlayerShip" parent="." instance=ExtResource("4_k7omc")]

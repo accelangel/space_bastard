@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - WITH FIXED MULTI-ANGLE TORPEDO SUPPORT
+# Scripts/Entities/Ships/PlayerShip.gd - UPDATED FOR NEW TORPEDO SYSTEM
 extends Area2D
 class_name PlayerShip
 
@@ -9,6 +9,7 @@ class_name PlayerShip
 
 # Torpedo configuration
 @export var use_multi_angle_torpedoes: bool = true
+@export var use_simultaneous_impact: bool = false  # New option
 
 # Movement
 var acceleration_mps2: float
@@ -45,18 +46,10 @@ func _ready():
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# Configure torpedo launcher for multi-angle torpedoes
-	if torpedo_launcher and use_multi_angle_torpedoes:
-		if torpedo_launcher.has_method("set_torpedo_type"):
-			var multi_angle_type = TorpedoType.new()
-			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
-			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
-			multi_angle_type.approach_angle_offset = 30.0  # Reduced from 45
-			multi_angle_type.arc_strength = 0.3  # Much lower default
-			multi_angle_type.maintain_offset_distance = 500.0
-			multi_angle_type.navigation_constant = 4.0  # Slightly higher for better tracking
-			torpedo_launcher.set_torpedo_type(multi_angle_type)
-			print("Player ship configured for Multi-Angle torpedoes")
+	# Configure torpedo launcher for trajectory type
+	if torpedo_launcher:
+		update_torpedo_launcher_settings()
+		print("Player ship configured for %s torpedoes" % get_torpedo_mode_name())
 	
 	# Self-identify
 	add_to_group("ships")
@@ -79,6 +72,33 @@ func _ready():
 			print("PlayerShip starting test acceleration at %.1fG" % test_gs)
 	
 	print("Player ship spawned: %s" % entity_id)
+
+func update_torpedo_launcher_settings():
+	"""Update torpedo launcher based on current settings"""
+	if not torpedo_launcher:
+		return
+		
+	if use_simultaneous_impact:
+		torpedo_launcher.use_straight_trajectory = false
+		torpedo_launcher.use_multi_angle_trajectory = false
+		torpedo_launcher.use_simultaneous_impact = true
+	elif use_multi_angle_torpedoes:
+		torpedo_launcher.use_straight_trajectory = false
+		torpedo_launcher.use_multi_angle_trajectory = true
+		torpedo_launcher.use_simultaneous_impact = false
+	else:
+		torpedo_launcher.use_straight_trajectory = true
+		torpedo_launcher.use_multi_angle_trajectory = false
+		torpedo_launcher.use_simultaneous_impact = false
+
+func get_torpedo_mode_name() -> String:
+	"""Get current torpedo mode name for display"""
+	if use_simultaneous_impact:
+		return "Simultaneous Impact"
+	elif use_multi_angle_torpedoes:
+		return "Multi-Angle"
+	else:
+		return "Straight"
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
@@ -105,8 +125,7 @@ func start_auto_battle():
 		return
 		
 	auto_battle_started = true
-	print("Auto-starting battle - firing %s torpedoes" % 
-		("Multi-Angle" if use_multi_angle_torpedoes else "Basic"))
+	print("Auto-starting battle - firing %s torpedoes" % get_torpedo_mode_name())
 	fire_torpedoes_at_enemy()
 
 func _input(event):
@@ -120,28 +139,33 @@ func _input(event):
 	
 	# Toggle torpedo type on T key
 	if event.is_action_pressed("ui_text_completion_query"):  # T key
-		toggle_torpedo_type()
-
-func toggle_torpedo_type():
-	use_multi_angle_torpedoes = !use_multi_angle_torpedoes
+		cycle_torpedo_mode()
 	
-	if torpedo_launcher and torpedo_launcher.has_method("set_torpedo_type"):
-		if use_multi_angle_torpedoes:
-			var multi_angle_type = TorpedoType.new()
-			multi_angle_type.torpedo_name = "Multi-Angle Torpedo"
-			multi_angle_type.flight_pattern = TorpedoType.FlightPattern.MULTI_ANGLE
-			multi_angle_type.approach_angle_offset = 30.0  # Reduced from 45
-			multi_angle_type.arc_strength = 0.3  # Much lower default
-			multi_angle_type.maintain_offset_distance = 500.0
-			multi_angle_type.navigation_constant = 4.0  # Slightly higher for better tracking
-			torpedo_launcher.set_torpedo_type(multi_angle_type)
-		else:
-			var basic_type = TorpedoType.new()
-			basic_type.torpedo_name = "Basic Torpedo"
-			basic_type.flight_pattern = TorpedoType.FlightPattern.BASIC
-			torpedo_launcher.set_torpedo_type(basic_type)
-		
-		print("Switched to %s torpedoes" % ("Multi-Angle" if use_multi_angle_torpedoes else "Basic"))
+	# Test simultaneous impact on S key
+	if event.is_action_pressed("ui_page_down"):  # S key
+		use_simultaneous_impact = true
+		use_multi_angle_torpedoes = false
+		update_torpedo_launcher_settings()
+		print("Switched to Simultaneous Impact mode")
+		fire_torpedoes_at_enemy()
+
+func cycle_torpedo_mode():
+	"""Cycle through torpedo modes: Straight -> Multi-Angle -> Simultaneous -> Straight"""
+	if use_simultaneous_impact:
+		# Switch to Straight
+		use_simultaneous_impact = false
+		use_multi_angle_torpedoes = false
+	elif use_multi_angle_torpedoes:
+		# Switch to Simultaneous
+		use_simultaneous_impact = true
+		use_multi_angle_torpedoes = false
+	else:
+		# Switch to Multi-Angle
+		use_simultaneous_impact = false
+		use_multi_angle_torpedoes = true
+	
+	update_torpedo_launcher_settings()
+	print("Switched to %s torpedoes" % get_torpedo_mode_name())
 
 func fire_torpedoes_at_enemy():
 	if not torpedo_launcher:
@@ -161,7 +185,7 @@ func fire_torpedoes_at_enemy():
 				closest_enemy = ship
 	
 	if closest_enemy:
-		print("Player firing torpedoes at enemy ship")
+		print("Player firing %s torpedoes at enemy ship" % get_torpedo_mode_name())
 		torpedo_launcher.fire_torpedo(closest_enemy)
 	else:
 		print("No enemy ships found to target")
