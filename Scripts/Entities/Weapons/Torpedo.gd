@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED WITH REAL PHYSICS
+# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED WITH NORMALIZED PID
 extends Area2D
 class_name Torpedo
 
@@ -24,10 +24,16 @@ var max_speed_mps: float = 2000.0  # Speed limit for testing (will remove later)
 var max_acceleration: float = 1430.0  # 150G in m/s²
 var max_rotation_rate: float = deg_to_rad(360.0)  # Can turn 360°/second
 
-# PID Controller for velocity error
-var pid_kp: float = 5.0
-var pid_ki: float = 0.5
-var pid_kd: float = 2.0
+# NORMALIZED PID Controller - Works at any speed
+# Default values - will be replaced by tuner
+const DEFAULT_PID_VALUES = {
+	"straight": {"kp": 5.0, "ki": 0.5, "kd": 2.0},
+	"multi_angle": {"kp": 5.0, "ki": 0.5, "kd": 2.0},
+	"simultaneous": {"kp": 5.0, "ki": 0.5, "kd": 2.0}
+}
+
+# Current PID gains (can be updated by tuner)
+var pid_gains: Dictionary = {}
 var integral_error: Vector2 = Vector2.ZERO
 var previous_error: Vector2 = Vector2.ZERO
 var integral_decay: float = 0.95  # Prevent integral windup
@@ -48,6 +54,16 @@ var lateral_launch_distance: float = 80.0  # meters
 var engine_ignition_delay: float = 1.6  # seconds
 var lateral_distance_traveled: float = 0.0
 
+# Miss detection system
+var miss_detection_timer: float = 0.0
+var miss_detection_threshold: float = 2.0  # seconds
+var max_lifetime: float = 30.0  # Maximum torpedo lifetime
+var closest_approach_distance: float = INF
+var has_passed_target: bool = false
+
+# Performance reporting
+var pid_tuner: Node = null
+
 # Debug visualization
 var debug_trail: PackedVector2Array = []
 var max_trail_points: int = 100
@@ -59,6 +75,13 @@ func _ready():
 	
 	birth_time = Time.get_ticks_msec() / 1000.0
 	launch_start_time = birth_time
+	
+	# Initialize PID gains from defaults
+	pid_gains = DEFAULT_PID_VALUES.duplicate(true)
+	
+	# Find PID tuner if it exists
+	if Engine.has_singleton("TunerSystem"):
+		pid_tuner = Engine.get_singleton("TunerSystem")
 	
 	# Add to groups for identification
 	add_to_group("torpedoes")
@@ -121,6 +144,12 @@ func _physics_process(delta):
 	var current_time = Time.get_ticks_msec() / 1000.0
 	var time_since_launch = current_time - launch_start_time
 	
+	# Check lifetime limit
+	if time_since_launch > max_lifetime:
+		report_miss("max_lifetime")
+		mark_for_destruction("max_lifetime")
+		return
+	
 	# Track lateral distance during launch phase
 	if not engines_ignited:
 		var distance_this_frame = velocity_mps.length() * delta
@@ -133,7 +162,8 @@ func _physics_process(delta):
 	
 	# Main physics update
 	if engines_ignited and target_node:
-		update_physics_with_pid(delta)
+		update_physics_with_normalized_pid(delta)
+		check_miss_conditions(delta)
 	
 	# Update position (convert to pixels)
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
@@ -151,26 +181,32 @@ func _physics_process(delta):
 	# Notify observers
 	get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
 
-func update_physics_with_pid(delta: float):
-	"""Main physics update using PID control on velocity error"""
+func update_physics_with_normalized_pid(delta: float):
+	"""Main physics update using normalized PID control"""
 	
 	# Get desired velocity from flight plan
 	var desired_velocity = get_desired_velocity_from_flight_plan()
 	
-	# Calculate velocity error
-	var velocity_error = desired_velocity - velocity_mps
+	# NORMALIZED PID: Divide errors by max speed to make gains speed-independent
+	var velocity_error = (desired_velocity - velocity_mps) / max_speed_mps
 	
-	# PID control on velocity error
+	# Get current PID gains for this trajectory type
+	var gains = get_current_pid_gains()
+	
+	# Normalized PID control
 	integral_error = (integral_error + velocity_error * delta) * integral_decay
 	var derivative_error = (velocity_error - previous_error) / delta
 	previous_error = velocity_error
 	
-	# PID output gives us desired acceleration direction
-	var pid_output = (
-		velocity_error * pid_kp +
-		integral_error * pid_ki +
-		derivative_error * pid_kd
+	# PID output in normalized space
+	var normalized_pid_output = (
+		velocity_error * gains.kp +
+		integral_error * gains.ki +
+		derivative_error * gains.kd
 	)
+	
+	# Convert back to world space
+	var pid_output = normalized_pid_output * max_speed_mps
 	
 	# Desired orientation is in the direction of PID output
 	var desired_orientation = pid_output.angle() if pid_output.length() > 0.1 else orientation
@@ -208,6 +244,71 @@ func update_physics_with_pid(delta: float):
 		print("Torpedo %s: Speed %.1f m/s, Distance %.1f m, Orient error: %.1f°, Plan: %s" % [
 			torpedo_id, speed, distance_to_target, orientation_error, flight_plan_type
 		])
+
+func get_current_pid_gains() -> Dictionary:
+	# Check if tuner has updated gains
+	if pid_tuner and pid_tuner.has_method("get_pid_gains"):
+		var tuner_gains = pid_tuner.get_pid_gains(flight_plan_type)
+		if tuner_gains.size() > 0:
+			return tuner_gains
+	
+	# Otherwise use stored gains
+	return pid_gains.get(flight_plan_type, DEFAULT_PID_VALUES[flight_plan_type])
+
+func update_pid_gains(new_gains: Dictionary):
+	"""Called by PID tuner to update gains"""
+	pid_gains[flight_plan_type] = new_gains
+
+func check_miss_conditions(delta: float):
+	"""Check if torpedo has missed its target"""
+	if not target_node:
+		return
+	
+	# Calculate distance to target
+	var to_target = target_node.global_position - global_position
+	var distance = to_target.length() * WorldSettings.meters_per_pixel
+	
+	# Track closest approach
+	if distance < closest_approach_distance:
+		closest_approach_distance = distance
+		has_passed_target = false
+		miss_detection_timer = 0.0
+	
+	# Check if moving away from target
+	var closing_velocity = velocity_mps.dot(to_target.normalized())
+	
+	if closing_velocity < 0 and distance > 50.0:  # Moving away and more than 50m away
+		if not has_passed_target:
+			has_passed_target = true
+			print("Torpedo %s: Passed target, distance %.1f m" % [torpedo_id, distance])
+		
+		miss_detection_timer += delta
+		
+		if miss_detection_timer >= miss_detection_threshold:
+			report_miss("overshot")
+			mark_for_destruction("missed_target")
+
+func report_miss(reason: String):
+	"""Report miss to PID tuner for analysis"""
+	if pid_tuner and pid_tuner.has_method("report_torpedo_miss"):
+		var miss_data = {
+			"torpedo_id": torpedo_id,
+			"flight_plan_type": flight_plan_type,
+			"closest_approach": closest_approach_distance,
+			"lifetime": (Time.get_ticks_msec() / 1000.0) - launch_start_time,
+			"reason": reason
+		}
+		pid_tuner.report_torpedo_miss(miss_data)
+
+func report_hit():
+	"""Report successful hit to PID tuner"""
+	if pid_tuner and pid_tuner.has_method("report_torpedo_hit"):
+		var hit_data = {
+			"torpedo_id": torpedo_id,
+			"flight_plan_type": flight_plan_type,
+			"time_to_impact": (Time.get_ticks_msec() / 1000.0) - launch_start_time
+		}
+		pid_tuner.report_torpedo_hit(hit_data)
 
 func get_desired_velocity_from_flight_plan() -> Vector2:
 	"""Get desired velocity based on current flight plan"""
@@ -285,6 +386,7 @@ func check_out_of_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
 		print("Torpedo %s went out of bounds at position %s" % [torpedo_id, global_position])
+		report_miss("out_of_bounds")
 		mark_for_destruction("out_of_bounds")
 
 func mark_for_destruction(reason: String):
@@ -330,6 +432,7 @@ func _on_area_entered(area: Area2D):
 			return
 		
 		print("Torpedo %s hit ship %s" % [torpedo_id, area.get("entity_id")])
+		report_hit()
 		# Torpedo is destroyed, ship survives (testing phase)
 		mark_for_destruction("ship_impact")
 

@@ -1,4 +1,4 @@
-# Scripts/Managers/BattleManager.gd - FIXED BATTLE SUMMARY
+# Scripts/Managers/BattleManager.gd - FIXED BATTLE SUMMARY WITH TUNING SUPPORT
 extends Node
 class_name BattleManager
 
@@ -24,6 +24,9 @@ var event_recorder: BattleEventRecorder
 @export var auto_start_battles: bool = true
 @export var print_detailed_reports: bool = true
 @export var debug_enabled: bool = false
+
+# Tuning support
+var reports_enabled: bool = true
 
 func _ready():
 	# Add to group for easy finding
@@ -121,8 +124,9 @@ func start_battle():
 		event_recorder.clear_battle_data()
 		event_recorder.start_battle_recording()
 	
-	print("=== BATTLE STARTED ===")
-	print("Time: %.2f" % battle_start_time)
+	if reports_enabled:
+		print("=== BATTLE STARTED ===")
+		print("Time: %.2f" % battle_start_time)
 
 func end_battle():
 	if current_phase != BattlePhase.ACTIVE:
@@ -138,16 +142,15 @@ func end_battle():
 	# Emergency stop all combat systems
 	emergency_stop_all_systems()
 	
-	print("=== BATTLE ENDED ===")
-	print("Duration: %.1f seconds" % (battle_end_time - battle_start_time))
+	if reports_enabled:
+		print("=== BATTLE ENDED ===")
+		print("Duration: %.1f seconds" % (battle_end_time - battle_start_time))
 	
-	# FIXED: Always generate battle report if we have event recorder
-	if event_recorder:
+	# FIXED: Always generate battle report if we have event recorder and reports enabled
+	if event_recorder and reports_enabled:
 		# Small delay to ensure all events are recorded
 		await get_tree().create_timer(0.2).timeout
 		analyze_and_report_battle()
-	else:
-		print("ERROR: Cannot generate battle report - no BattleEventRecorder found")
 	
 	# Reset for next battle
 	call_deferred("reset_for_next_battle")
@@ -177,7 +180,8 @@ func emergency_stop_all_systems():
 	for pdc in pdcs:
 		if pdc.has_method("emergency_stop"):
 			pdc.emergency_stop()
-			print("PDC %s: EMERGENCY STOP" % pdc.pdc_id)
+			if reports_enabled:
+				print("PDC %s: EMERGENCY STOP" % pdc.pdc_id)
 	
 	# Stop all fire control managers
 	var fire_controls = get_tree().get_nodes_in_group("fire_control_systems")
@@ -186,8 +190,7 @@ func emergency_stop_all_systems():
 			fc.emergency_stop_all()
 
 func analyze_and_report_battle():
-	if not event_recorder:
-		print("ERROR: No BattleEventRecorder available for analysis")
+	if not event_recorder or not reports_enabled:
 		return
 	
 	var battle_data = event_recorder.get_battle_data()

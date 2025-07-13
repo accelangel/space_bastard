@@ -25,6 +25,9 @@ var emergency_slew: bool = false
 var is_alive: bool = true
 var marked_for_death: bool = false
 
+# Tuning support
+var enabled: bool = true  # Can be disabled during PID tuning
+
 # References
 var parent_ship: Node2D
 var fire_control_manager: Node
@@ -99,7 +102,7 @@ func is_valid_target(target: Node2D) -> bool:
 	return true
 
 func _physics_process(delta):
-	if marked_for_death or not is_alive:
+	if marked_for_death or not is_alive or not enabled:
 		return
 	
 	# Validate target every frame - FIXED to clear invalid targets safely
@@ -189,7 +192,7 @@ func set_target(new_target: Node2D):
 		if current_target != new_target:
 			var old_name = current_target.get("torpedo_id") if current_target else "none"
 			var new_name = new_target.get("torpedo_id") if new_target else "unknown"
-			print("PDC %s: Target validation SUCCESS (was failing: %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
+			print("PDC %s: Target validation SUCCESS (was %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
 			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
 		
 		current_target = new_target

@@ -44,18 +44,21 @@ func discover_pdcs():
 		if child.has_method("get_capabilities") and child.has_method("set_target"):
 			register_pdc(child)
 	
-	print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
+	if debug_enabled:
+		print("FireControlManager initialized with %d PDCs" % registered_pdcs.size())
 
 func register_pdc(pdc_node: Node2D):
 	# Make sure PDC has an ID
 	if not pdc_node.get("pdc_id") or pdc_node.pdc_id == "":
-		print("WARNING: PDC has no ID, skipping registration")
+		if debug_enabled:
+			print("WARNING: PDC has no ID, skipping registration")
 		return
 		
 	var pdc_id = pdc_node.pdc_id
 	registered_pdcs[pdc_id] = pdc_node
 	pdc_node.set_fire_control_manager(self)
-	print("Registered PDC: %s" % pdc_id)
+	if debug_enabled:
+		print("Registered PDC: %s" % pdc_id)
 
 func _physics_process(delta):
 	if not sensor_system:
@@ -68,12 +71,6 @@ func _physics_process(delta):
 	
 	# Get current torpedo snapshot
 	var torpedoes = get_valid_torpedoes()
-	
-	# Print basic status only if debug enabled
-	if debug_enabled and torpedoes.size() > 0:
-		print("FireControl %s: Found %d torpedoes in scene, ship faction: %s" % [
-			parent_ship.name, torpedoes.size(), ship_faction
-		])
 	
 	# Assign PDCs based on current state
 	assign_pdcs_immediate(torpedoes)
@@ -93,20 +90,11 @@ func get_valid_torpedoes() -> Array:
 					"node": torpedo,
 					"threat_data": threat_data
 				})
-			elif debug_enabled and torpedo.faction != ship_faction:
-				# Only print rejection messages if debug is enabled
-				print("FireControl %s: Rejected torpedo %s (faction: %s)" % [
-					parent_ship.name, torpedo.torpedo_id, torpedo.faction
-				])
 	
 	# Sort by priority
 	valid_torpedoes.sort_custom(func(a, b): 
 		return a.threat_data.priority > b.threat_data.priority
 	)
-	
-	# Only print if we found valid torpedoes and debug is enabled
-	if debug_enabled and valid_torpedoes.size() > 0:
-		print("FireControl %s: Found %d valid torpedoes" % [parent_ship.name, valid_torpedoes.size()])
 	
 	return valid_torpedoes
 
@@ -303,7 +291,8 @@ func calculate_intercept_point(shooter_pos: Vector2, target_pos: Vector2, target
 
 func emergency_stop_all():
 	"""Emergency stop all PDCs"""
-	print("FireControl: EMERGENCY STOP ALL")
+	if debug_enabled:
+		print("FireControl: EMERGENCY STOP ALL")
 	for pdc in registered_pdcs.values():
 		pdc.emergency_stop()
 

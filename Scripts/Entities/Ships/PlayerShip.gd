@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - UPDATED FOR NEW TORPEDO SYSTEM
+# Scripts/Entities/Ships/PlayerShip.gd - UPDATED WITH PID TUNING
 extends Area2D
 class_name PlayerShip
 
@@ -37,6 +37,9 @@ var auto_battle_started: bool = false
 var battle_start_delay: float = 2.0  # Delay before firing torpedoes
 var battle_timer: float = 0.0
 
+# PID Tuner reference
+var pid_tuner: Node = null
+
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
 
@@ -45,6 +48,10 @@ func _ready():
 	
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
+	
+	# Find PID tuner if it exists
+	if Engine.has_singleton("TunerSystem"):
+		pid_tuner = Engine.get_singleton("TunerSystem")
 	
 	# Configure torpedo launcher for trajectory type
 	if torpedo_launcher:
@@ -111,7 +118,8 @@ func _physics_process(delta):
 	global_position += velocity_pixels_per_second * delta
 	
 	# Auto battle system - start firing torpedoes after delay
-	if not auto_battle_started:
+	# But not during PID tuning
+	if not auto_battle_started and (!pid_tuner or !pid_tuner.is_tuning_active()):
 		battle_timer += delta
 		if battle_timer >= battle_start_delay:
 			start_auto_battle()
@@ -132,10 +140,20 @@ func _input(event):
 	if marked_for_death or not is_alive:
 		return
 	
-	# Manual fire torpedoes on spacebar (still available for testing)
+	# SPACE key toggles PID tuning
 	if event.is_action_pressed("ui_accept"):
-		print("Manual torpedo launch triggered")
-		fire_torpedoes_at_enemy()
+		if pid_tuner:
+			if pid_tuner.is_tuning_active():
+				print("Stopping PID tuning...")
+				pid_tuner.stop_tuning()
+			else:
+				print("Starting PID tuning...")
+				pid_tuner.start_tuning()
+		else:
+			# Normal behavior - manual torpedo fire
+			if !pid_tuner or !pid_tuner.is_tuning_active():
+				print("Manual torpedo launch triggered")
+				fire_torpedoes_at_enemy()
 	
 	# Toggle torpedo type on T key
 	if event.is_action_pressed("ui_text_completion_query"):  # T key
@@ -147,7 +165,9 @@ func _input(event):
 		use_multi_angle_torpedoes = false
 		update_torpedo_launcher_settings()
 		print("Switched to Simultaneous Impact mode")
-		fire_torpedoes_at_enemy()
+		# Only fire if not tuning
+		if !pid_tuner or !pid_tuner.is_tuning_active():
+			fire_torpedoes_at_enemy()
 
 func cycle_torpedo_mode():
 	"""Cycle through torpedo modes: Straight -> Multi-Angle -> Simultaneous -> Straight"""
@@ -170,6 +190,11 @@ func cycle_torpedo_mode():
 func fire_torpedoes_at_enemy():
 	if not torpedo_launcher:
 		print("No torpedo launcher!")
+		return
+	
+	# Don't fire during tuning
+	if pid_tuner and pid_tuner.is_tuning_active():
+		print("Cannot fire manually during PID tuning")
 		return
 		
 	# Find closest enemy ship
