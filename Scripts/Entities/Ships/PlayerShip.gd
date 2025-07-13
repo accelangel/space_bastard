@@ -48,6 +48,7 @@ var pid_tuner: Node = null
 @export var debug_enabled: bool = false
 
 func _ready():
+	print("[PlayerShip] _ready() called")
 	acceleration_mps2 = acceleration_gs * 9.81
 	
 	# Generate unique ID
@@ -55,11 +56,14 @@ func _ready():
 	
 	# FIXED: Proper autoload access
 	pid_tuner = TunerSystem
+	print("[PlayerShip] PID tuner reference: %s" % ("Found" if pid_tuner else "NOT FOUND"))
 	
 	# Configure torpedo launcher for trajectory type
 	if torpedo_launcher:
 		update_torpedo_launcher_settings()
 		print("Player ship configured for %s torpedoes" % get_torpedo_mode_name())
+	else:
+		print("[PlayerShip] WARNING: No torpedo launcher found!")
 	
 	# Self-identify
 	add_to_group("ships")
@@ -122,7 +126,12 @@ func _physics_process(delta):
 	# NEW: Only run battle timer if enabled
 	if battle_timer_enabled and not auto_battle_started:
 		battle_timer += delta
+		# Add debug print every second
+		if int(battle_timer) != int(battle_timer - delta):
+			print("[PlayerShip] Battle timer: %.1f / %.1f" % [battle_timer, battle_start_delay])
+		
 		if battle_timer >= battle_start_delay:
+			print("[PlayerShip] Battle timer reached threshold, starting auto battle!")
 			start_auto_battle()
 	
 	# Notify sensor systems of our position for immediate state
@@ -130,12 +139,14 @@ func _physics_process(delta):
 
 # NEW: Called by ModeSelector when battle mode chosen
 func start_battle_timer():
+	print("[PlayerShip] Battle timer ENABLED")
 	battle_timer_enabled = true
 	battle_timer = 0.0
 	print("Battle timer started - will fire in %.1f seconds" % battle_start_delay)
 
 # NEW: Enable movement when mode selected
 func enable_movement():
+	print("[PlayerShip] Movement ENABLED")
 	movement_enabled = true
 	if test_acceleration:
 		set_acceleration(test_gs)
@@ -162,10 +173,17 @@ func _input(event):
 	
 	# SPACE key - manual torpedo fire only
 	if event.is_action_pressed("ui_accept"):
+		print("[PlayerShip] SPACE key pressed")
+		print("  battle_timer_enabled: %s" % battle_timer_enabled)
+		print("  pid_tuner exists: %s" % (pid_tuner != null))
+		print("  is_tuning_active: %s" % (pid_tuner.is_tuning_active() if pid_tuner else "N/A"))
+		
 		# Only allow manual torpedo fire if not in any mode
 		if not battle_timer_enabled and (!pid_tuner or !pid_tuner.is_tuning_active()):
-			print("Manual torpedo launch triggered")
+			print("[PlayerShip] Manual torpedo launch triggered")
 			fire_torpedoes_at_enemy()
+		else:
+			print("[PlayerShip] Torpedo launch blocked (in special mode)")
 	
 	# Toggle torpedo type on T key
 	if event.is_action_pressed("ui_text_completion_query"):  # T key

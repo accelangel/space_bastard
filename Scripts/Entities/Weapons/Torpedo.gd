@@ -399,14 +399,21 @@ func mark_for_destruction(reason: String):
 	
 	# Disable immediately
 	set_physics_process(false)
+	
+	# FIXED: Use call_deferred to disable collision shape
 	if has_node("CollisionShape2D"):
-		$CollisionShape2D.disabled = true
+		call_deferred("_disable_collision")
 	
 	# Notify observers
 	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
 	
 	# Safe cleanup
 	queue_free()
+
+# Add this new function to handle deferred collision disabling:
+func _disable_collision():
+	if has_node("CollisionShape2D"):
+		$CollisionShape2D.disabled = true
 
 func _on_area_entered(area: Area2D):
 	if marked_for_death:

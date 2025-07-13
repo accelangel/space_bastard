@@ -100,7 +100,16 @@ func is_valid_target(target: Node2D) -> bool:
 	return true
 
 func _physics_process(delta):
-	if marked_for_death or not is_alive or not enabled:
+	# CRITICAL: Check enabled flag FIRST
+	if not enabled:
+		# If disabled, ensure we're not firing and idle
+		if is_firing:
+			stop_firing()
+		if current_target:
+			current_target = null
+		return
+		
+	if marked_for_death or not is_alive:
 		return
 	
 	# CRITICAL FIX: Check instance validity BEFORE passing to any function

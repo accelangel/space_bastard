@@ -138,3 +138,4 @@ func get_faction() -> String:
 
 func get_entity_id() -> String:
 	return entity_id
+	

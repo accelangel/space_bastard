@@ -75,6 +75,18 @@ func _process(delta):
 	if not tuning_active:
 		return
 	
+	# Debug print every second
+	if Engine.get_physics_frames() % 60 == 0:  # Print once per second
+		var state_name = "UNKNOWN"
+		match cycle_state:
+			CycleState.WAITING: state_name = "WAITING"
+			CycleState.RESETTING: state_name = "RESETTING"
+			CycleState.FIRING: state_name = "FIRING"
+			CycleState.TRACKING: state_name = "TRACKING"
+			CycleState.ANALYZING: state_name = "ANALYZING"
+		
+		print("[PIDTuner] _process running, state: %s, timer: %.1f" % [state_name, state_timer])
+	
 	state_timer += delta
 	
 	match cycle_state:
@@ -104,7 +116,10 @@ func _process(delta):
 			state_timer = 0.0
 
 func start_tuning():
+	print("\n[PIDTuner] start_tuning() called!")
+	
 	if tuning_active:
+		print("[PIDTuner] Already tuning, returning")
 		return
 	
 	print("\n" + "=".repeat(40))
@@ -119,20 +134,26 @@ func start_tuning():
 	consecutive_perfect_cycles = 0
 	tuning_start_time = Time.get_ticks_msec() / 1000.0
 	
+	print("[PIDTuner] Finding game objects...")
 	# Find game objects
 	find_game_objects()
 	
+	print("[PIDTuner] Disabling game systems...")
 	# Disable interfering systems
 	disable_game_systems()
 	
+	print("[PIDTuner] Starting processing...")
 	# Start processing
 	set_process(true)
 	
+	print("[PIDTuner] Starting first cycle...")
 	# Start first cycle
 	start_new_cycle()
 
 func stop_tuning():
+	print("[PIDTuner] stop_tuning() called!")
 	if not tuning_active:
+		print("[PIDTuner] Not currently tuning, returning")
 		return
 	
 	print("\n" + "=".repeat(40))
@@ -143,44 +164,76 @@ func stop_tuning():
 	current_phase = TuningPhase.IDLE
 	set_process(false)
 	
+	print("[PIDTuner] Re-enabling game systems...")
 	# Re-enable game systems
 	enable_game_systems()
 	
+	print("[PIDTuner] Cleaning up field...")
 	# Clean up any remaining torpedoes
 	cleanup_field()
+	
+	print("[PIDTuner] Tuning stopped")
 
 func find_game_objects():
+	print("[PIDTuner] Looking for ships...")
+	
 	# Find ships
 	var player_ships = get_tree().get_nodes_in_group("player_ships")
+	print("[PIDTuner] Found %d player ships" % player_ships.size())
 	if player_ships.size() > 0:
 		player_ship = player_ships[0]
+		print("[PIDTuner] Player ship: %s" % player_ship.name)
 		torpedo_launcher = player_ship.get_node_or_null("TorpedoLauncher")
+		if torpedo_launcher:
+			print("[PIDTuner] Found torpedo launcher")
+		else:
+			print("[PIDTuner] ERROR: No torpedo launcher on player ship!")
+	else:
+		print("[PIDTuner] ERROR: No player ships found!")
 	
 	var enemy_ships = get_tree().get_nodes_in_group("enemy_ships")
+	print("[PIDTuner] Found %d enemy ships" % enemy_ships.size())
 	if enemy_ships.size() > 0:
 		enemy_ship = enemy_ships[0]
+		print("[PIDTuner] Enemy ship: %s" % enemy_ship.name)
+	else:
+		print("[PIDTuner] ERROR: No enemy ships found!")
 	
 	# Find battle manager
 	var managers = get_tree().get_nodes_in_group("battle_managers")
+	print("[PIDTuner] Found %d battle managers" % managers.size())
 	if managers.size() > 0:
 		battle_manager = managers[0]
+		print("[PIDTuner] Battle manager found")
+	else:
+		print("[PIDTuner] WARNING: No battle manager found")
 	
 	if not player_ship or not enemy_ship or not torpedo_launcher:
-		print("ERROR: Cannot find required game objects for tuning")
+		print("[PIDTuner] ERROR: Cannot find required game objects for tuning")
+		print("  player_ship: %s" % ("Found" if player_ship else "MISSING"))
+		print("  enemy_ship: %s" % ("Found" if enemy_ship else "MISSING"))
+		print("  torpedo_launcher: %s" % ("Found" if torpedo_launcher else "MISSING"))
 		stop_tuning()
+		return
+		
+	print("[PIDTuner] All required objects found!")
 
 func disable_game_systems():
+	print("[PIDTuner] Disabling PDCs...")
 	# Disable all PDCs
 	var pdcs = get_tree().get_nodes_in_group("pdcs")
+	print("[PIDTuner] Found %d PDCs to disable" % pdcs.size())
 	for pdc in pdcs:
 		if "enabled" in pdc:
 			pdc.enabled = false
+			print("[PIDTuner] Disabled PDC: %s" % (pdc.pdc_id if "pdc_id" in pdc else "unknown"))
 	
 	# Disable battle reports
 	if battle_manager and "reports_enabled" in battle_manager:
 		battle_manager.reports_enabled = false
+		print("[PIDTuner] Disabled battle reports")
 	
-	print("Game systems disabled for tuning")
+	print("[PIDTuner] Game systems disabled for tuning")
 
 func enable_game_systems():
 	# Re-enable PDCs
@@ -194,6 +247,7 @@ func enable_game_systems():
 		battle_manager.reports_enabled = true
 
 func start_new_cycle():
+	print("\n[PIDTuner] Starting new cycle...")
 	current_cycle += 1
 	cycle_start_time = Time.get_ticks_msec() / 1000.0
 	
@@ -219,42 +273,66 @@ func start_new_cycle():
 	cycle_state = CycleState.RESETTING
 	state_timer = 0.0
 
+# Update the reset_battle_positions() function in PIDTuner.gd:
+
 func reset_battle_positions():
+	print("[PIDTuner] Resetting battle positions...")
 	# Clean up any remaining torpedoes
 	cleanup_field()
 	
 	# Reset player ship
 	if player_ship:
+		print("[PIDTuner] Resetting player ship position")
 		player_ship.global_position = PLAYER_START_POS
 		player_ship.rotation = PLAYER_START_ROT
 		if "velocity_mps" in player_ship:
 			player_ship.velocity_mps = Vector2.ZERO
+		# Call ship's reset function if it has one
+		if player_ship.has_method("reset_for_pid_cycle"):
+			player_ship.reset_for_pid_cycle()
+		print("  Position: %s, Rotation: %.2f" % [player_ship.global_position, player_ship.rotation])
+	else:
+		print("[PIDTuner] ERROR: No player ship to reset!")
 	
 	# Reset enemy ship
 	if enemy_ship:
+		print("[PIDTuner] Resetting enemy ship position")
 		enemy_ship.global_position = ENEMY_START_POS
 		enemy_ship.rotation = ENEMY_START_ROT
 		if "velocity_mps" in enemy_ship:
 			enemy_ship.velocity_mps = Vector2.ZERO
+		# Call ship's reset function if it has one
+		if enemy_ship.has_method("reset_for_pid_cycle"):
+			enemy_ship.reset_for_pid_cycle()
+		print("  Position: %s, Rotation: %.2f" % [enemy_ship.global_position, enemy_ship.rotation])
+	else:
+		print("[PIDTuner] ERROR: No enemy ship to reset!")
 
 func cleanup_field():
+	print("[PIDTuner] Cleaning up field...")
 	# Remove all torpedoes
 	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+	print("[PIDTuner] Found %d torpedoes to remove" % torpedoes.size())
 	for torpedo in torpedoes:
 		if is_instance_valid(torpedo):
 			torpedo.queue_free()
 	
 	# Remove all bullets (shouldn't be any, but just in case)
 	var bullets = get_tree().get_nodes_in_group("bullets")
+	print("[PIDTuner] Found %d bullets to remove" % bullets.size())
 	for bullet in bullets:
 		if is_instance_valid(bullet):
 			bullet.queue_free()
 
 func fire_torpedo_volley():
+	print("[PIDTuner] fire_torpedo_volley() called")
 	print("Firing volley...")
 	
 	if not torpedo_launcher or not enemy_ship:
-		print("ERROR: Missing launcher or target")
+		print("[PIDTuner] ERROR: Missing launcher (%s) or target (%s)" % [
+			"Found" if torpedo_launcher else "MISSING",
+			"Found" if enemy_ship else "MISSING"
+		])
 		return
 	
 	# Set the correct trajectory type on the launcher

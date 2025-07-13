@@ -133,25 +133,33 @@ func start_pid_tuning():
 	mode_selected = true
 	emit_signal("mode_chosen", "pid_tuning")
 	
+	print("\n[ModeSelector] PID Tuning Mode clicked")
+	
 	fade_ui()
 	
 	# Enable ship movement
 	var ships = get_tree().get_nodes_in_group("ships")
+	print("[ModeSelector] Found %d ships to enable movement" % ships.size())
 	for ship in ships:
 		if ship.has_method("enable_movement"):
 			ship.enable_movement()
 	
 	# Disable PDCs on enemy ships
 	var pdcs = get_tree().get_nodes_in_group("pdcs")
+	print("[ModeSelector] Found %d total PDCs" % pdcs.size())
 	for pdc in pdcs:
 		var parent = pdc.get_parent()
 		if parent and parent.is_in_group("enemy_ships"):
 			pdc.enabled = false
-			print("Disabled PDC: %s" % pdc.pdc_id)
+			print("[ModeSelector] Disabled PDC: %s" % pdc.pdc_id)
 	
 	# Start PID tuning
+	print("[ModeSelector] Checking for TunerSystem...")
 	if TunerSystem:
+		print("[ModeSelector] TunerSystem found, calling start_tuning()")
 		TunerSystem.start_tuning()
+	else:
+		print("[ModeSelector] ERROR: TunerSystem not found!")
 
 func fade_ui():
 	# Fade both labels to inactive state
