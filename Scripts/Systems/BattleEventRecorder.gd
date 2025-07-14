@@ -103,17 +103,17 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		"entity_type": entity_type,
 		"entity_id": entity_id,
 		"position": entity.global_position,
-		"faction": entity.get("faction") if entity.has("faction") else "unknown"
+		"faction": entity.get("faction") if "faction" in entity else "unknown"
 	}
 	
 	# Special tracking for bullets
-	if entity_type == "pdc_bullet" and entity.has("source_pdc_id"):
+	if entity_type == "pdc_bullet" and "source_pdc_id" in entity:
 		event["source_pdc"] = entity.source_pdc_id
-		if entity.has("target_id"):
+		if "target_id" in entity:
 			event["target_id"] = entity.target_id
 	
 	# Special tracking for torpedoes
-	if entity_type == "torpedo" and entity.has("source_ship_id"):
+	if entity_type == "torpedo" and "source_ship_id" in entity:
 		event["source_ship"] = entity.source_ship_id
 	
 	# Don't auto-start on first torpedo if not in battle mode
@@ -308,13 +308,13 @@ func stop_battle_recording():
 
 # Helper functions
 func get_entity_id(entity: Node2D) -> String:
-	if entity.has("torpedo_id"):
+	if "torpedo_id" in entity:
 		return entity.torpedo_id
-	elif entity.has("bullet_id"):
+	elif "bullet_id" in entity:
 		return entity.bullet_id
-	elif entity.has("pdc_id"):
+	elif "pdc_id" in entity:
 		return entity.pdc_id
-	elif entity.has("entity_id"):
+	elif "entity_id" in entity:
 		return entity.entity_id
 	else:
 		return "unknown_%d" % entity.get_instance_id()

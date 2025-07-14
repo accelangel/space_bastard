@@ -234,7 +234,7 @@ func fire_torpedoes_at_enemy():
 	var closest_distance = INF
 	
 	for ship in enemy_ships:
-		if ship.has("is_alive") and ship.is_alive:
+		if "is_alive" in ship and ship.is_alive:
 			var distance = global_position.distance_to(ship.global_position)
 			if distance < closest_distance:
 				closest_distance = distance

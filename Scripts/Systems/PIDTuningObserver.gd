@@ -64,7 +64,7 @@ func on_entity_dying(entity: Node2D, reason: String):
 			miss_reasons[reason] += 1
 			
 			# Get closest approach distance if available
-			if entity.has("closest_approach_distance"):
+			if "closest_approach_distance" in entity:
 				event["closest_approach"] = entity.closest_approach_distance
 		
 		current_cycle_events.append(event)

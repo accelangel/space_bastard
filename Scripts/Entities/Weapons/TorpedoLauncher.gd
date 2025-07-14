@@ -113,10 +113,10 @@ func fire_torpedo(target: Node2D, count: int = -1):
 	# Always fire full volley (8 torpedoes)
 	count = min(TORPEDOES_PER_VOLLEY, total_ready)
 	
-	print("\n=== FIRING TORPEDO VOLLEY ===")
-	print("Mode: %s" % get_trajectory_mode_name())
-	print("Target: %s" % target.name)
-	print("Torpedoes: %d" % count)
+	#print("\n=== FIRING TORPEDO VOLLEY ===")
+	#print("Mode: %s" % get_trajectory_mode_name())
+	#print("Target: %s" % target.name)
+	#print("Torpedoes: %d" % count)
 	
 	# Clear any pending launches
 	launch_queue.clear()
@@ -266,8 +266,8 @@ func _launch_single_torpedo(launch_data: Dictionary):
 	get_tree().root.add_child(torpedo)
 	torpedo.global_position = parent_ship.global_position + side_offset + tube_offset
 	
-	if debug_enabled:
-		print("Launched torpedo %d/%d: %s" % [current_volley_count, launch_queue.size() + current_volley_count, torpedo.torpedo_id])
+	#if debug_enabled:
+		#print("Launched torpedo %d/%d: %s" % [current_volley_count, launch_queue.size() + current_volley_count, torpedo.torpedo_id])
 
 func on_tube_reloaded(tube_id: String):
 	if tube_id.begins_with("port"):

@@ -37,7 +37,7 @@ func _ready():
 	
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
-		if parent_ship.has("faction"):
+		if "faction" in parent_ship:
 			ship_faction = parent_ship.faction
 		# Defer PDC discovery to ensure they're initialized
 		call_deferred("discover_pdcs")
@@ -68,7 +68,7 @@ func discover_pdcs():
 
 func register_pdc(pdc_node: Node2D):
 	# Make sure PDC has an ID
-	if not pdc_node.has("pdc_id") or pdc_node.pdc_id == "":
+	if not ("pdc_id" in pdc_node) or pdc_node.pdc_id == "":
 		if debug_enabled:
 			print("WARNING: PDC has no ID, skipping registration")
 		return
@@ -300,7 +300,7 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 		return -1000.0
 	
 	# Safe property access
-	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.has("velocity_mps") else Vector2.ZERO
+	var torpedo_vel = torpedo.get("velocity_mps") if "velocity_mps" in torpedo else Vector2.ZERO
 	
 	# Calculate angle to intercept point
 	var intercept_point = calculate_intercept_point(pdc.get_muzzle_world_position(), torpedo.global_position, torpedo_vel)

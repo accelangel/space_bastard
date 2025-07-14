@@ -20,9 +20,9 @@ var launcher_ship: Node2D
 # PHYSICS STATE - REAL SINGLE-AXIS THRUST
 var velocity_mps: Vector2 = Vector2.ZERO  # Current actual velocity in m/s
 var orientation: float = 0.0  # Direction torpedo is pointing (radians)
-var max_speed_mps: float = 2000.0  # Speed limit for testing (will remove later)
+var max_speed_mps: float = 10000.0  # Speed limit for testing (will remove later)
 var max_acceleration: float = 1430.0  # 150G in m/s²
-var max_rotation_rate: float = deg_to_rad(360.0)  # Can turn 360°/second
+var max_rotation_rate: float = deg_to_rad(720.0)  # Can turn 360°/second
 
 # NORMALIZED PID Controller - Works at any speed
 # Default values - will be replaced by tuner
@@ -126,9 +126,9 @@ func _ready():
 	var target_name = "none"
 	if target_node:
 		target_name = target_node.name
-	print("Torpedo %s launched - Plan: %s, Target: %s" % [
-		torpedo_id, flight_plan_type, target_name
-	])
+	#print("Torpedo %s launched - Plan: %s, Target: %s" % [
+		#torpedo_id, flight_plan_type, target_name
+	#])
 
 func _physics_process(delta):
 	# Validate we're still alive
@@ -241,9 +241,9 @@ func update_physics_with_normalized_pid(delta: float):
 		var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 0.1 else 0.0
 		var orientation_error = rad_to_deg(abs(angle_difference(orientation, velocity_angle)))
 		
-		print("Torpedo %s: Speed %.1f m/s, Distance %.1f m, Orient error: %.1f°, Plan: %s" % [
-			torpedo_id, speed, distance_to_target, orientation_error, flight_plan_type
-		])
+		#print("Torpedo %s: Speed %.1f m/s, Distance %.1f m, Orient error: %.1f°, Plan: %s" % [
+			#torpedo_id, speed, distance_to_target, orientation_error, flight_plan_type
+		#])
 
 func get_current_pid_gains() -> Dictionary:
 	# Check if tuner has updated gains
@@ -280,7 +280,7 @@ func check_miss_conditions(delta: float):
 	if closing_velocity < 0 and distance > 50.0:  # Moving away and more than 50m away
 		if not has_passed_target:
 			has_passed_target = true
-			print("Torpedo %s: Passed target, distance %.1f m" % [torpedo_id, distance])
+			#print("Torpedo %s: Passed target, distance %.1f m" % [torpedo_id, distance])
 		
 		miss_detection_timer += delta
 		
@@ -356,7 +356,7 @@ func should_ignite_engines(time_since_launch: float) -> bool:
 
 func ignite_engines():
 	engines_ignited = true
-	print("Torpedo %s: Engines ignited! Flight plan: %s" % [torpedo_id, flight_plan_type])
+	#print("Torpedo %s: Engines ignited! Flight plan: %s" % [torpedo_id, flight_plan_type])
 
 func get_target_velocity() -> Vector2:
 	if not target_node:
@@ -385,7 +385,7 @@ func is_valid_target(target: Node2D) -> bool:
 func check_out_of_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
-		print("Torpedo %s went out of bounds at position %s" % [torpedo_id, global_position])
+		#print("Torpedo %s went out of bounds at position %s" % [torpedo_id, global_position])
 		report_miss("out_of_bounds")
 		mark_for_destruction("out_of_bounds")
 
@@ -438,7 +438,7 @@ func _on_area_entered(area: Area2D):
 		if area.get("faction") == faction:
 			return
 		
-		print("Torpedo %s hit ship %s" % [torpedo_id, area.get("entity_id")])
+		#print("Torpedo %s hit ship %s" % [torpedo_id, area.get("entity_id")])
 		report_hit()
 		# Torpedo is destroyed, ship survives (testing phase)
 		mark_for_destruction("ship_impact")
