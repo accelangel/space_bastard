@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/EnemyShip.gd - FIXED WITH MOVEMENT CONTROL
+# Scripts/Entities/Ships/EnemyShip.gd - Updated with Reset Functions
 extends Area2D
 class_name EnemyShip
 
@@ -12,7 +12,7 @@ var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2.ZERO
 
-# NEW: Movement control flag
+# Movement control flag
 var movement_enabled: bool = false
 
 # Identity
@@ -58,7 +58,7 @@ func _ready():
 	# Notify observers of spawn
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "enemy_ship")
 	
-	# NEW: Don't start moving until mode selected
+	# Don't start moving until mode selected
 	if debug_enabled:
 		print("EnemyShip spawned - waiting for mode selection")
 	
@@ -68,7 +68,7 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# NEW: Only move if movement enabled
+	# Only move if movement enabled
 	if movement_enabled:
 		# Update movement
 		var acceleration_vector = movement_direction * acceleration_mps2
@@ -79,7 +79,7 @@ func _physics_process(delta):
 	# Notify sensor systems of our position for immediate state
 	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "enemy_ship", faction)
 
-# NEW: Enable movement when mode selected
+# Enable movement when mode selected
 func enable_movement():
 	movement_enabled = true
 	if test_acceleration:
@@ -105,12 +105,29 @@ func toggle_test_acceleration():
 	else:
 		set_movement_direction(Vector2.ZERO)
 
-# NEW: Reset function for PID tuning
+# Reset functions for PID tuning
 func reset_for_pid_cycle():
-	global_position = Vector2(55000, -28000)
+	global_position = Vector2(60000, -33000)  # Actual position from scene
 	rotation = -2.35619  # -135 degrees
 	velocity_mps = Vector2.ZERO
 	movement_direction = test_direction
+	if movement_enabled and test_acceleration:
+		set_acceleration(test_gs)
+
+func force_reset_physics():
+	"""Force physics state reset for PID tuning"""
+	velocity_mps = Vector2.ZERO
+	movement_direction = test_direction
+	
+	# Force physics server to update position
+	if has_method("_integrate_forces"):
+		PhysicsServer2D.body_set_state(
+			get_rid(),
+			PhysicsServer2D.BODY_STATE_TRANSFORM,
+			Transform2D(rotation, global_position)
+		)
+	
+	# Re-enable test acceleration
 	if movement_enabled and test_acceleration:
 		set_acceleration(test_gs)
 
@@ -138,4 +155,3 @@ func get_faction() -> String:
 
 func get_entity_id() -> String:
 	return entity_id
-	

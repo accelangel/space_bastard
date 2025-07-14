@@ -1,4 +1,4 @@
-# Scripts/Systems/BattleEventRecorder.gd - FIXED TORPEDO COUNT
+# Scripts/Systems/BattleEventRecorder.gd - Mode-Aware Version
 extends Node
 class_name BattleEventRecorder
 
@@ -22,13 +22,24 @@ func is_recording_active() -> bool:
 	return battle_active
 
 func _ready():
+	# Subscribe to mode changes
+	GameMode.mode_changed.connect(_on_mode_changed)
+	
 	# Add to group immediately at start of _ready
 	add_to_group("battle_observers")
 	
 	print("BattleEventRecorder initialized - Pure observer mode")
 	
-	# DEFENSIVE CHECK: Look for any torpedoes that spawned before we were ready
+	# Look for any torpedoes that spawned before we were ready
 	call_deferred("check_for_existing_torpedoes")
+
+func _on_mode_changed(new_mode: GameMode.Mode):
+	if new_mode != GameMode.Mode.BATTLE:
+		# Stop any active recording
+		if battle_active:
+			stop_battle_recording()
+		# Clear data when leaving battle mode
+		clear_battle_data()
 
 func check_for_existing_torpedoes():
 	"""Check for any torpedoes that spawned before we were ready to observe them"""
@@ -76,6 +87,10 @@ func _physics_process(_delta):
 
 # Observer interface - called by entities
 func on_entity_spawned(entity: Node2D, entity_type: String):
+	# Only record during battle mode
+	if not GameMode.is_battle_mode():
+		return
+	
 	var entity_id = get_entity_id(entity)
 	
 	if debug_enabled:
@@ -88,20 +103,25 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		"entity_type": entity_type,
 		"entity_id": entity_id,
 		"position": entity.global_position,
-		"faction": entity.faction if "faction" in entity else "unknown"
+		"faction": entity.get("faction") if entity.has("faction") else "unknown"
 	}
 	
 	# Special tracking for bullets
-	if entity_type == "pdc_bullet" and "source_pdc_id" in entity:
+	if entity_type == "pdc_bullet" and entity.has("source_pdc_id"):
 		event["source_pdc"] = entity.source_pdc_id
-		if "target_id" in entity:
+		if entity.has("target_id"):
 			event["target_id"] = entity.target_id
 	
 	# Special tracking for torpedoes
-	if entity_type == "torpedo" and "source_ship_id" in entity:
+	if entity_type == "torpedo" and entity.has("source_ship_id"):
 		event["source_ship"] = entity.source_ship_id
 	
-	# FIXED: If battle hasn't started yet, store in pre-battle array
+	# Don't auto-start on first torpedo if not in battle mode
+	if not battle_active and entity_type == "torpedo":
+		if not GameMode.is_battle_mode():
+			return
+	
+	# If battle hasn't started yet, store in pre-battle array
 	if not battle_active:
 		pre_battle_entities.append(event)
 		# Auto-start battle on first torpedo
@@ -127,6 +147,10 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 	}
 
 func on_entity_dying(entity: Node2D, reason: String):
+	# Only record during battle mode
+	if not GameMode.is_battle_mode():
+		return
+	
 	var entity_id = get_entity_id(entity)
 	var entity_type = get_entity_type(entity)
 	
@@ -179,8 +203,8 @@ func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 		"type": "intercept",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
 		"frame": frame_counter,
-		"bullet_id": bullet.bullet_id if "bullet_id" in bullet else "",
-		"torpedo_id": torpedo.torpedo_id if "torpedo_id" in torpedo else "",
+		"bullet_id": bullet.get("bullet_id") if bullet.has("bullet_id") else "",
+		"torpedo_id": torpedo.get("torpedo_id") if torpedo.has("torpedo_id") else "",
 		"pdc_id": pdc_id,
 		"position": bullet.global_position,
 		"distance_to_ship": 0.0
@@ -189,7 +213,7 @@ func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 	# Calculate distance to ship
 	var pdc_nodes = get_tree().get_nodes_in_group("pdcs")
 	for pdc in pdc_nodes:
-		if pdc.pdc_id == pdc_id:
+		if pdc.get("pdc_id") == pdc_id:
 			var ship = pdc.get_parent()
 			if ship:
 				event["distance_to_ship"] = bullet.global_position.distance_to(ship.global_position) * WorldSettings.meters_per_pixel
@@ -200,15 +224,15 @@ func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 func on_pdc_fired(pdc: Node2D, target: Node2D):
 	if debug_enabled:
 		var target_id = get_entity_id(target) if target else "none"
-		print("BattleRecorder: PDC %s fired at %s" % [pdc.pdc_id, target_id])
+		print("BattleRecorder: PDC %s fired at %s" % [pdc.get("pdc_id"), target_id])
 		
 	var event = {
 		"type": "pdc_fired",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
 		"frame": frame_counter,
-		"pdc_id": pdc.pdc_id,
+		"pdc_id": pdc.get("pdc_id"),
 		"target_id": "",
-		"mount_position": pdc.mount_position
+		"mount_position": pdc.get("mount_position")
 	}
 	
 	if target:
@@ -237,7 +261,7 @@ func record_battle_snapshot():
 	# Count active PDCs
 	var pdcs = get_tree().get_nodes_in_group("pdcs")
 	for pdc in pdcs:
-		if pdc.current_target and pdc.is_firing:
+		if is_instance_valid(pdc) and pdc.get("current_target") and pdc.get("is_firing"):
 			active_pdcs += 1
 	
 	var snapshot = {
@@ -284,13 +308,13 @@ func stop_battle_recording():
 
 # Helper functions
 func get_entity_id(entity: Node2D) -> String:
-	if "torpedo_id" in entity:
+	if entity.has("torpedo_id"):
 		return entity.torpedo_id
-	elif "bullet_id" in entity:
+	elif entity.has("bullet_id"):
 		return entity.bullet_id
-	elif "pdc_id" in entity:
+	elif entity.has("pdc_id"):
 		return entity.pdc_id
-	elif "entity_id" in entity:
+	elif entity.has("entity_id"):
 		return entity.entity_id
 	else:
 		return "unknown_%d" % entity.get_instance_id()

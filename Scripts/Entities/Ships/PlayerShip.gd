@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - FIXED WITH UI INTEGRATION
+# Scripts/Entities/Ships/PlayerShip.gd - Updated with Reset Functions
 extends Area2D
 class_name PlayerShip
 
@@ -16,7 +16,7 @@ var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2.ZERO
 
-# NEW: Movement control flag
+# Movement control flag
 var movement_enabled: bool = false
 
 # Identity
@@ -39,9 +39,9 @@ var test_gs: float = 1.0
 var auto_battle_started: bool = false
 var battle_start_delay: float = 2.0
 var battle_timer: float = 0.0
-var battle_timer_enabled: bool = false  # NEW: Control for battle timer
+var battle_timer_enabled: bool = false
 
-# PID Tuner reference - FIXED
+# PID Tuner reference
 var pid_tuner: Node = null
 
 # DEBUG CONTROL
@@ -54,9 +54,10 @@ func _ready():
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# FIXED: Proper autoload access
-	pid_tuner = TunerSystem
-	print("[PlayerShip] PID tuner reference: %s" % ("Found" if pid_tuner else "NOT FOUND"))
+	# Get PID tuner reference
+	if Engine.has_singleton("TunerSystem"):
+		pid_tuner = Engine.get_singleton("TunerSystem")
+		print("[PlayerShip] PID tuner reference: %s" % ("Found" if pid_tuner else "NOT FOUND"))
 	
 	# Configure torpedo launcher for trajectory type
 	if torpedo_launcher:
@@ -78,7 +79,7 @@ func _ready():
 	# Notify observers of spawn
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "player_ship")
 	
-	# NEW: Don't start test acceleration until mode selected
+	# Don't start test acceleration until mode selected
 	if debug_enabled:
 		print("PlayerShip spawned - waiting for mode selection")
 	
@@ -115,7 +116,7 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# NEW: Only move if movement enabled
+	# Only move if movement enabled
 	if movement_enabled:
 		# Update movement
 		var acceleration_vector = movement_direction * acceleration_mps2
@@ -123,7 +124,7 @@ func _physics_process(delta):
 		var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
 		global_position += velocity_pixels_per_second * delta
 	
-	# NEW: Only run battle timer if enabled
+	# Only run battle timer if enabled
 	if battle_timer_enabled and not auto_battle_started:
 		battle_timer += delta
 		# Add debug print every second
@@ -137,14 +138,14 @@ func _physics_process(delta):
 	# Notify sensor systems of our position for immediate state
 	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "player_ship", faction)
 
-# NEW: Called by ModeSelector when battle mode chosen
+# Called by ModeSelector when battle mode chosen
 func start_battle_timer():
 	print("[PlayerShip] Battle timer ENABLED")
 	battle_timer_enabled = true
 	battle_timer = 0.0
 	print("Battle timer started - will fire in %.1f seconds" % battle_start_delay)
 
-# NEW: Enable movement when mode selected
+# Enable movement when mode selected
 func enable_movement():
 	print("[PlayerShip] Movement ENABLED")
 	movement_enabled = true
@@ -167,7 +168,7 @@ func _input(event):
 	if marked_for_death or not is_alive:
 		return
 	
-	# NEW: Only allow manual actions if movement is enabled
+	# Only allow manual actions if movement is enabled
 	if not movement_enabled:
 		return
 	
@@ -233,7 +234,7 @@ func fire_torpedoes_at_enemy():
 	var closest_distance = INF
 	
 	for ship in enemy_ships:
-		if ship.get("is_alive") and ship.is_alive:
+		if ship.has("is_alive") and ship.is_alive:
 			var distance = global_position.distance_to(ship.global_position)
 			if distance < closest_distance:
 				closest_distance = distance
@@ -262,12 +263,29 @@ func toggle_test_acceleration():
 	else:
 		set_movement_direction(Vector2.ZERO)
 
-# NEW: Reset function for PID tuning
+# Reset functions for PID tuning
 func reset_for_pid_cycle():
 	global_position = Vector2(-64000, 35500)
 	rotation = 0.785398  # 45 degrees
 	velocity_mps = Vector2.ZERO
 	movement_direction = test_direction
+	if movement_enabled and test_acceleration:
+		set_acceleration(test_gs)
+
+func force_reset_physics():
+	"""Force physics state reset for PID tuning"""
+	velocity_mps = Vector2.ZERO
+	movement_direction = test_direction
+	
+	# Force physics server to update position
+	if has_method("_integrate_forces"):
+		PhysicsServer2D.body_set_state(
+			get_rid(),
+			PhysicsServer2D.BODY_STATE_TRANSFORM,
+			Transform2D(rotation, global_position)
+		)
+	
+	# Re-enable test acceleration
 	if movement_enabled and test_acceleration:
 		set_acceleration(test_gs)
 

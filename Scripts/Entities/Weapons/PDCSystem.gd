@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - FIXED CRASH AND SPRITE ROTATION
+# Scripts/Entities/Weapons/PDCSystem.gd - Mode-Aware Version
 extends Node2D
 class_name PDCSystem
 
@@ -39,6 +39,9 @@ var muzzle_point: Marker2D
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
 func _ready():
+	# Subscribe to mode changes
+	GameMode.mode_changed.connect(_on_mode_changed)
+	
 	# Generate ID if not provided
 	if pdc_id == "":
 		pdc_id = "pdc_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
@@ -57,7 +60,25 @@ func _ready():
 	
 	set_idle_rotation()
 	
+	# Set initial state based on current mode
+	_configure_for_mode(GameMode.current_mode)
+	
 	print("PDC initialized: %s at position %s" % [pdc_id, mount_position])
+
+func _on_mode_changed(new_mode: GameMode.Mode):
+	_configure_for_mode(new_mode)
+
+func _configure_for_mode(mode: GameMode.Mode):
+	match mode:
+		GameMode.Mode.BATTLE:
+			enabled = true
+			print("PDC %s: Enabled for Battle Mode" % pdc_id)
+		GameMode.Mode.PID_TUNING:
+			enabled = false
+			emergency_stop()
+			print("PDC %s: Disabled for PID Tuning Mode" % pdc_id)
+		_:
+			enabled = false
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -82,11 +103,11 @@ func set_idle_rotation():
 	
 	update_sprite_rotation()
 
-# Validation helper - FIXED to handle freed objects safely
+# Validation helper
 func is_valid_target(target: Node2D) -> bool:
 	if not target:
 		return false
-	# CRITICAL FIX: Check if object is freed FIRST before ANY method calls
+	# Check if object is freed FIRST before ANY method calls
 	if not is_instance_valid(target):
 		return false
 	# Only after instance validation can we safely call methods
@@ -100,9 +121,8 @@ func is_valid_target(target: Node2D) -> bool:
 	return true
 
 func _physics_process(delta):
-	# CRITICAL: Check enabled flag FIRST
-	if not enabled:
-		# If disabled, ensure we're not firing and idle
+	# CRITICAL: Check both enabled flag AND game mode
+	if not enabled or not GameMode.is_battle_mode():
 		if is_firing:
 			stop_firing()
 		if current_target:
@@ -112,7 +132,7 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# CRITICAL FIX: Check instance validity BEFORE passing to any function
+	# Check instance validity BEFORE passing to any function
 	if current_target != null:
 		if not is_instance_valid(current_target):
 			# Target has been freed, clear it properly
@@ -196,7 +216,11 @@ func handle_firing(delta):
 		fire_timer = 0.0
 
 func set_target(new_target: Node2D):
-	# FIXED: Extra validation before setting target
+	# CRITICAL: Check enabled flag FIRST
+	if not enabled:
+		return
+	
+	# Extra validation before setting target
 	if new_target != null and not is_valid_target(new_target):
 		print("PDC %s: Attempted to set invalid target, ignoring" % pdc_id)
 		current_target = null
@@ -286,24 +310,20 @@ func fire_bullet():
 	# Safe property access for target ID
 	var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
 	
-	# print("PDC %s: FIRING at %s" % [pdc_id, target_id])
-	
 	var bullet = bullet_scene.instantiate()
 	
-	# FIXED: Set bullet properties BEFORE adding to scene tree
-	# This ensures the BattleEventRecorder gets correct data when _ready() is called
+	# Set bullet properties BEFORE adding to scene tree
 	bullet.global_position = get_muzzle_world_position()
 	
 	# Initialize bullet with full tracking info BEFORE adding to scene
 	var ship_id = parent_ship.get("entity_id") if parent_ship else ""
 	var torpedo_target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else ""
-	bullet.initialize_bullet(parent_ship.faction, pdc_id, ship_id, torpedo_target_id)
+	bullet.initialize_bullet(parent_ship.get("faction"), pdc_id, ship_id, torpedo_target_id)
 	
 	# Now add to scene (this will call _ready() with proper data)
 	get_tree().root.add_child(bullet)
 	
-	# FIXED: Use PDC rotation to determine firing direction
-	# Current rotation is ship-relative, convert to world angle
+	# Use PDC rotation to determine firing direction
 	var world_angle = current_rotation + parent_ship.rotation
 	var fire_direction = Vector2.from_angle(world_angle)
 	

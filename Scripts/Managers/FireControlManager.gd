@@ -1,4 +1,4 @@
-# Scripts/Managers/FireControlManager.gd - FIXED TO NOT SHOOT BEHIND SHIP AND HANDLE FREED OBJECTS
+# Scripts/Managers/FireControlManager.gd - Mode-Aware Version
 extends Node2D
 class_name FireControlManager
 
@@ -27,17 +27,36 @@ var update_timer: float = 0.0
 @export var debug_enabled: bool = false
 
 func _ready():
+	# Subscribe to mode changes
+	GameMode.mode_changed.connect(_on_mode_changed)
+	
+	# Start with physics disabled
+	set_physics_process(false)
+	
 	parent_ship = get_parent()
 	
 	if parent_ship:
 		sensor_system = parent_ship.get_node_or_null("SensorSystem")
-		if "faction" in parent_ship:
+		if parent_ship.has("faction"):
 			ship_faction = parent_ship.faction
 		# Defer PDC discovery to ensure they're initialized
 		call_deferred("discover_pdcs")
 	
 	# Add to groups
 	add_to_group("fire_control_systems")
+	
+	print("FireControlManager initialized on %s - waiting for mode selection" % parent_ship.name)
+
+func _on_mode_changed(new_mode: GameMode.Mode):
+	var should_process = (new_mode == GameMode.Mode.BATTLE)
+	set_physics_process(should_process)
+	
+	if not should_process:
+		# Emergency stop all PDCs
+		emergency_stop_all()
+		print("FireControlManager disabled on %s" % parent_ship.name)
+	else:
+		print("FireControlManager enabled on %s" % parent_ship.name)
 
 func discover_pdcs():
 	for child in parent_ship.get_children():
@@ -49,7 +68,7 @@ func discover_pdcs():
 
 func register_pdc(pdc_node: Node2D):
 	# Make sure PDC has an ID
-	if not pdc_node.get("pdc_id") or pdc_node.pdc_id == "":
+	if not pdc_node.has("pdc_id") or pdc_node.pdc_id == "":
 		if debug_enabled:
 			print("WARNING: PDC has no ID, skipping registration")
 		return
@@ -61,6 +80,11 @@ func register_pdc(pdc_node: Node2D):
 		print("Registered PDC: %s" % pdc_id)
 
 func _physics_process(delta):
+	# Extra safety check
+	if not GameMode.is_battle_mode():
+		set_physics_process(false)
+		return
+	
 	if not sensor_system:
 		return
 	
@@ -127,7 +151,7 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	
 	var ship_pos = parent_ship.global_position
 	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.get("velocity_mps") else Vector2.ZERO
+	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.has("velocity_mps") else Vector2.ZERO
 	
 	# Calculate everything fresh
 	var distance = ship_pos.distance_to(torpedo_pos)
@@ -137,7 +161,7 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	var to_ship = (ship_pos - torpedo_pos).normalized()
 	var closing_velocity = torpedo_vel.dot(to_ship) if torpedo_vel else 0.0
 	
-	# FIXED: Check if torpedo is behind ship and moving away
+	# Check if torpedo is behind ship and moving away
 	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
 	var to_torpedo = (torpedo_pos - ship_pos).normalized()
 	var is_behind = ship_forward.dot(to_torpedo) < -0.5  # More than 90 degrees behind
@@ -193,12 +217,13 @@ func assign_pdcs_immediate(torpedo_list: Array):
 	# Clear all PDC targets first - with proper validation
 	for pdc in registered_pdcs.values():
 		if is_instance_valid(pdc) and pdc.has_method("is_valid_target"):
-			# CRITICAL FIX: Check if target is valid before passing to function
-			if pdc.current_target != null:
+			# Check if target is valid before passing to function
+			if pdc.get("current_target") != null:
 				if not is_instance_valid(pdc.current_target):
 					# Target was freed, clear it directly
 					pdc.current_target = null
-					pdc.stop_firing()
+					if pdc.has_method("stop_firing"):
+						pdc.stop_firing()
 				elif not pdc.is_valid_target(pdc.current_target):
 					# Target is invalid for other reasons
 					pdc.set_target(null)
@@ -253,8 +278,8 @@ func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> 
 			continue
 		
 		# Skip if PDC is already engaged with a valid target
-		if "current_target" in pdc and pdc.current_target:
-			# CRITICAL FIX: Check instance validity before calling is_valid_target
+		if pdc.has("current_target") and pdc.current_target:
+			# Check instance validity before calling is_valid_target
 			if is_instance_valid(pdc.current_target):
 				if pdc.has_method("is_valid_target") and pdc.is_valid_target(pdc.current_target):
 					continue
@@ -275,12 +300,12 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 		return -1000.0
 	
 	# Safe property access
-	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.get("velocity_mps") else Vector2.ZERO
+	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.has("velocity_mps") else Vector2.ZERO
 	
 	# Calculate angle to intercept point
 	var intercept_point = calculate_intercept_point(pdc.get_muzzle_world_position(), torpedo.global_position, torpedo_vel)
 	
-	# FIXED: Check if intercept point is behind ship
+	# Check if intercept point is behind ship
 	var ship_pos = parent_ship.global_position
 	var ship_forward = Vector2.UP.rotated(parent_ship.rotation)
 	var to_intercept = intercept_point - ship_pos
@@ -302,11 +327,12 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 		required_ship_angle += TAU
 	
 	# Calculate rotation needed
-	var current_angle = pdc.current_rotation
+	var current_angle = pdc.get("current_rotation") if pdc.has("current_rotation") else 0.0
 	var rotation_needed = abs(pdc.angle_difference(current_angle, required_ship_angle))
 	
 	# Factor in rotation time
-	var rotation_time = rotation_needed / deg_to_rad(pdc.turret_rotation_speed)
+	var rotation_speed = pdc.get("turret_rotation_speed") if pdc.has("turret_rotation_speed") else 360.0
+	var rotation_time = rotation_needed / deg_to_rad(rotation_speed)
 	
 	# Score based on how quickly PDC can engage
 	var score = 1.0 / (rotation_time + 0.1)
@@ -345,7 +371,7 @@ func emergency_stop_all():
 func get_debug_info() -> String:
 	var active_pdcs = 0
 	for pdc in registered_pdcs.values():
-		if is_instance_valid(pdc) and "current_target" in pdc and pdc.current_target:
+		if is_instance_valid(pdc) and pdc.has("current_target") and pdc.current_target:
 			# Check if target is still valid before counting
 			if is_instance_valid(pdc.current_target):
 				active_pdcs += 1

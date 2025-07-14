@@ -1,4 +1,4 @@
-# Scripts/Managers/BattleManager.gd - FIXED BATTLE SUMMARY WITH TUNING SUPPORT
+# Scripts/Managers/BattleManager.gd - Mode-Aware Version
 extends Node
 class_name BattleManager
 
@@ -29,13 +29,31 @@ var event_recorder: BattleEventRecorder
 var reports_enabled: bool = true
 
 func _ready():
+	# Subscribe to mode changes
+	GameMode.mode_changed.connect(_on_mode_changed)
+	
+	# Start with processing disabled
+	set_process(false)
+	
 	# Add to group for easy finding
 	add_to_group("battle_managers")
 	
 	# Use deferred call to find BattleEventRecorder after all nodes are ready
 	call_deferred("find_battle_event_recorder")
 	
-	print("BattleManager initialized - Battle orchestration ready")
+	print("BattleManager initialized - waiting for mode selection")
+
+func _on_mode_changed(new_mode: GameMode.Mode):
+	var should_process = (new_mode == GameMode.Mode.BATTLE)
+	set_process(should_process)
+	
+	if not should_process:
+		# Reset to clean state
+		current_phase = BattlePhase.PRE_BATTLE
+		no_torpedoes_timer = 0.0
+		print("BattleManager disabled - not in Battle Mode")
+	else:
+		print("BattleManager enabled - Battle Mode active")
 
 func find_battle_event_recorder():
 	"""Find BattleEventRecorder after all nodes have called _ready()"""
@@ -62,6 +80,10 @@ func _process(delta):
 			pass
 
 func check_for_battle_start():
+	# CRITICAL: Don't start battles outside of battle mode
+	if not GameMode.is_battle_mode():
+		return
+	
 	# Check if any torpedoes exist
 	var torpedo_count = get_current_torpedo_count()
 	
@@ -84,7 +106,7 @@ func get_active_pdc_count() -> int:
 	var active_count = 0
 	
 	for pdc in pdcs:
-		if pdc.current_target and pdc.is_firing:
+		if is_instance_valid(pdc) and pdc.get("current_target") and pdc.get("is_firing"):
 			active_count += 1
 	
 	return active_count
@@ -119,7 +141,7 @@ func start_battle():
 	battle_start_time = Time.get_ticks_msec() / 1000.0
 	no_torpedoes_timer = 0.0
 	
-	# FIXED: Don't clear if recording has already started (by first torpedo)
+	# Don't clear if recording has already started (by first torpedo)
 	if event_recorder:
 		if event_recorder.has_method("is_recording_active") and event_recorder.is_recording_active():
 			print("BattleManager: Event recorder already active - NOT clearing data")
@@ -150,7 +172,7 @@ func end_battle():
 		print("=== BATTLE ENDED ===")
 		print("Duration: %.1f seconds" % (battle_end_time - battle_start_time))
 	
-	# FIXED: Always generate battle report if we have event recorder and reports enabled
+	# Always generate battle report if we have event recorder and reports enabled
 	if event_recorder and reports_enabled:
 		# Small delay to ensure all events are recorded
 		await get_tree().create_timer(0.2).timeout
@@ -185,7 +207,7 @@ func emergency_stop_all_systems():
 		if pdc.has_method("emergency_stop"):
 			pdc.emergency_stop()
 			if reports_enabled:
-				print("PDC %s: EMERGENCY STOP" % pdc.pdc_id)
+				print("PDC %s: EMERGENCY STOP" % pdc.get("pdc_id"))
 	
 	# Stop all fire control managers
 	var fire_controls = get_tree().get_nodes_in_group("fire_control_systems")
@@ -212,7 +234,7 @@ func analyze_and_report_battle():
 	print("Battle Duration: %.1f seconds" % actual_duration)
 	print("")
 	
-	# Count entities - FIXED: Avoid double counting
+	# Count entities
 	var torpedoes_fired = 0
 	var bullets_fired = 0
 	var torpedoes_intercepted = 0
@@ -265,7 +287,7 @@ func analyze_and_report_battle():
 			"missed":
 				torpedoes_missed_other += 1
 	
-	# FIXED: Use actual torpedo count from BattleEventRecorder
+	# Use actual torpedo count from BattleEventRecorder
 	if event_recorder.has_method("get_actual_torpedo_count"):
 		torpedoes_fired = event_recorder.get_actual_torpedo_count()
 	
@@ -304,7 +326,7 @@ func analyze_and_report_battle():
 			])
 	
 	print("\nTACTICAL ASSESSMENT:")
-	# FIXED: Proper defense assessment
+	# Proper defense assessment
 	if torpedoes_fired == 0:
 		print("  NO TORPEDOES FIRED - No engagement occurred")
 	elif torpedoes_intercepted == torpedoes_fired:
@@ -334,7 +356,8 @@ func reset_for_next_battle():
 
 # Public interface
 func manual_start_battle():
-	start_battle()
+	if GameMode.is_battle_mode():
+		start_battle()
 
 func manual_end_battle():
 	if current_phase == BattlePhase.ACTIVE:

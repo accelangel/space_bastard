@@ -341,3 +341,12 @@ func _draw():
 		var starboard_pos = starboard_offset + tube_offset
 		var starboard_ready = reload_timers["starboard_%d" % i] == 0.0
 		draw_circle(starboard_pos, 5, Color.GREEN if starboard_ready else Color.RED)
+
+func reset_all_tubes():
+	"""Reset all tubes to ready state - for PID tuning"""
+	port_tubes_ready = TUBES_PER_SIDE
+	starboard_tubes_ready = TUBES_PER_SIDE
+	for tube_id in reload_timers:
+		reload_timers[tube_id] = 0.0
+	launch_queue.clear()
+	current_volley_count = 0
