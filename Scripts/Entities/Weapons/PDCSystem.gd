@@ -307,9 +307,6 @@ func fire_bullet():
 	if not is_valid_target(current_target):
 		return
 	
-	# Safe property access for target ID
-	var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
-	
 	var bullet = bullet_scene.instantiate()
 	
 	# Set bullet properties BEFORE adding to scene tree

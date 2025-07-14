@@ -14,8 +14,6 @@ var inactive_alpha: float = 0.5
 # For click animation
 var click_tween: Tween
 
-signal mode_chosen(mode: String)
-
 func _ready():
 	# Position in top-left
 	position = Vector2(20, 20)

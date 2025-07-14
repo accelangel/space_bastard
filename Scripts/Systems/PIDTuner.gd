@@ -441,7 +441,7 @@ func is_tuning_active() -> bool:
 	return tuning_active
 
 # Called by torpedoes when they hit
-func report_torpedo_hit(hit_data: Dictionary):
+func report_torpedo_hit(_hit_data: Dictionary):
 	if not tuning_active:
 		return
 	
@@ -449,7 +449,7 @@ func report_torpedo_hit(hit_data: Dictionary):
 	pass
 
 # Called by torpedoes when they miss
-func report_torpedo_miss(miss_data: Dictionary):
+func report_torpedo_miss(_miss_data: Dictionary):
 	if not tuning_active:
 		return
 	

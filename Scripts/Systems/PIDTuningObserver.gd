@@ -10,8 +10,6 @@ var torpedoes_hit: int = 0
 var torpedoes_missed: int = 0
 var miss_reasons: Dictionary = {}
 
-signal cycle_complete(results: Dictionary)
-
 func _ready():
 	add_to_group("battle_observers")
 	GameMode.mode_changed.connect(_on_mode_changed)
