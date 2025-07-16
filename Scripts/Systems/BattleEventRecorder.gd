@@ -1,12 +1,15 @@
-# Scripts/Systems/BattleEventRecorder.gd - Mode-Aware Version
+# Scripts/Systems/BattleEventRecorder.gd - Frame-rate independent version
 extends Node
 class_name BattleEventRecorder
 
 # Pure event recording
 var battle_events: Array = []
-var frame_counter: int = 0
 var battle_start_time: float = 0.0
 var battle_active: bool = false
+
+# Timer-based snapshots (not frame-based)
+var snapshot_timer: float = 0.0
+var snapshot_interval: float = 1.0  # Snapshot every second
 
 # Entity snapshots for analysis
 var entity_snapshots: Dictionary = {}  # entity_id -> last known data
@@ -78,11 +81,13 @@ func check_for_existing_torpedoes():
 						print("BattleEventRecorder: Recording missed torpedo spawn: %s" % torpedo_id)
 					on_entity_spawned(torpedo, "torpedo")
 
-func _physics_process(_delta):
-	frame_counter += 1
+func _physics_process(delta):
+	# Timer-based snapshots instead of frame counting
+	snapshot_timer += delta
 	
 	# Periodic snapshot of battle state
-	if frame_counter % 60 == 0 and battle_active:  # Every second
+	if snapshot_timer >= snapshot_interval and battle_active:
+		snapshot_timer = 0.0
 		record_battle_snapshot()
 
 # Observer interface - called by entities
@@ -99,7 +104,6 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 	var event = {
 		"type": "entity_spawned",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"entity_type": entity_type,
 		"entity_id": entity_id,
 		"position": entity.global_position,
@@ -160,7 +164,6 @@ func on_entity_dying(entity: Node2D, reason: String):
 	var event = {
 		"type": "entity_destroyed",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"entity_type": entity_type,
 		"entity_id": entity_id,
 		"reason": reason,
@@ -186,14 +189,9 @@ func on_entity_dying(entity: Node2D, reason: String):
 	battle_events.append(event)
 
 func on_entity_moved(entity: Node2D, new_position: Vector2):
-	# Only record for performance - every 10th call
-	if Engine.get_physics_frames() % 10 != 0:
-		return
-		
-	var entity_id = get_entity_id(entity)
-		
-	if entity_snapshots.has(entity_id):
-		entity_snapshots[entity_id].last_position = new_position
+	# Timer-based sampling is better than frame-based
+	# This function might be called too frequently, so we ignore it
+	pass
 
 func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 	if debug_enabled:
@@ -202,7 +200,6 @@ func on_intercept(bullet: Node2D, torpedo: Node2D, pdc_id: String):
 	var event = {
 		"type": "intercept",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"bullet_id": bullet.get("bullet_id") if bullet.has("bullet_id") else "",
 		"torpedo_id": torpedo.get("torpedo_id") if torpedo.has("torpedo_id") else "",
 		"pdc_id": pdc_id,
@@ -229,7 +226,6 @@ func on_pdc_fired(pdc: Node2D, target: Node2D):
 	var event = {
 		"type": "pdc_fired",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"pdc_id": pdc.get("pdc_id"),
 		"target_id": "",
 		"mount_position": pdc.get("mount_position")
@@ -267,7 +263,6 @@ func record_battle_snapshot():
 	var snapshot = {
 		"type": "snapshot",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"torpedo_count": torpedo_count,
 		"bullet_count": bullet_count,
 		"active_pdcs": active_pdcs
@@ -288,8 +283,7 @@ func start_battle_recording():
 		
 	battle_active = true
 	battle_start_time = Time.get_ticks_msec() / 1000.0
-	# Don't clear events - we might have pre-battle events
-	frame_counter = 0
+	snapshot_timer = 0.0
 	
 	print("BattleEventRecorder: Battle recording started")
 
@@ -299,7 +293,6 @@ func stop_battle_recording():
 	var event = {
 		"type": "battle_ended",
 		"timestamp": Time.get_ticks_msec() / 1000.0,
-		"frame": frame_counter,
 		"duration": (Time.get_ticks_msec() / 1000.0) - battle_start_time
 	}
 	battle_events.append(event)
@@ -346,7 +339,7 @@ func clear_battle_data():
 	battle_events.clear()
 	entity_snapshots.clear()
 	pre_battle_entities.clear()
-	frame_counter = 0
+	snapshot_timer = 0.0
 	battle_active = false
 
 # Get accurate torpedo count from spawn events

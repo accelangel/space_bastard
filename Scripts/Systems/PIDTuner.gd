@@ -1,4 +1,4 @@
-# Scripts/Systems/PIDTuner.gd - Refactored with Immediate State
+# Scripts/Systems/PIDTuner.gd - Frame-rate independent version
 extends Node
 # Register this as an autoload with the name "TunerSystem"
 
@@ -32,7 +32,7 @@ var torpedo_launcher: Node2D
 
 const PLAYER_START_POS = Vector2(-64000, 35500)
 const PLAYER_START_ROT = 0.785398  # 45 degrees
-const ENEMY_START_POS = Vector2(60000, -33000)  # Actual enemy position from scene
+const ENEMY_START_POS = Vector2(60000, -33000)
 const ENEMY_START_ROT = -2.35619  # -135 degrees
 
 # Cycle management
@@ -51,11 +51,15 @@ var current_gains: Dictionary = {
 }
 
 # Gradient descent parameters
-var learning_rate: float = 0.05
+var learning_rate: float = 0.125  # Increased for 60 FPS
 var best_cost: float = INF
 
 # PID Observer
 var pid_observer: PIDTuningObserver
+
+# Performance monitoring
+var fps_timer: float = 0.0
+var fps_sample_interval: float = 5.0  # Check FPS every 5 seconds
 
 # Debug
 @export var debug_enabled: bool = false
@@ -72,6 +76,7 @@ func _ready():
 	add_child(pid_observer)
 	
 	print("PIDTuner singleton ready")
+	print("Expected physics tick rate: 60 Hz")
 
 func _on_mode_changed(new_mode: GameMode.Mode):
 	if new_mode == GameMode.Mode.PID_TUNING:
@@ -86,6 +91,7 @@ func start_tuning():
 	print("\n" + "=".repeat(40))
 	print("    PID AUTO-TUNING ACTIVE")
 	print("    Phase 1/3: STRAIGHT TRAJECTORY")
+	print("    FPS LOCKED TO 60")
 	print("    Press SPACE to stop")
 	print("=".repeat(40))
 	
@@ -96,6 +102,7 @@ func start_tuning():
 	consecutive_perfect_cycles = 0
 	tuning_start_time = Time.get_ticks_msec() / 1000.0
 	state_timer = 0.0
+	fps_timer = 0.0
 	
 	# Find game objects
 	find_game_objects()
@@ -152,6 +159,14 @@ func _process(delta):
 	if not tuning_active:
 		return
 	
+	# Monitor FPS
+	fps_timer += delta
+	if fps_timer >= fps_sample_interval:
+		fps_timer = 0.0
+		var current_fps = Engine.get_frames_per_second()
+		if abs(current_fps - 60.0) > 2.0:  # Allow 2 FPS variance
+			print("WARNING: FPS drift detected: %.1f (should be 60)" % current_fps)
+	
 	state_timer += delta
 	
 	match tuning_state:
@@ -190,12 +205,14 @@ func prepare_new_cycle():
 	
 	# Get current trajectory type
 	var trajectory_name = get_current_trajectory_name()
+	var stage_name = "learning_to_hit"
 	
-	print("\nCycle %d | Gains: Kp=%.3f, Ki=%.3f, Kd=%.3f" % [
+	print("\nCycle %d | Gains: Kp=%.3f, Ki=%.3f, Kd=%.3f | Stage: %s" % [
 		current_cycle,
 		current_gains[trajectory_name].kp,
 		current_gains[trajectory_name].ki,
-		current_gains[trajectory_name].kd
+		current_gains[trajectory_name].kd,
+		stage_name
 	])
 	
 	print("Resetting positions... Firing volley...")
@@ -291,6 +308,17 @@ func analyze_cycle_results():
 	
 	var result_str = "Result: %d/%d hits" % [results.hits, results.total_fired]
 	
+	# Calculate quality metrics
+	var avg_orientation_quality = results.get("avg_orientation_quality", 0.0)
+	var avg_oscillation_score = results.get("avg_oscillation_score", 0.0)
+	
+	# Add quality metrics to output
+	result_str += " | Orient: %.1f%% (%.1f°)" % [
+		avg_orientation_quality * 100.0,
+		rad_to_deg(results.get("avg_orientation_error", 0.0))
+	]
+	result_str += " | Osc: %.2f" % avg_oscillation_score
+	
 	# Check if perfect volley
 	if results.hits == 8 and results.misses == 0:
 		consecutive_perfect_cycles += 1
@@ -305,16 +333,38 @@ func analyze_cycle_results():
 		# Reset consecutive count
 		consecutive_perfect_cycles = 0
 		result_str += " | IMPERFECT - Resetting count"
+		print(result_str)
 		
 		# Show miss reasons
 		if results.misses > 0:
+			print("  Miss Details:")
 			for reason in results.miss_reasons:
-				result_str += "\n  %s: %d" % [reason, results.miss_reasons[reason]]
+				var count = results.miss_reasons[reason]
+				if reason == "out_of_bounds" and results.has("avg_closest_approach"):
+					print("    %s: %d" % [reason, count])
+					print("    Avg closest approach: %.1f m" % results.avg_closest_approach)
+				else:
+					print("    %s: %d" % [reason, count])
 		
-		print(result_str)
+		# Quality issues detail
+		if avg_orientation_quality < 0.7:
+			print("  Orientation Issues:")
+			print("    Torpedoes not aligned with velocity vector")
+		
+		if avg_oscillation_score > 0.2:
+			print("  Oscillation Issues:")
+			print("    Too much steering oscillation")
 		
 		# Apply gradient descent
 		apply_gradient_descent(results)
+		
+		# FIXED: Now using trajectory_name in output
+		var trajectory_name = get_current_trajectory_name()
+		print("  Trajectory: %s | Cost: %.3f | LR: %.3f" % [
+			trajectory_name, 
+			results.get("cost", 0.0), 
+			learning_rate
+		])
 	
 	print("Next cycle in %.0fs..." % next_cycle_delay)
 	
@@ -325,45 +375,69 @@ func apply_gradient_descent(results: Dictionary):
 	var trajectory_name = get_current_trajectory_name()
 	var gains = current_gains[trajectory_name]
 	
-	# Calculate cost (lower is better)
-	var cost = (1.0 - results.hit_rate) * 100.0
+	# Calculate cost with proper metrics
+	var hit_penalty = (1.0 - results.hit_rate) * 100.0
+	var orientation_penalty = (1.0 - results.get("avg_orientation_quality", 0.0)) * 20.0
+	var oscillation_penalty = results.get("avg_oscillation_score", 0.0) * 50.0
 	
-	# Store best cost for comparison
+	var cost = hit_penalty + orientation_penalty + oscillation_penalty
+	results["cost"] = cost
+	
+	# Track best cost
 	if cost < best_cost:
 		best_cost = cost
-		print("New best cost: %.3f (hit_rate: %.1f%%)" % [cost, results.hit_rate * 100.0])
+		print("New best cost: %.3f" % cost)
 	
-	# Simple gradient estimation based on miss patterns
+	# Gradient estimation based on failure patterns
 	var gradient = {"kp": 0.0, "ki": 0.0, "kd": 0.0}
 	
-	# Heuristic adjustments
-	if results.misses > 0:
-		if results.miss_reasons.has("overshot") or results.miss_reasons.has("missed_target"):
-			gradient.kp = -0.1
-			gradient.kd = 0.05
-		else:
-			gradient.kp = 0.05
-			gradient.ki = 0.01
+	# Main failure drivers
+	if results.miss_reasons.has("out_of_bounds"):
+		# Torpedoes going out of bounds suggests poor tracking
+		print("  Gradient drivers:")
+		print("    - Going out of bounds → increasing aggression")
+		gradient.kp += 0.1  # More aggressive response
+		gradient.ki += 0.05  # Better steady-state tracking
+		gradient.kd -= 0.05  # Less damping
 	
-	# Adaptive learning rate
-	var adaptive_lr = learning_rate
-	if results.hit_rate < 0.5:
-		adaptive_lr *= 2.0
-	elif results.hit_rate > 0.9:
-		adaptive_lr *= 0.5
+	if results.get("avg_orientation_quality", 0.0) < 0.5:
+		print("    - Poor orientation → improving tracking")
+		gradient.kp += 0.05
+		gradient.kd += 0.1  # More stability
+	
+	if results.get("avg_oscillation_score", 0.0) > 0.3:
+		print("    - High oscillation → adjusting damping")
+		gradient.kp -= 0.1  # Less aggressive
+		gradient.kd += 0.05  # More damping
+		gradient.ki -= 0.02  # Reduce integral buildup
+	
+	# Apply gradient with momentum
+	var momentum = 0.9
+	if not has_meta("previous_gradient"):
+		set_meta("previous_gradient", {"kp": 0.0, "ki": 0.0, "kd": 0.0})
+	
+	var prev_gradient = get_meta("previous_gradient")
+	for key in gradient:
+		gradient[key] = momentum * prev_gradient[key] + (1.0 - momentum) * gradient[key]
+	set_meta("previous_gradient", gradient)
 	
 	# Update gains
-	gains.kp += gradient.kp * adaptive_lr
-	gains.ki += gradient.ki * adaptive_lr
-	gains.kd += gradient.kd * adaptive_lr
+	gains.kp += gradient.kp * learning_rate
+	gains.ki += gradient.ki * learning_rate
+	gains.kd += gradient.kd * learning_rate
 	
 	# Clamp to reasonable ranges
-	gains.kp = clamp(gains.kp, 0.1, 10.0)
-	gains.ki = clamp(gains.ki, 0.01, 2.0)
-	gains.kd = clamp(gains.kd, 0.01, 5.0)
+	gains.kp = clamp(gains.kp, 1.0, 20.0)
+	gains.ki = clamp(gains.ki, 0.1, 5.0)
+	gains.kd = clamp(gains.kd, 0.1, 10.0)
 	
-	print("Gradient: ∇[%.3f, %.3f, %.3f] | LR: %.2f | Cost: %.3f" % [
-		gradient.kp, gradient.ki, gradient.kd, adaptive_lr, cost
+	print("  Gain changes: ΔKp=%.4f, ΔKi=%.4f, ΔKd=%.4f" % [
+		gradient.kp * learning_rate,
+		gradient.ki * learning_rate,
+		gradient.kd * learning_rate
+	])
+	print("  Current gains: [Kp=%.3f, Ki=%.3f, Kd=%.3f]" % [
+		gains.kp, gains.ki, gains.kd
 	])
 
 func complete_current_phase():
@@ -375,6 +449,7 @@ func complete_current_phase():
 		current_gains[trajectory_name].ki,
 		current_gains[trajectory_name].kd
 	])
+	print("    Achieved at 60 FPS")
 	print("=".repeat(40))
 	
 	# Move to next phase
@@ -394,6 +469,7 @@ func complete_current_phase():
 	# Reset for next phase
 	current_cycle = 0
 	consecutive_perfect_cycles = 0
+	best_cost = INF
 	
 	# Continue with next phase
 	tuning_state = TuningState.WAITING_BETWEEN_CYCLES
@@ -409,7 +485,7 @@ func complete_tuning():
 	var seconds = int(total_time) % 60
 	
 	print("\n" + "=".repeat(40))
-	print("    PID TUNING COMPLETE")
+	print("    PID TUNING COMPLETE (60 FPS)")
 	print("=".repeat(40))
 	print("Add these values to Torpedo.gd:\n")
 	print("const PID_VALUES = {")
@@ -426,6 +502,7 @@ func complete_tuning():
 	print("Total cycles: %d" % current_cycle)
 	print("Total time: %dm %ds" % [minutes, seconds])
 	print("Perfect streak achieved: %d consecutive volleys per mode" % REQUIRED_PERFECT_CYCLES)
+	print("Tuned at: 60 FPS (locked)")
 	print("=".repeat(40))
 	
 	# Return to NONE mode

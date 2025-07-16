@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/Torpedo.gd - REFACTORED WITH NORMALIZED PID
+# Scripts/Entities/Weapons/Torpedo.gd - Frame-rate independent version
 extends Area2D
 class_name Torpedo
 
@@ -20,16 +20,16 @@ var launcher_ship: Node2D
 # PHYSICS STATE - REAL SINGLE-AXIS THRUST
 var velocity_mps: Vector2 = Vector2.ZERO  # Current actual velocity in m/s
 var orientation: float = 0.0  # Direction torpedo is pointing (radians)
-var max_speed_mps: float = 10000.0  # Speed limit for testing (will remove later)
-var max_acceleration: float = 1430.0  # 150G in m/s²
-var max_rotation_rate: float = deg_to_rad(720.0)  # Can turn 360°/second
+var max_speed_mps: float = 2000.0  # Speed limit for testing (will remove later)
+var max_acceleration: float = 490.5  # 50G in m/s²
+var max_rotation_rate: float = deg_to_rad(1080.0)  # Can turn 360°/second
 
 # NORMALIZED PID Controller - Works at any speed
 # Default values - will be replaced by tuner
 const DEFAULT_PID_VALUES = {
-	"straight": {"kp": 5.0, "ki": 0.5, "kd": 2.0},
-	"multi_angle": {"kp": 5.0, "ki": 0.5, "kd": 2.0},
-	"simultaneous": {"kp": 5.0, "ki": 0.5, "kd": 2.0}
+	"straight": {"kp": 1.5, "ki": 0.05, "kd": 0.3},  # Much lower for high-speed straight intercepts
+	"multi_angle": {"kp": 3.0, "ki": 0.2, "kd": 1.0},  # Lower for multi-angle
+	"simultaneous": {"kp": 3.0, "ki": 0.2, "kd": 1.0}  # Lower for simultaneous
 }
 
 # Current PID gains (can be updated by tuner)
@@ -67,6 +67,12 @@ var pid_tuner: Node = null
 # Debug visualization
 var debug_trail: PackedVector2Array = []
 var max_trail_points: int = 100
+
+# Frame-rate independent timers
+var debug_timer: float = 0.0
+var debug_interval: float = 1.0  # Print every second
+var position_report_timer: float = 0.0
+var position_report_interval: float = 0.167  # Report ~6 times per second
 
 func _ready():
 	# Generate unique ID if not provided
@@ -123,11 +129,11 @@ func _ready():
 	# Notify observers
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "torpedo")
 	
-	var target_name = "none"
+	var _target_name = "none"
 	if target_node:
-		target_name = target_node.name
+		_target_name = target_node.name
 	#print("Torpedo %s launched - Plan: %s, Target: %s" % [
-		#torpedo_id, flight_plan_type, target_name
+		#torpedo_id, flight_plan_type, _target_name
 	#])
 
 func _physics_process(delta):
@@ -178,8 +184,11 @@ func _physics_process(delta):
 	# Update debug trail
 	update_debug_trail()
 	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
+	# Timer-based position reporting (frame-rate independent)
+	position_report_timer += delta
+	if position_report_timer >= position_report_interval:
+		position_report_timer = 0.0
+		get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
 
 func update_physics_with_normalized_pid(delta: float):
 	"""Main physics update using normalized PID control"""
@@ -234,15 +243,17 @@ func update_physics_with_normalized_pid(delta: float):
 	if velocity_mps.length() > max_speed_mps:
 		velocity_mps = velocity_mps.normalized() * max_speed_mps
 	
-	# Debug output every second
-	if Engine.get_physics_frames() % 60 == 0:
-		var distance_to_target = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-		var speed = velocity_mps.length()
+	# Timer-based debug output (frame-rate independent)
+	debug_timer += delta
+	if debug_timer >= debug_interval:
+		debug_timer = 0.0
+		var _distance_to_target = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+		var _speed = velocity_mps.length()
 		var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 0.1 else 0.0
-		var orientation_error = rad_to_deg(abs(angle_difference(orientation, velocity_angle)))
+		var _orientation_error = rad_to_deg(abs(angle_difference(orientation, velocity_angle)))
 		
 		#print("Torpedo %s: Speed %.1f m/s, Distance %.1f m, Orient error: %.1f°, Plan: %s" % [
-			#torpedo_id, speed, distance_to_target, orientation_error, flight_plan_type
+			#torpedo_id, _speed, _distance_to_target, _orientation_error, flight_plan_type
 		#])
 
 func get_current_pid_gains() -> Dictionary:

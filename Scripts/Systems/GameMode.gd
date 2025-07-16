@@ -1,4 +1,4 @@
-# GameMode.gd - Autoload singleton
+# GameMode.gd - Autoload singleton with FPS management
 extends Node
 
 enum Mode {
@@ -9,11 +9,15 @@ enum Mode {
 
 var current_mode: Mode = Mode.NONE
 var mode_start_time: float = 0.0
+var original_max_fps: int = 0  # Store original FPS setting
 
 signal mode_changed(new_mode: Mode)
 
 func _ready():
+	# Store the original FPS setting
+	original_max_fps = Engine.max_fps
 	print("GameMode singleton initialized")
+	print("Original FPS setting: %d" % original_max_fps)
 
 func set_mode(new_mode: Mode):
 	if current_mode == new_mode:
@@ -34,6 +38,24 @@ func set_mode(new_mode: Mode):
 	
 	print("\n" + "=".repeat(50))
 	print("GAME MODE CHANGED: %s -> %s" % [Mode.keys()[old_mode], Mode.keys()[new_mode]])
+	
+	# Handle FPS settings for different modes
+	match new_mode:
+		Mode.PID_TUNING:
+			# Lock to 60 FPS for consistent PID tuning
+			Engine.max_fps = 60
+			Engine.physics_ticks_per_second = 60
+			print("FPS LOCKED TO 60 FOR PID TUNING")
+		Mode.BATTLE:
+			# Restore original FPS for battle mode
+			Engine.max_fps = original_max_fps
+			Engine.physics_ticks_per_second = 60  # Keep physics at 60
+			print("FPS RESTORED TO: %d" % Engine.max_fps)
+		Mode.NONE:
+			# Restore original settings
+			Engine.max_fps = original_max_fps
+			Engine.physics_ticks_per_second = 60
+	
 	print("=".repeat(50) + "\n")
 	
 	# Emit signal for all systems to reconfigure
@@ -67,6 +89,10 @@ func _cleanup_pid_tuning_mode():
 	
 	# Clean up all combat entities
 	_cleanup_all_combat_entities()
+	
+	# Restore original FPS settings
+	Engine.max_fps = original_max_fps
+	print("FPS restored to: %d" % Engine.max_fps)
 
 func _cleanup_all_combat_entities():
 	# Remove all torpedoes

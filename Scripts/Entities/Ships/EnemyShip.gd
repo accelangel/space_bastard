@@ -29,7 +29,7 @@ var pdc_systems: Array = []
 # Test movement
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(0, 1)
-var test_gs: float = 6.0
+var test_gs: float = 1.0
 
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
