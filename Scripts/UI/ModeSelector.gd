@@ -1,4 +1,4 @@
-# Scripts/UI/ModeSelector.gd - Updated for GameMode
+# Scripts/UI/ModeSelector.gd - Updated for center-top positioning
 extends Control
 class_name ModeSelector
 
@@ -15,8 +15,13 @@ var inactive_alpha: float = 0.5
 var click_tween: Tween
 
 func _ready():
-	# Position in top-left
-	position = Vector2(20, 20)
+	# Wait for viewport to be ready
+	await get_tree().process_frame
+	
+	# Position in top-center
+	var window_size = get_window().size
+	var container_width = $VBoxContainer.get_minimum_size().x
+	position = Vector2((window_size.x - container_width) / 2, 20)
 	
 	# Set up labels
 	setup_label(battle_label, "Battle Mode")
@@ -151,3 +156,11 @@ func fade_ui():
 	# Disable mouse interaction
 	battle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pid_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+# Handle window resize
+func _notification(what):
+	if what == NOTIFICATION_RESIZED:
+		# Reposition to stay centered
+		var window_size = get_window().size
+		var container_width = $VBoxContainer.get_minimum_size().x
+		position = Vector2((window_size.x - container_width) / 2, 20)
