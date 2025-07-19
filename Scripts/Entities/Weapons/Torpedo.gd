@@ -135,6 +135,7 @@ func _ready():
 	#print("Torpedo %s launched - Plan: %s, Target: %s" % [
 		#torpedo_id, flight_plan_type, _target_name
 	#])
+	
 
 func _physics_process(delta):
 	# Validate we're still alive
@@ -501,6 +502,16 @@ func get_current_position() -> Vector2:
 func get_predicted_position(time_ahead: float) -> Vector2:
 	# Simple linear prediction for now
 	return global_position + (velocity_mps / WorldSettings.meters_per_pixel) * time_ahead
+
+# Getters for PID tuning observer
+func get_target_node() -> Node2D:
+	return target_node
+
+func get_launch_side() -> int:
+	return launch_side
+
+func get_orientation() -> float:
+	return orientation
 
 # Debug drawing
 func _draw():

@@ -391,6 +391,9 @@ func apply_gradient_descent(results: Dictionary):
 	# Gradient estimation based on failure patterns
 	var gradient = {"kp": 0.0, "ki": 0.0, "kd": 0.0}
 	
+	# Get oscillation score from results
+	var avg_oscillation_score = results.get("avg_oscillation_score", 0.0)
+	
 	# Main failure drivers
 	if results.miss_reasons.has("out_of_bounds"):
 		# Torpedoes going out of bounds suggests poor tracking
@@ -405,7 +408,7 @@ func apply_gradient_descent(results: Dictionary):
 		gradient.kp += 0.05
 		gradient.kd += 0.1  # More stability
 	
-	if results.get("avg_oscillation_score", 0.0) > 0.3:
+	if avg_oscillation_score > 0.3:
 		print("    - High oscillation → adjusting damping")
 		gradient.kp -= 0.1  # Less aggressive
 		gradient.kd += 0.05  # More damping

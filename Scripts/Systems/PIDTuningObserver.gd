@@ -1,4 +1,4 @@
-# Scripts/Systems/PIDTuningObserver.gd - Frame-rate independent observer
+# Scripts/Systems/PIDTuningObserver.gd - With orientation-velocity alignment tracking
 extends Node
 class_name PIDTuningObserver
 
@@ -11,13 +11,18 @@ var torpedoes_missed: int = 0
 var miss_reasons: Dictionary = {}
 
 # Quality tracking
-var orientation_errors: Array = []
+var orientation_errors: Array = []  # During flight
 var oscillation_scores: Array = []
 var closest_approaches: Array = []
+var impact_orientation_errors: Array = []  # At moment of impact
+var impact_positions: Array = []  # For multi-angle and simultaneous analysis
 
 # Timer-based sampling (not frame-based)
 var sample_timer: float = 0.0
 var sample_interval: float = 0.1  # Sample every 0.1 seconds
+
+# Current trajectory type being tested
+var current_trajectory_type: String = ""
 
 func _ready():
 	add_to_group("battle_observers")
@@ -40,7 +45,7 @@ func _process(delta):
 		sample_torpedo_quality()
 
 func sample_torpedo_quality():
-	"""Sample torpedo quality metrics for gradient descent"""
+	"""Sample torpedo quality metrics during flight"""
 	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
 	
 	for torpedo in torpedoes:
@@ -57,7 +62,7 @@ func sample_torpedo_quality():
 			var orientation_error = abs(_angle_difference(orientation, velocity_angle))
 			orientation_errors.append(orientation_error)
 			
-			# Oscillation detection (would need previous orientation stored)
+			# Oscillation detection
 			if torpedo.has_meta("prev_orientation"):
 				var prev_orientation = torpedo.get_meta("prev_orientation")
 				var orientation_change = abs(_angle_difference(orientation, prev_orientation))
@@ -74,7 +79,13 @@ func reset_cycle_data():
 	orientation_errors.clear()
 	oscillation_scores.clear()
 	closest_approaches.clear()
+	impact_orientation_errors.clear()
+	impact_positions.clear()
 	sample_timer = 0.0
+
+func set_trajectory_type(type: String):
+	"""Called by PIDTuner to inform us what trajectory type we're testing"""
+	current_trajectory_type = type
 
 func on_entity_spawned(entity: Node2D, entity_type: String):
 	if not GameMode.is_pid_tuning_mode():
@@ -85,7 +96,8 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		var event = {
 			"type": "torpedo_fired",
 			"torpedo_id": entity.get("torpedo_id"),
-			"timestamp": Time.get_ticks_msec() / 1000.0
+			"timestamp": Time.get_ticks_msec() / 1000.0,
+			"launch_side": entity.get("launch_side")  # Track which side it launched from
 		}
 		current_cycle_events.append(event)
 
@@ -105,6 +117,32 @@ func on_entity_dying(entity: Node2D, reason: String):
 		# Track hits vs misses
 		if reason == "ship_impact":
 			torpedoes_hit += 1
+			
+			# Track orientation-velocity alignment AT IMPACT
+			var velocity = entity.get("velocity_mps")
+			var orientation = entity.get("orientation")
+			
+			if velocity and velocity.length() > 10.0:
+				var velocity_angle = velocity.angle()
+				var orientation_error = abs(_angle_difference(orientation, velocity_angle))
+				impact_orientation_errors.append(orientation_error)
+				event["impact_orientation_error"] = rad_to_deg(orientation_error)
+				
+				# Store impact position for pattern analysis
+				impact_positions.append({
+					"position": entity.global_position,
+					"velocity": velocity,
+					"orientation": orientation,
+					"torpedo_id": entity.get("torpedo_id"),
+					"launch_side": entity.get("launch_side")  # Store which side it came from
+				})
+				
+				# Debug print for bad alignment
+				#if orientation_error > deg_to_rad(10):
+					#print("WARNING: Torpedo %s impact with %.1f° orientation error!" % [
+						#entity.get("torpedo_id"), 
+						#rad_to_deg(orientation_error)
+					#])
 		else:
 			torpedoes_missed += 1
 			if not miss_reasons.has(reason):
@@ -117,6 +155,82 @@ func on_entity_dying(entity: Node2D, reason: String):
 				closest_approaches.append(entity.closest_approach_distance)
 		
 		current_cycle_events.append(event)
+
+func analyze_trajectory_specific_metrics() -> Dictionary:
+	"""Analyze metrics specific to each trajectory type"""
+	var specific_metrics = {}
+	
+	match current_trajectory_type:
+		"multi_angle":
+			# For multi-angle, check if port and starboard groups hit ~90° apart
+			if impact_positions.size() >= 2:
+				var port_impacts = []
+				var starboard_impacts = []
+				
+				# Group impacts by actual launch side
+				for impact in impact_positions:
+					var launch_side = impact.get("launch_side", 0)
+					if launch_side == -1:  # Port side
+						port_impacts.append(impact)
+					elif launch_side == 1:  # Starboard side
+						starboard_impacts.append(impact)
+				
+				# Calculate average impact angles for each group
+				if port_impacts.size() > 0 and starboard_impacts.size() > 0:
+					var port_avg_angle = _calculate_average_impact_angle(port_impacts)
+					var starboard_avg_angle = _calculate_average_impact_angle(starboard_impacts)
+					var separation_angle = abs(_angle_difference(port_avg_angle, starboard_avg_angle))
+					
+					specific_metrics["impact_separation_angle"] = separation_angle
+					specific_metrics["separation_error"] = abs(separation_angle - PI/2)  # Should be 90°
+					specific_metrics["port_count"] = port_impacts.size()
+					specific_metrics["starboard_count"] = starboard_impacts.size()
+		
+		"simultaneous":
+			# For simultaneous, check spacing between impacts in the 160° arc
+			if impact_positions.size() >= 2:
+				var angles = []
+				for impact in impact_positions:
+					# Calculate angle from ship center to impact point
+					# (Would need actual ship position, using approximation)
+					var angle = impact.position.angle()
+					angles.append(angle)
+				
+				angles.sort()
+				
+				# Check spacing between consecutive impacts
+				var spacing_errors = []
+				var expected_spacing = deg_to_rad(160.0) / (impact_positions.size() - 1)
+				
+				for i in range(1, angles.size()):
+					var actual_spacing = angles[i] - angles[i-1]
+					var spacing_error = abs(actual_spacing - expected_spacing)
+					spacing_errors.append(spacing_error)
+				
+				# Calculate average spacing error
+				var avg_spacing_error = 0.0
+				for error in spacing_errors:
+					avg_spacing_error += error
+				if spacing_errors.size() > 0:
+					avg_spacing_error /= spacing_errors.size()
+				
+				specific_metrics["avg_spacing_error"] = avg_spacing_error
+				specific_metrics["expected_spacing"] = expected_spacing
+	
+	return specific_metrics
+
+func _calculate_average_impact_angle(impacts: Array) -> float:
+	"""Calculate average angle of impact velocities"""
+	var sum_x = 0.0
+	var sum_y = 0.0
+	
+	for impact in impacts:
+		var vel_normalized = impact.velocity.normalized()
+		sum_x += vel_normalized.x
+		sum_y += vel_normalized.y
+	
+	var avg_vector = Vector2(sum_x, sum_y).normalized()
+	return avg_vector.angle()
 
 func get_cycle_results() -> Dictionary:
 	# Calculate quality metrics
@@ -143,7 +257,19 @@ func get_cycle_results() -> Dictionary:
 			avg_closest += dist
 		avg_closest /= closest_approaches.size()
 	
-	return {
+	# Calculate impact orientation errors
+	var avg_impact_orientation_error = 0.0
+	var max_impact_orientation_error = 0.0
+	if impact_orientation_errors.size() > 0:
+		for error in impact_orientation_errors:
+			avg_impact_orientation_error += error
+			max_impact_orientation_error = max(max_impact_orientation_error, error)
+		avg_impact_orientation_error /= impact_orientation_errors.size()
+	
+	# Get trajectory-specific metrics
+	var specific_metrics = analyze_trajectory_specific_metrics()
+	
+	var results = {
 		"total_fired": torpedoes_fired,
 		"hits": torpedoes_hit,
 		"misses": torpedoes_missed,
@@ -154,8 +280,16 @@ func get_cycle_results() -> Dictionary:
 		"avg_orientation_error": avg_orientation_error,
 		"avg_orientation_quality": avg_orientation_quality,
 		"avg_oscillation_score": avg_oscillation,
-		"avg_closest_approach": avg_closest
+		"avg_closest_approach": avg_closest,
+		"avg_impact_orientation_error": avg_impact_orientation_error,
+		"max_impact_orientation_error": max_impact_orientation_error
 	}
+	
+	# Add trajectory-specific metrics
+	for key in specific_metrics:
+		results[key] = specific_metrics[key]
+	
+	return results
 
 func _angle_difference(from: float, to: float) -> float:
 	var diff = to - from

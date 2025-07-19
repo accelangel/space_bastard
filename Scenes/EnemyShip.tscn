@@ -8,7 +8,7 @@
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
 radius = 28.6304
-height = 156.568
+height = 179.254
 
 [node name="EnemyShip" type="Area2D" groups=["enemy_ships"]]
 script = ExtResource("1_l7pq4")
