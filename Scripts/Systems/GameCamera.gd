@@ -33,6 +33,9 @@ var relative_pan_start_offset: Vector2 = Vector2.ZERO
 var selection_indicator: Node2D = null
 
 func _ready():
+	# Add to group for identification
+	add_to_group("game_camera")
+	
 	zoomTarget = zoom
 	zoom_min = calculate_min_zoom()
 	print("GameCamera initialized")
@@ -52,10 +55,26 @@ func _process(delta):
 
 func handle_zoom(delta):
 	var scroll = 0
-	if Input.is_action_just_pressed("camera_zoom_in"):
-		scroll = 1
-	elif Input.is_action_just_pressed("camera_zoom_out"):
-		scroll = -1
+	
+	# Check if mouse is over any PiP camera
+	var mouse_pos = get_viewport().get_mouse_position()
+	var is_mouse_over_pip = false
+	
+	# Check all PiP cameras
+	var pip_cameras = get_tree().get_nodes_in_group("pip_cameras")
+	for pip in pip_cameras:
+		if pip is Control and pip.visible:
+			var pip_rect = Rect2(pip.global_position, pip.size)
+			if pip_rect.has_point(mouse_pos):
+				is_mouse_over_pip = true
+				break
+	
+	# Only process zoom if mouse is not over a PiP camera
+	if not is_mouse_over_pip:
+		if Input.is_action_just_pressed("camera_zoom_in"):
+			scroll = 1
+		elif Input.is_action_just_pressed("camera_zoom_out"):
+			scroll = -1
 	
 	if scroll != 0:
 		var zoom_factor = 1.1 ** scroll

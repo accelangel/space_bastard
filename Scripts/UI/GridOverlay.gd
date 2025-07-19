@@ -40,11 +40,6 @@ func _draw():
 	if not camera:
 		return
 	
-	# Check if we're rendering in a PiP viewport
-	var current_viewport = get_viewport()
-	if current_viewport.get_parent() is SubViewportContainer:
-		return  # Don't draw grid in PiP cameras
-	
 	# Clear previous corners
 	major_grid_corners.clear()
 	
@@ -110,6 +105,7 @@ func _draw():
 			var line_alpha = grid_color.a if is_major else grid_color.a * 0.5
 			var line_color = Color(grid_color.r, grid_color.g, grid_color.b, line_alpha)
 			
+			# Draw in WORLD coordinates - this is key!
 			draw_line(
 				Vector2(x, world_top),
 				Vector2(x, world_bottom),
@@ -136,6 +132,7 @@ func _draw():
 			var line_alpha = grid_color.a if is_major else grid_color.a * 0.5
 			var line_color = Color(grid_color.r, grid_color.g, grid_color.b, line_alpha)
 			
+			# Draw in WORLD coordinates
 			draw_line(
 				Vector2(world_left, y),
 				Vector2(world_right, y),

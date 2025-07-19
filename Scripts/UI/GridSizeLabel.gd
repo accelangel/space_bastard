@@ -51,7 +51,13 @@ func _ready():
 	call_deferred("find_grid_overlay")
 
 func find_grid_overlay():
-	grid_overlay = get_node_or_null("/root/WorldRoot/GridOverlay")
+	# Try the new path first
+	grid_overlay = get_node_or_null("/root/WorldRoot/GridCanvasLayer/GridOverlay")
+	
+	# Fallback to old path
+	if not grid_overlay:
+		grid_overlay = get_node_or_null("/root/WorldRoot/GridOverlay")
+	
 	if not grid_overlay:
 		push_error("GridSizeLabel: Could not find GridOverlay!")
 

@@ -21,6 +21,9 @@ var target_ship: Node2D
 var current_zoom_target: float
 
 func _ready():
+	# Add to group for detection by main camera
+	add_to_group("pip_cameras")
+	
 	# Configure this container
 	custom_minimum_size = pip_size
 	size = pip_size

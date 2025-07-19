@@ -28,7 +28,10 @@ grow_horizontal = 2
 grow_vertical = 2
 color = Color(0, 0, 0, 1)
 
-[node name="GridOverlay" type="Node2D" parent="."]
+[node name="GridCanvasLayer" type="CanvasLayer" parent="."]
+follow_viewport_enabled = true
+
+[node name="GridOverlay" type="Node2D" parent="GridCanvasLayer"]
 script = ExtResource("1_bm7um")
 
 [node name="GameCamera" type="Camera2D" parent="."]
