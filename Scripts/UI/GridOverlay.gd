@@ -18,9 +18,9 @@ var camera: Camera2D
 var current_grid_size_meters: float = 0.0
 var major_grid_corners: Array = []  # Store screen positions of major grid corners
 
-# Debug state
-var last_debug_camera_pos: Vector2 = Vector2.ZERO
-var debug_counter: int = 0
+# Map dimensions (from your debug output)
+const MAP_WIDTH: float = 131072.0
+const MAP_HEIGHT: float = 73728.0
 
 func _ready():
 	# Find the game camera
@@ -51,6 +51,20 @@ func _draw():
 	# Get current zoom level
 	var zoom = camera.zoom.x
 	
+	# Get viewport size
+	var viewport_size = get_viewport_rect().size
+	
+	# Calculate how much of the world we can see
+	var view_half_width = (viewport_size.x / 2) / zoom
+	var view_half_height = (viewport_size.y / 2) / zoom
+	
+	# Get the actual camera position and clamp it to match the visual clamping
+	var actual_camera_pos = camera.global_position
+	var camera_pos = Vector2(
+		clamp(actual_camera_pos.x, -MAP_WIDTH/2 + view_half_width, MAP_WIDTH/2 - view_half_width),
+		clamp(actual_camera_pos.y, -MAP_HEIGHT/2 + view_half_height, MAP_HEIGHT/2 - view_half_height)
+	)
+	
 	# Calculate grid spacing in world units
 	var world_spacing = target_spacing_pixels / zoom * WorldSettings.meters_per_pixel
 	var nice_spacing = get_nice_number(world_spacing)
@@ -58,18 +72,11 @@ func _draw():
 	# Store grid size for the label
 	current_grid_size_meters = nice_spacing * minor_grid_divisions
 	
-	# Get viewport bounds in world space
-	var viewport_size = get_viewport_rect().size
-	var camera_pos = camera.global_position
-	
-	# Calculate visible world bounds (no buffer needed anymore!)
-	var half_width = (viewport_size.x / 2) / zoom
-	var half_height = (viewport_size.y / 2) / zoom
-	
-	var world_left = camera_pos.x - half_width
-	var world_right = camera_pos.x + half_width
-	var world_top = camera_pos.y - half_height
-	var world_bottom = camera_pos.y + half_height
+	# Calculate visible world bounds using the clamped camera position
+	var world_left = camera_pos.x - view_half_width
+	var world_right = camera_pos.x + view_half_width
+	var world_top = camera_pos.y - view_half_height
+	var world_bottom = camera_pos.y + view_half_height
 	
 	# Convert nice spacing from meters to pixels
 	var grid_spacing_pixels = nice_spacing / WorldSettings.meters_per_pixel
@@ -88,26 +95,8 @@ func _draw():
 	var major_y_positions = []
 	
 	# Draw vertical lines using indices
-	var start_x_index = floor(world_left / grid_spacing_pixels)
-	var end_x_index = ceil(world_right / grid_spacing_pixels)
-	
-	# Add small buffer to ensure we don't miss edge lines
-	start_x_index -= 1
-	end_x_index += 1
-	
-	# DEBUG OUTPUT - Only when camera has moved significantly
-	var camera_moved = camera_pos.distance_to(last_debug_camera_pos) > 100
-	if camera_moved:
-		debug_counter += 1
-		if debug_counter % 10 == 0:  # Print every 10th movement
-			print("\n=== Grid Debug #", debug_counter, " ===")
-			print("Camera pos: ", camera_pos)
-			print("Camera moved: ", camera_pos.distance_to(last_debug_camera_pos), " units")
-			print("World bounds: L=", world_left, " R=", world_right)
-			print("Grid spacing pixels: ", grid_spacing_pixels)
-			print("X indices: ", start_x_index, " to ", end_x_index)
-			print("Number of vertical lines: ", end_x_index - start_x_index + 1)
-			last_debug_camera_pos = camera_pos
+	var start_x_index = floor(world_left / grid_spacing_pixels) - 1
+	var end_x_index = ceil(world_right / grid_spacing_pixels) + 1
 	
 	for i in range(start_x_index, end_x_index + 1):
 		var x = i * grid_spacing_pixels
@@ -121,10 +110,9 @@ func _draw():
 			var line_alpha = grid_color.a if is_major else grid_color.a * 0.5
 			var line_color = Color(grid_color.r, grid_color.g, grid_color.b, line_alpha)
 			
-			# Extend lines a bit beyond viewport for smooth appearance
 			draw_line(
-				Vector2(x, world_top - grid_spacing_pixels),
-				Vector2(x, world_bottom + grid_spacing_pixels),
+				Vector2(x, world_top),
+				Vector2(x, world_bottom),
 				line_color,
 				line_width
 			)
@@ -133,12 +121,8 @@ func _draw():
 				major_x_positions.append(x)
 	
 	# Draw horizontal lines using indices
-	var start_y_index = floor(world_top / grid_spacing_pixels)
-	var end_y_index = ceil(world_bottom / grid_spacing_pixels)
-	
-	# Add small buffer to ensure we don't miss edge lines
-	start_y_index -= 1
-	end_y_index += 1
+	var start_y_index = floor(world_top / grid_spacing_pixels) - 1
+	var end_y_index = ceil(world_bottom / grid_spacing_pixels) + 1
 	
 	for i in range(start_y_index, end_y_index + 1):
 		var y = i * grid_spacing_pixels
@@ -152,10 +136,9 @@ func _draw():
 			var line_alpha = grid_color.a if is_major else grid_color.a * 0.5
 			var line_color = Color(grid_color.r, grid_color.g, grid_color.b, line_alpha)
 			
-			# Extend lines a bit beyond viewport for smooth appearance
 			draw_line(
-				Vector2(world_left - grid_spacing_pixels, y),
-				Vector2(world_right + grid_spacing_pixels, y),
+				Vector2(world_left, y),
+				Vector2(world_right, y),
 				line_color,
 				line_width
 			)
@@ -172,7 +155,7 @@ func _draw():
 			
 			# Only add label if both world indices are even
 			if world_x_index % 2 == 0 and world_y_index % 2 == 0:
-				# Convert world position to screen position
+				# Convert world position to screen position using CLAMPED camera position
 				var world_pos = Vector2(x_pos, y_pos)
 				var screen_pos = (world_pos - camera_pos) * zoom + viewport_size / 2
 				
