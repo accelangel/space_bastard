@@ -19,6 +19,7 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
 GameMode="*res://Scripts/Systems/GameMode.gd"
 MPCTunerSystem="*res://Scripts/Systems/MPCTuner.gd"
+BatchMPCManager="*res://Scripts/Systems/BatchMPCManager.gd"
 
 [display]
 

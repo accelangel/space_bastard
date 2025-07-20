@@ -28,6 +28,12 @@ var max_rotation_rate: float = deg_to_rad(1080.0)
 # MPC Controller
 var mpc_controller: MPCController
 
+# Batch update system
+var batch_manager: Node = null
+var use_batch_updates: bool = true
+var frames_since_update: int = 0
+var max_frames_between_updates: int = 3  # Update every 3 frames max
+
 # Flight plan configuration
 var flight_plan_type: String = "straight"
 var flight_plan_data: Dictionary = {}
@@ -72,9 +78,31 @@ func _ready():
 	mpc_controller.max_rotation_rate = max_rotation_rate
 	mpc_controller.max_speed = max_speed_mps
 	
+	# Report GPU status
+	if mpc_controller.gpu_available:
+		print("TorpedoMPC %s: GPU acceleration AVAILABLE (%s mode)" % [
+			torpedo_id,
+			"ENABLED" if mpc_controller.use_gpu else "DISABLED"
+		])
+	else:
+		print("TorpedoMPC %s: GPU acceleration NOT AVAILABLE - using CPU" % torpedo_id)
+	
+	# Check for batch manager
+	if use_batch_updates:
+		batch_manager = get_node_or_null("/root/BatchMPCManager")
+		if batch_manager and batch_manager.has_method("register_torpedo"):
+			batch_manager.register_torpedo(self)
+			print("TorpedoMPC %s: Registered with batch manager" % torpedo_id)
+		else:
+			print("TorpedoMPC %s: No batch manager found, using individual updates" % torpedo_id)
+			use_batch_updates = false
+	
 	# Groups
 	add_to_group("torpedoes")
 	add_to_group("combat_entities")
+	
+	# Enable input for GPU toggle
+	set_process_unhandled_input(true)
 	
 	# Metadata
 	set_meta("torpedo_id", torpedo_id)
@@ -163,8 +191,35 @@ func _physics_process(delta):
 		get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
 
 func update_mpc_control(delta: float):
-	"""Main MPC control update"""
+	"""Main MPC control update - now uses batch system when available"""
 	
+	if use_batch_updates and batch_manager:
+		# Request batch update instead of doing it ourselves
+		frames_since_update += 1
+		
+		# Calculate priority based on situation
+		var priority = 1.0
+		
+		# Higher priority if close to target
+		if target_node:
+			var distance = global_position.distance_to(target_node.global_position)
+			if distance < 2000:  # Very close
+				priority = 10.0
+			elif distance < 5000:  # Close
+				priority = 5.0
+		
+		# Higher priority if we haven't updated recently
+		if frames_since_update >= max_frames_between_updates:
+			priority *= 2.0
+		
+		# Request update from batch system
+		if batch_manager.has_method("request_update"):
+			batch_manager.request_update(self, priority)
+		
+		# Don't do our own update - wait for batch result
+		return
+	
+	# Fall back to individual update if no batch system
 	# Get current state
 	var current_state = {
 		"position": global_position,
@@ -196,6 +251,26 @@ func update_mpc_control(delta: float):
 	apply_control(control, delta)
 	
 	# Track control smoothness
+	control_history.append(control)
+	if control_history.size() > 10:
+		control_history.pop_front()
+	
+	update_trajectory_smoothness()
+
+func apply_mpc_control(control: Dictionary):
+	"""Apply control calculated by batch MPC system"""
+	
+	if not control.has("thrust") or not control.has("rotation_rate"):
+		push_error("Invalid control dictionary from batch MPC")
+		return
+	
+	# Reset update counter
+	frames_since_update = 0
+	
+	# Apply the control
+	apply_control(control, get_physics_process_delta_time())
+	
+	# Update trajectory smoothness tracking
 	control_history.append(control)
 	if control_history.size() > 10:
 		control_history.pop_front()
@@ -307,6 +382,10 @@ func mark_for_destruction(reason: String):
 	if marked_for_death:
 		return
 	
+	# Unregister from batch manager
+	if use_batch_updates and batch_manager and batch_manager.has_method("unregister_torpedo"):
+		batch_manager.unregister_torpedo(torpedo_id)
+	
 	marked_for_death = true
 	is_alive = false
 	death_reason = reason
@@ -414,6 +493,18 @@ func get_predicted_position(time_ahead: float) -> Vector2:
 
 func get_orientation() -> float:
 	return orientation
+
+# Debug input
+func _unhandled_input(event):
+	# Debug: Toggle GPU with G key
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_G:
+			if mpc_controller and mpc_controller.gpu_available:
+				mpc_controller.use_gpu = !mpc_controller.use_gpu
+				print("TorpedoMPC %s: GPU %s" % [
+					torpedo_id,
+					"ENABLED" if mpc_controller.use_gpu else "DISABLED"
+				])
 
 # Debug drawing
 func _draw():

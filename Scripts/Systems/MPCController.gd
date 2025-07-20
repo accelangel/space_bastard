@@ -8,6 +8,10 @@ const HORIZON_DT: float = 0.1         # Time step for trajectory
 const FAR_HORIZON_DT: float = 1.0     # Coarse time step for distant future
 const MAX_HORIZON_TIME: float = 480.0 # 8 minutes maximum
 
+# GPU Support
+var gpu_compute: GPUTrajectoryCompute = null
+var gpu_available: bool = false
+
 # Trajectory representation
 class Trajectory:
 	var states: Array = []        # [position, velocity, orientation, angular_vel]
@@ -64,6 +68,15 @@ var last_perf_report_time: float = 0.0
 
 func _init():
 	current_trajectory = Trajectory.new()
+	
+	# Try to initialize GPU compute
+	gpu_compute = GPUTrajectoryCompute.new()
+	gpu_available = gpu_compute.is_available()
+	
+	if gpu_available:
+		print("[MPC] GPU acceleration available!")
+	else:
+		print("[MPC] GPU acceleration not available, using CPU only")
 
 func process_performance(delta: float):
 	perf_timer += delta
@@ -103,16 +116,32 @@ func update_trajectory(
 ) -> Dictionary:
 	"""
 	Main MPC update - returns desired control for next timestep
-	Delta is USED for trajectory recycling!
 	"""
+	
+	var start_time = Time.get_ticks_usec()
+	perf_stats.updates_this_second += 1
 	
 	# Shift the previous trajectory forward by delta
 	trajectory_shift_time += delta
 	
-	# Generate trajectory candidates
+	# Try GPU first for straight trajectories
+	if gpu_available and trajectory_type == "straight":
+		var gpu_result = evaluate_with_gpu(current_state, target_state)
+		
+		# Update performance stats for GPU path
+		var gpu_time_seconds = (Time.get_ticks_usec() - start_time) / 1000000.0
+		perf_stats.total_update_time += gpu_time_seconds
+		perf_stats.max_update_time = max(perf_stats.max_update_time, gpu_time_seconds)
+		process_performance(delta)
+		
+		return gpu_result
+	
+	# CPU fallback for other trajectory types or if GPU not available
 	var candidates = generate_trajectory_candidates(
 		current_state, target_state, trajectory_type, type_params
 	)
+	
+	perf_stats.trajectories_evaluated += candidates.size()
 	
 	# Evaluate each candidate
 	var best_trajectory = null
@@ -129,15 +158,23 @@ func update_trajectory(
 	# Update current trajectory
 	if best_trajectory:
 		current_trajectory = best_trajectory
-		trajectory_shift_time = 0.0  # Reset shift time on new trajectory
+		trajectory_shift_time = 0.0
+		perf_stats.fresh_trajectories += 1
+	else:
+		perf_stats.recycled_trajectories += 1
 	
-	# Return control from shifted position in trajectory
+	# Update performance stats for CPU path
+	var cpu_time_seconds = (Time.get_ticks_usec() - start_time) / 1000000.0
+	perf_stats.total_update_time += cpu_time_seconds
+	perf_stats.max_update_time = max(perf_stats.max_update_time, cpu_time_seconds)
+	process_performance(delta)
+	
+	# Return control from trajectory
 	if current_trajectory.controls.size() > 0:
-		# Find the control at current shift time
 		for i in range(current_trajectory.timestamps.size()):
 			if current_trajectory.timestamps[i] >= trajectory_shift_time:
 				return current_trajectory.controls[min(i, current_trajectory.controls.size() - 1)]
-		return current_trajectory.controls[-1]  # Use last control if beyond trajectory
+		return current_trajectory.controls[-1]
 	else:
 		# Fallback control
 		var to_target = target_state.position - current_state.position
@@ -149,6 +186,53 @@ func update_trajectory(
 				-max_rotation_rate, max_rotation_rate
 			)
 		}
+
+func evaluate_with_gpu(current_state: Dictionary, target_state: Dictionary) -> Dictionary:
+	"""Use GPU to evaluate trajectory templates"""
+	
+	# Generate template parameters for GPU
+	var templates = []
+	
+	# Create variations
+	var thrust_variations = [0.7, 0.8, 0.9, 1.0]
+	var angle_variations = [-10, -5, 0, 5, 10]
+	var rotation_gains = [8.0, 10.0, 12.0]
+	
+	for thrust in thrust_variations:
+		for angle in angle_variations:
+			for gain in rotation_gains:
+				templates.append({
+					"thrust_factor": thrust,
+					"rotation_gain": gain,
+					"initial_angle_offset": angle,
+					"alignment_weight": 0.5
+				})
+	
+	perf_stats.trajectories_evaluated += templates.size()
+	
+	# Set up simulation parameters
+	var sim_params = {
+		"dt": HORIZON_DT,
+		"num_steps": int(HORIZON_TIME / HORIZON_DT),
+		"meters_per_pixel": 0.25  # Default
+	}
+	
+	# Add constraints
+	current_state["max_acceleration"] = max_acceleration
+	current_state["max_rotation_rate"] = max_rotation_rate
+	
+	# Evaluate on GPU
+	var gpu_result = gpu_compute.evaluate_templates(
+		current_state,
+		target_state,
+		templates,
+		sim_params
+	)
+	
+	return {
+		"thrust": gpu_result.thrust,
+		"rotation_rate": gpu_result.rotation_rate
+	}
 
 func generate_trajectory_candidates(
 	current_state: Dictionary,

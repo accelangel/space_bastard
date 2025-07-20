@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://db13rupyiyqma"
+path="res://.godot/imported/mpc_trajectory_batch.glsl-5054ed0c65836c1bb49d7cb687864bc8.res"
+
+[deps]
+
+source_file="res://Shaders/mpc_trajectory_batch.glsl"
+dest_files=["res://.godot/imported/mpc_trajectory_batch.glsl-5054ed0c65836c1bb49d7cb687864bc8.res"]
+
+[params]
+

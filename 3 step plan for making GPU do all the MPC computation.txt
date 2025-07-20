@@ -1,0 +1,243 @@
+3-Step GPU MPC Implementation Plan
+Step 1: Basic GPU Trajectory Evaluation (Get it Working)
+Goal: Move just the trajectory simulation to GPU, prove it works
+1.1 Create Basic Compute Shader
+glsl// res/Shaders/mpc_trajectory_basic.glsl
+#version 450
+
+layout(local_size_x = 64) in;
+
+// One thread per trajectory candidate
+layout(set = 0, binding = 0, std430) buffer TorpedoData {
+    vec4 torpedo_state;      // x, y, vx, vy
+    vec4 torpedo_orient;     // orientation, angular_vel, 0, 0
+    vec4 target_pos_vel;     // target x, y, vx, vy
+} data;
+
+layout(set = 0, binding = 1, std430) buffer Templates {
+    vec4 templates[];        // Template parameters
+} templates;
+
+layout(set = 0, binding = 2, std430) buffer Results {
+    float costs[];           // Cost for each trajectory
+    vec4 best_control;       // Best control found
+} results;
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (tid >= 30) return;  // 30 templates per torpedo
+    
+    // Simulate one trajectory
+    vec2 pos = data.torpedo_state.xy;
+    vec2 vel = data.torpedo_state.zw;
+    float orientation = data.torpedo_orient.x;
+    
+    float total_cost = 0.0;
+    
+    // Simple 100-step simulation for now
+    for (int i = 0; i < 100; i++) {
+        // Get control from template
+        float thrust = templates.templates[tid].x;
+        float rotation = templates.templates[tid].y;
+        
+        // Physics update
+        orientation += rotation * 0.1;
+        vec2 thrust_dir = vec2(cos(orientation), sin(orientation));
+        vel += thrust_dir * thrust * 0.1;
+        pos += vel * 0.1;
+        
+        // Simple distance cost
+        vec2 to_target = data.target_pos_vel.xy - pos;
+        total_cost += dot(to_target, to_target);
+    }
+    
+    results.costs[tid] = total_cost;
+}
+1.2 Create GPU Wrapper
+gdscript# Scripts/Systems/GPUTrajectoryCompute.gd
+class_name GPUTrajectoryCompute
+extends RefCounted
+
+var rd: RenderingDevice
+var shader: RID
+var pipeline: RID
+
+func _init():
+    rd = RenderingServer.create_local_rendering_device()
+    
+    # Load shader
+    var shader_file = load("res://Shaders/mpc_trajectory_basic.glsl.glsl")
+    var shader_spirv = shader_file.get_spirv()
+    shader = rd.shader_create_from_spirv(shader_spirv)
+    pipeline = rd.compute_pipeline_create(shader)
+
+func evaluate_simple(torpedo_state: Dictionary, target_state: Dictionary) -> Dictionary:
+    # Create buffers
+    var torpedo_data = PackedFloat32Array([
+        torpedo_state.position.x, torpedo_state.position.y,
+        torpedo_state.velocity.x, torpedo_state.velocity.y,
+        torpedo_state.orientation, torpedo_state.angular_velocity, 0, 0,
+        target_state.position.x, target_state.position.y,
+        target_state.velocity.x, target_state.velocity.y
+    ])
+    
+    # ... buffer creation, dispatch, readback ...
+    
+    return {"thrust": best_thrust, "rotation_rate": best_rotation}
+1.3 Integration Test
+
+Replace ONE torpedo's MPC with GPU version
+Compare trajectories with CPU version
+Verify physics accuracy
+Measure performance difference
+
+Step 2: Full GPU Pipeline (Make it Fast)
+Goal: Move everything to GPU, batch multiple torpedoes
+2.1 Enhanced Compute Shader
+glsl// Now handles multiple torpedoes and all trajectory types
+layout(local_size_x = 32, local_size_y = 1) in;
+
+// x = torpedo index, y = template index
+void main() {
+    uint torpedo_id = gl_WorkGroupID.x;
+    uint template_id = gl_LocalInvocationID.x;
+    
+    // Each thread evaluates one torpedo-template combination
+    float cost = evaluate_trajectory(
+        torpedoes[torpedo_id],
+        targets[torpedo_id],
+        templates[template_id],
+        trajectory_types[torpedo_id]
+    );
+    
+    // Parallel reduction to find best template
+    find_best_template_parallel(cost, template_id, torpedo_id);
+}
+2.2 Persistent GPU Resources
+gdscriptclass GPUMPCSystem:
+    # Persistent buffers - allocated once
+    var template_buffer: RID        # All trajectory templates
+    var torpedo_buffer: RID         # All torpedo states
+    var trajectory_cache: RID       # Previous solutions
+    var result_buffer: RID          # Best controls
+    
+    func _ready():
+        # Pre-allocate for max torpedoes
+        create_persistent_buffers(MAX_TORPEDOES)
+        upload_initial_templates()
+    
+    func update_batch(torpedoes: Array):
+        # One GPU call for ALL torpedoes
+        upload_torpedo_states(torpedoes)
+        rd.compute_dispatch(pipeline, torpedoes.size(), 1, 1)
+        return download_results()
+2.3 Modify TorpedoMPC.gd
+gdscript# Instead of per-torpedo MPC, use batch system
+func _physics_process(delta):
+    # Don't update individually!
+    # Let BatchMPCManager handle it
+    pass
+
+# New BatchMPCManager (singleton)
+class BatchMPCManager:
+    var gpu_mpc: GPUMPCSystem
+    var pending_torpedoes: Array = []
+    
+    func _physics_process(delta):
+        if pending_torpedoes.size() > 0:
+            var results = gpu_mpc.update_batch(pending_torpedoes)
+            apply_results(results)
+            pending_torpedoes.clear()
+Step 3: Advanced Features (Make it Smart)
+Goal: GPU template evolution, trajectory caching, smart batching
+3.1 GPU Template Evolution
+glsl// Separate compute shader for evolving templates between frames
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) buffer TemplatePopulation {
+    Template templates[];
+    float fitness_scores[];
+} population;
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    
+    // Mutate based on fitness
+    Template mutated = mutate_template(
+        population.templates[tid],
+        population.fitness_scores[tid]
+    );
+    
+    // Tournament selection on GPU
+    uint opponent = pcg_hash(tid) % POPULATION_SIZE;
+    if (population.fitness_scores[tid] < population.fitness_scores[opponent]) {
+        population.templates[tid] = mutated;
+    }
+}
+3.2 Smart Update Scheduling
+gdscriptclass BatchMPCManager:
+    func schedule_torpedo_update(torpedo: Node2D):
+        var priority = calculate_update_priority(torpedo)
+        
+        # Near impact = high priority = update every frame
+        # Far away = low priority = update every 5 frames
+        # Just launched = medium priority = needs good initial trajectory
+        
+        if priority > 0.8 or pending_torpedoes.size() < 10:
+            pending_torpedoes.append(torpedo)
+3.3 Performance Monitoring
+gdscriptclass GPUMPCDebugger:
+    var overlay: Control
+    
+    func _ready():
+        create_debug_overlay()
+    
+    func _process(delta):
+        overlay.set_text("""
+        === GPU MPC Stats ===
+        Active Torpedoes: %d
+        GPU Batch Size: %d
+        Compute Time: %.2fms
+        Templates Evolved: %d
+        Cache Hit Rate: %.1f%%
+        """ % [torpedo_count, batch_size, gpu_time, evolution_count, cache_rate])
+Implementation Timeline
+Week 1: Step 1 - Basic GPU Working
+
+Get one torpedo using GPU trajectory evaluation
+Verify physics accuracy
+See 10x speedup even with basic implementation
+
+Week 2: Step 2 - Full Pipeline
+
+Batch processing all torpedoes
+All trajectory types on GPU
+See 100x speedup, handle 50+ torpedoes easily
+
+Week 3: Step 3 - Polish
+
+Template evolution
+Smart scheduling
+Performance monitoring
+Handle 200+ torpedoes if needed
+
+Success Metrics
+Step 1 Complete When:
+
+Single GPU torpedo matches CPU trajectory
+10x faster than CPU version
+No physics glitches
+
+Step 2 Complete When:
+
+All torpedoes use GPU
+60 FPS with 50 torpedoes
+<5ms total compute time
+
+Step 3 Complete When:
+
+Templates evolve and improve
+60 FPS with 100+ torpedoes
+System self-optimizes
+
+This plan gets you from "lagging with 2 torpedoes" to "smooth with 100+" in three weeks. The key is building incrementally - prove the GPU works, then scale it up, then make it smart.
