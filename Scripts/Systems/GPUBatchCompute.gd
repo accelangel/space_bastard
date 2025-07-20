@@ -8,7 +8,15 @@ var pipeline: RID
 
 # Persistent buffers for better performance
 var template_buffer: RID
-var template_count: int = 60  # Same as Step 1
+var torpedo_buffer: RID
+var target_buffer: RID
+var sim_buffer: RID
+var flight_plan_buffer: RID
+var result_buffer: RID
+
+# Buffer sizes
+var max_torpedoes: int = 256
+var template_count: int = 60
 
 # Performance tracking
 var last_compute_time: float = 0.0
@@ -30,15 +38,15 @@ func _init():
 	# Load batch shader
 	_setup_shader()
 	
-	# Pre-create template buffer
-	_create_template_buffer()
+	# Pre-create persistent buffers
+	_create_persistent_buffers()
 
 func _setup_shader():
 	# Try to load the batch shader
 	var shader_paths = [
 		"res://Shaders/mpc_trajectory_batch.glsl",
 		"res://Scripts/Systems/mpc_trajectory_batch.glsl",
-		"res://shaders/mpc_trajectory_batch.glsl"  # lowercase variant
+		"res://shaders/mpc_trajectory_batch.glsl"
 	]
 	
 	var shader_file = null
@@ -48,12 +56,9 @@ func _setup_shader():
 			if shader_file:
 				print("[GPU Batch] Loaded shader from: %s" % path)
 				break
-		else:
-			print("[GPU Batch] Shader not found at: %s" % path)
 	
 	if not shader_file:
-		push_error("[GPU Batch] Failed to load batch shader! Tried paths: %s" % str(shader_paths))
-		push_error("[GPU Batch] Please create mpc_trajectory_batch.glsl in res://Shaders/ folder")
+		push_error("[GPU Batch] Failed to load batch shader!")
 		return
 	
 	# Create shader and pipeline
@@ -72,11 +77,11 @@ func _setup_shader():
 	
 	print("[GPU Batch] Shader initialized successfully!")
 
-func _create_template_buffer():
-	"""Create reusable template buffer"""
-	var templates = []
+func _create_persistent_buffers():
+	"""Create reusable buffers that persist between frames"""
 	
-	# Same template generation as Step 1
+	# Template buffer - same as before
+	var templates = []
 	var thrust_variations = [0.7, 0.8, 0.9, 1.0]
 	var angle_variations = [-10, -5, 0, 5, 10]
 	var rotation_gains = [8.0, 10.0, 12.0]
@@ -101,17 +106,50 @@ func _create_template_buffer():
 		template_data.append(t.initial_angle_offset)
 		template_data.append(t.alignment_weight)
 	
-	# Create persistent buffer
+	# Create persistent buffers with max sizes
 	template_buffer = rd.storage_buffer_create(
 		template_data.size() * 4,
 		template_data.to_byte_array()
 	)
+	
+	# Torpedo states buffer (2 vec4s per torpedo) - initialize with zeros
+	var torpedo_size = max_torpedoes * 2 * 4 * 4  # 2 vec4s * 4 floats * 4 bytes
+	var empty_torpedo_data = PackedByteArray()
+	empty_torpedo_data.resize(torpedo_size)
+	torpedo_buffer = rd.storage_buffer_create(torpedo_size, empty_torpedo_data)
+	
+	# Target states buffer (1 vec4 per torpedo) - initialize with zeros
+	var target_size = max_torpedoes * 4 * 4
+	var empty_target_data = PackedByteArray()
+	empty_target_data.resize(target_size)
+	target_buffer = rd.storage_buffer_create(target_size, empty_target_data)
+	
+	# Sim params buffer - initialize with zeros
+	var sim_size = 4 * 4  # 1 vec4
+	var empty_sim_data = PackedByteArray()
+	empty_sim_data.resize(sim_size)
+	sim_buffer = rd.storage_buffer_create(sim_size, empty_sim_data)
+	
+	# Flight plan buffer (1 vec4 per torpedo) - initialize with zeros
+	var flight_plan_size = max_torpedoes * 4 * 4
+	var empty_flight_plan_data = PackedByteArray()
+	empty_flight_plan_data.resize(flight_plan_size)
+	flight_plan_buffer = rd.storage_buffer_create(flight_plan_size, empty_flight_plan_data)
+	
+	# Result buffer (1 vec4 per torpedo) - initialize with zeros
+	var result_size = max_torpedoes * 4 * 4
+	var empty_result_data = PackedByteArray()
+	empty_result_data.resize(result_size)
+	result_buffer = rd.storage_buffer_create(result_size, empty_result_data)
+	
+	print("[GPU Batch] Created persistent buffers for %d torpedoes" % max_torpedoes)
 
 func evaluate_torpedo_batch(
 	torpedo_states: Array,
-	target_states: Array
+	target_states: Array,
+	flight_plans: Array = []
 ) -> Array:
-	"""Evaluate all torpedoes in one GPU call"""
+	"""Evaluate all torpedoes in one GPU call using persistent buffers"""
 	
 	if not rd or not pipeline.is_valid():
 		push_error("[GPU Batch] GPU not initialized!")
@@ -120,10 +158,10 @@ func evaluate_torpedo_batch(
 	var start_time = Time.get_ticks_usec()
 	var batch_size = torpedo_states.size()
 	
-	if batch_size == 0:
+	if batch_size == 0 or batch_size > max_torpedoes:
 		return []
 	
-	# Pack torpedo states (2 vec4s per torpedo)
+	# Pack torpedo states (reuse buffer)
 	var torpedo_data = PackedFloat32Array()
 	for state in torpedo_states:
 		# Position and velocity
@@ -146,6 +184,28 @@ func evaluate_torpedo_batch(
 		target_data.append(target.velocity.x)
 		target_data.append(target.velocity.y)
 	
+	# Pack flight plans
+	var flight_plan_data = PackedFloat32Array()
+	if flight_plans.size() == 0:
+		# Default to straight trajectories
+		for i in range(batch_size):
+			flight_plan_data.append(0.0)  # TRAJECTORY_STRAIGHT
+			flight_plan_data.append(0.0)
+			flight_plan_data.append(0.0)
+			flight_plan_data.append(0.0)
+	else:
+		for plan in flight_plans:
+			var trajectory_type = 0.0
+			if plan.get("type", "straight") == "multi_angle":
+				trajectory_type = 1.0
+			elif plan.get("type", "straight") == "simultaneous":
+				trajectory_type = 2.0
+			
+			flight_plan_data.append(trajectory_type)
+			flight_plan_data.append(plan.get("side", 0.0))  # or angle for simultaneous
+			flight_plan_data.append(plan.get("impact_time", 0.0))
+			flight_plan_data.append(0.0)  # reserved
+	
 	# Simulation parameters
 	var sim_data = PackedFloat32Array([
 		0.1,  # dt
@@ -154,35 +214,20 @@ func evaluate_torpedo_batch(
 		float(batch_size)  # num_torpedoes
 	])
 	
-	# Result buffer (4 floats per torpedo)
-	var result_data = PackedFloat32Array()
-	result_data.resize(batch_size * 4)
+	# Update buffer contents (reuse existing buffers)
+	rd.buffer_update(torpedo_buffer, 0, torpedo_data.size() * 4, torpedo_data.to_byte_array())
+	rd.buffer_update(target_buffer, 0, target_data.size() * 4, target_data.to_byte_array())
+	rd.buffer_update(sim_buffer, 0, sim_data.size() * 4, sim_data.to_byte_array())
+	rd.buffer_update(flight_plan_buffer, 0, flight_plan_data.size() * 4, flight_plan_data.to_byte_array())
 	
-	# Create buffers
-	var torpedo_buffer = rd.storage_buffer_create(
-		torpedo_data.size() * 4,
-		torpedo_data.to_byte_array()
-	)
-	var target_buffer = rd.storage_buffer_create(
-		target_data.size() * 4,
-		target_data.to_byte_array()
-	)
-	var sim_buffer = rd.storage_buffer_create(
-		sim_data.size() * 4,
-		sim_data.to_byte_array()
-	)
-	var result_buffer = rd.storage_buffer_create(
-		result_data.size() * 4,
-		result_data.to_byte_array()
-	)
-	
-	# Create uniform set
+	# Create uniform set with persistent buffers
 	var bindings = [
 		_create_buffer_binding(0, torpedo_buffer),
 		_create_buffer_binding(1, target_buffer),
 		_create_buffer_binding(2, sim_buffer),
-		_create_buffer_binding(3, template_buffer),  # Reuse persistent template buffer
-		_create_buffer_binding(4, result_buffer)
+		_create_buffer_binding(3, template_buffer),
+		_create_buffer_binding(4, flight_plan_buffer),
+		_create_buffer_binding(5, result_buffer)
 	]
 	
 	var uniform_set = rd.uniform_set_create(bindings, shader, 0)
@@ -214,11 +259,7 @@ func evaluate_torpedo_batch(
 			"template_index": int(output_data[offset + 3])
 		})
 	
-	# Clean up temporary buffers
-	rd.free_rid(torpedo_buffer)
-	rd.free_rid(target_buffer)
-	rd.free_rid(sim_buffer)
-	rd.free_rid(result_buffer)
+	# Clean up only the uniform set (buffers are persistent)
 	rd.free_rid(uniform_set)
 	
 	# Track performance
@@ -246,8 +287,19 @@ func is_available() -> bool:
 
 func cleanup():
 	if rd:
+		# Free all persistent buffers
 		if template_buffer.is_valid():
 			rd.free_rid(template_buffer)
+		if torpedo_buffer.is_valid():
+			rd.free_rid(torpedo_buffer)
+		if target_buffer.is_valid():
+			rd.free_rid(target_buffer)
+		if sim_buffer.is_valid():
+			rd.free_rid(sim_buffer)
+		if flight_plan_buffer.is_valid():
+			rd.free_rid(flight_plan_buffer)
+		if result_buffer.is_valid():
+			rd.free_rid(result_buffer)
 		if shader.is_valid():
 			rd.free_rid(shader)
 		if pipeline.is_valid():

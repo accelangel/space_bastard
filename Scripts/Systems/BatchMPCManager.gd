@@ -71,7 +71,7 @@ func unregister_torpedo(torpedo_id: String):
 		if pending_torpedoes[i].torpedo_id == torpedo_id:
 			pending_torpedoes.remove_at(i)
 
-func request_update(torpedo: Node2D, priority: float = 1.0):
+func request_update(torpedo: Node2D, update_priority: float = 1.0):
 	"""Queue a torpedo for batch update"""
 	if not gpu_available:
 		return
@@ -79,14 +79,14 @@ func request_update(torpedo: Node2D, priority: float = 1.0):
 	# Check if already pending
 	for pending in pending_torpedoes:
 		if pending.torpedo == torpedo:
-			pending.priority = max(pending.priority, priority)
+			pending.priority = max(pending.priority, update_priority)
 			return
 	
 	# Add to pending queue
 	pending_torpedoes.append({
 		"torpedo": torpedo,
 		"torpedo_id": torpedo.get("torpedo_id"),
-		"priority": priority,
+		"priority": update_priority,
 		"request_time": Time.get_ticks_msec() / 1000.0
 	})
 
@@ -119,6 +119,7 @@ func process_pending_batch():
 	var batch_torpedoes = []
 	var batch_states = []
 	var batch_targets = []
+	var batch_flight_plans = []
 	
 	# Process up to max_batch_size torpedoes
 	var count = min(pending_torpedoes.size(), max_batch_size)
@@ -151,9 +152,30 @@ func process_pending_batch():
 			"velocity": target.get("velocity_mps") if target.has_method("get_velocity_mps") else Vector2.ZERO
 		}
 		
+		# Get flight plan data
+		var flight_plan = {
+			"type": torpedo.get("flight_plan_type", "straight"),
+			"side": 0.0,
+			"impact_time": 0.0
+		}
+		
+		# For multi-angle, determine side
+		if flight_plan.type == "multi_angle":
+			var launch_side = torpedo.get("launch_side", 1)
+			flight_plan.side = float(launch_side)
+		
+		# For simultaneous, get assigned angle and impact time
+		elif flight_plan.type == "simultaneous":
+			var flight_data = torpedo.get("flight_plan_data", {})
+			if flight_data.has("impact_angle"):
+				flight_plan.side = flight_data.impact_angle  # Using side field for angle
+			if flight_data.has("impact_time"):
+				flight_plan.impact_time = flight_data.impact_time
+		
 		batch_torpedoes.append(torpedo)
 		batch_states.append(state)
 		batch_targets.append(target_state)
+		batch_flight_plans.append(flight_plan)
 	
 	# Clear processed items
 	pending_torpedoes = pending_torpedoes.slice(count)
@@ -162,7 +184,7 @@ func process_pending_batch():
 		return
 	
 	# Process batch on GPU
-	var results = gpu_compute.evaluate_torpedo_batch(batch_states, batch_targets)
+	var results = gpu_compute.evaluate_torpedo_batch(batch_states, batch_targets, batch_flight_plans)
 	
 	# Apply results
 	for i in range(batch_torpedoes.size()):
@@ -218,23 +240,23 @@ func get_stats() -> Dictionary:
 # Priority calculation helpers
 static func calculate_priority(torpedo: Node2D) -> float:
 	"""Calculate update priority for a torpedo"""
-	var priority = 1.0
+	var update_priority = 1.0
 	
 	# Higher priority if close to target
 	var target = torpedo.get("target_node")
 	if target and is_instance_valid(target):
 		var distance = torpedo.global_position.distance_to(target.global_position)
 		if distance < 5000:  # Very close
-			priority += 10.0
+			update_priority += 10.0
 		elif distance < 10000:  # Close
-			priority += 5.0
+			update_priority += 5.0
 	
 	# Higher priority if just launched
-			var launch_time = torpedo.get("launch_start_time")
-		if launch_time == null:
-			launch_time = 0.0
-		var age = Time.get_ticks_msec() / 1000.0 - launch_time
+	var launch_time = torpedo.get("launch_start_time")
+	if launch_time == null:
+		launch_time = 0.0
+	var age = Time.get_ticks_msec() / 1000.0 - launch_time
 	if age < 2.0:
-		priority += 3.0
+		update_priority += 3.0
 	
-	return priority
+	return update_priority

@@ -198,23 +198,23 @@ func update_mpc_control(delta: float):
 		frames_since_update += 1
 		
 		# Calculate priority based on situation
-		var priority = 1.0
+		var update_priority = 1.0
 		
 		# Higher priority if close to target
 		if target_node:
 			var distance = global_position.distance_to(target_node.global_position)
 			if distance < 2000:  # Very close
-				priority = 10.0
+				update_priority = 10.0
 			elif distance < 5000:  # Close
-				priority = 5.0
+				update_priority = 5.0
 		
 		# Higher priority if we haven't updated recently
 		if frames_since_update >= max_frames_between_updates:
-			priority *= 2.0
+			update_priority *= 2.0
 		
 		# Request update from batch system
 		if batch_manager.has_method("request_update"):
-			batch_manager.request_update(self, priority)
+			batch_manager.request_update(self, update_priority)
 		
 		# Don't do our own update - wait for batch result
 		return

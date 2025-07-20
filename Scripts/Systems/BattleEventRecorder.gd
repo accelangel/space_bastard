@@ -188,7 +188,7 @@ func on_entity_dying(entity: Node2D, reason: String):
 	
 	battle_events.append(event)
 
-func on_entity_moved(entity: Node2D, new_position: Vector2):
+func on_entity_moved(_entity: Node2D, _new_position: Vector2):
 	# Timer-based sampling is better than frame-based
 	# This function might be called too frequently, so we ignore it
 	pass

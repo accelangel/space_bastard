@@ -21,8 +21,13 @@ layout(set = 0, binding = 3, std430) restrict readonly buffer Templates {
     vec4 template_params[];  // Templates shared by all torpedoes
 } templates;
 
+// NEW: Flight plan data for each torpedo
+layout(set = 0, binding = 4, std430) restrict readonly buffer FlightPlans {
+    vec4 flight_plans[];  // For each torpedo: [type, side/angle, impact_time, reserved]
+} flight_plans;
+
 // Output: Best control for each torpedo
-layout(set = 0, binding = 4, std430) restrict writeonly buffer Results {
+layout(set = 0, binding = 5, std430) restrict writeonly buffer Results {
     vec4 best_controls[];    // For each torpedo: [thrust, rotation_rate, best_cost, best_template_idx]
 } results;
 
@@ -30,7 +35,12 @@ layout(set = 0, binding = 4, std430) restrict writeonly buffer Results {
 shared float shared_costs[32];
 shared uint shared_indices[32];
 
-// Helper functions (same as before)
+// Constants for trajectory types
+const uint TRAJECTORY_STRAIGHT = 0;
+const uint TRAJECTORY_MULTI_ANGLE = 1;
+const uint TRAJECTORY_SIMULTANEOUS = 2;
+
+// Helper functions
 float angle_difference(float from, float to) {
     float diff = to - from;
     const float TAU = 6.28318530718;
@@ -40,6 +50,99 @@ float angle_difference(float from, float to) {
     while (diff < -PI) diff += TAU;
     
     return diff;
+}
+
+// Calculate control based on trajectory type
+vec2 calculate_trajectory_control(
+    uint trajectory_type,
+    vec2 pos,
+    vec2 vel,
+    float orientation,
+    vec2 target_pos,
+    vec2 target_vel,
+    float progress,
+    vec4 template_params,
+    vec4 flight_plan
+) {
+    float thrust_factor = template_params.x;
+    float rotation_gain = template_params.y;
+    float initial_angle_offset = template_params.z;
+    float alignment_weight = template_params.w;
+    
+    float desired_angle = 0.0;
+    float thrust_modulation = 1.0;
+    
+    if (trajectory_type == TRAJECTORY_STRAIGHT) {
+        // Simple direct intercept
+        vec2 to_target = target_pos - pos;
+        desired_angle = atan(to_target.y, to_target.x) + radians(initial_angle_offset);
+        
+        // After initial phase, track predicted position
+        if (progress > 0.1) {
+            desired_angle = atan(to_target.y, to_target.x);
+        }
+        
+    } else if (trajectory_type == TRAJECTORY_MULTI_ANGLE) {
+        // Arc approach from side
+        float approach_side = flight_plan.y;  // -1 for port, 1 for starboard
+        vec2 to_target = target_pos - pos;
+        float direct_angle = atan(to_target.y, to_target.x);
+        float perpendicular = direct_angle + (3.14159/2.0) * approach_side;
+        
+        // Arc phases from template
+        float arc_start = 0.1;
+        float arc_peak = 0.5;
+        float final_approach = 0.8;
+        
+        if (progress < arc_start) {
+            desired_angle = direct_angle + radians(initial_angle_offset);
+        } else if (progress < arc_peak) {
+            float arc_progress = (progress - arc_start) / (arc_peak - arc_start);
+            desired_angle = mix(direct_angle, perpendicular, arc_progress * 0.4);
+        } else if (progress < final_approach) {
+            desired_angle = mix(direct_angle, perpendicular, 0.4);
+        } else {
+            float return_progress = (progress - final_approach) / (1.0 - final_approach);
+            desired_angle = mix(perpendicular, direct_angle, return_progress);
+        }
+        
+    } else if (trajectory_type == TRAJECTORY_SIMULTANEOUS) {
+        // Fan out then converge
+        float assigned_angle = flight_plan.y;  // Assigned approach angle
+        vec2 to_target = target_pos - pos;
+        float center_angle = atan(to_target.y, to_target.x);
+        float fan_angle = center_angle + assigned_angle;
+        
+        // Phase transitions
+        float fan_duration = 0.3;
+        float converge_start = 0.7;
+        
+        if (progress < fan_duration) {
+            float fan_progress = progress / fan_duration;
+            desired_angle = mix(orientation, fan_angle, fan_progress);
+            thrust_modulation = 0.8;
+        } else if (progress < converge_start) {
+            desired_angle = fan_angle;
+            thrust_modulation = 0.9;
+        } else {
+            float converge_progress = (progress - converge_start) / (1.0 - converge_start);
+            vec2 current_to_target = target_pos - pos;
+            float target_angle = atan(current_to_target.y, current_to_target.x);
+            desired_angle = mix(fan_angle, target_angle, converge_progress);
+            thrust_modulation = 0.8 + 0.2 * converge_progress;
+        }
+    }
+    
+    // Calculate control outputs
+    float angle_error = angle_difference(orientation, desired_angle);
+    float rotation_rate = clamp(angle_error * rotation_gain, -3.14159, 3.14159);  // Assuming normalized max_rotation
+    
+    // Thrust based on alignment
+    float alignment = abs(angle_error);
+    float alignment_penalty = 1.0 - min(alignment / 3.14159, 0.5);
+    float thrust = thrust_factor * thrust_modulation * alignment_penalty;
+    
+    return vec2(thrust, rotation_rate);
 }
 
 void main() {
@@ -56,15 +159,15 @@ void main() {
     vec4 torpedo_pos_vel = torpedo_states.states[torpedo_offset];
     vec4 torpedo_orient = torpedo_states.states[torpedo_offset + 1];
     
-    // Get target state (assuming one target per torpedo for now)
+    // Get target state
     vec4 target_pos_vel = target_states.states[torpedo_id];
     
+    // Get flight plan
+    vec4 flight_plan = flight_plans.flight_plans[torpedo_id];
+    uint trajectory_type = uint(flight_plan.x);
+    
     // Get template
-    vec4 template = templates.template_params[template_id];
-    float thrust_factor = template.x;
-    float rotation_gain = template.y;
-    float initial_angle_offset = template.z;
-    float alignment_weight = template.w;
+    vec4 template_params = templates.template_params[template_id];
     
     // Extract state
     vec2 pos = torpedo_pos_vel.xy;
@@ -87,11 +190,7 @@ void main() {
     float distance_cost = 0.0;
     float control_cost = 0.0;
     float alignment_cost = 0.0;
-    
-    // Initial angle setup
-    vec2 to_target = target_pos - pos;
-    float base_angle = atan(to_target.y, to_target.x);
-    float desired_angle = base_angle + radians(initial_angle_offset);
+    float type_specific_cost = 0.0;
     
     // Store first control
     float first_thrust = 0.0;
@@ -99,22 +198,21 @@ void main() {
     
     // Simulate trajectory
     for (uint i = 0; i < num_steps; i++) {
-        // Predict target position
-        vec2 predicted_target = target_pos + target_vel * (float(i) * dt);
+        float progress = float(i) / float(num_steps);
         
-        // Calculate control
-        vec2 to_predicted = predicted_target - pos;
-        float target_angle = atan(to_predicted.y, to_predicted.x);
+        // Get control for this step based on trajectory type
+        vec2 control = calculate_trajectory_control(
+            trajectory_type,
+            pos, vel, orientation,
+            target_pos + target_vel * (float(i) * dt),
+            target_vel,
+            progress,
+            template_params,
+            flight_plan
+        );
         
-        if (i > num_steps / 10) {
-            desired_angle = target_angle;
-        }
-        
-        float angle_error = angle_difference(orientation, desired_angle);
-        float rotation_rate = clamp(angle_error * rotation_gain, -max_rotation, max_rotation);
-        
-        float alignment = abs(angle_error);
-        float thrust = max_accel * thrust_factor * (1.0 - min(alignment / 3.14159, 0.5));
+        float thrust = control.x * max_accel;
+        float rotation_rate = control.y * max_rotation;
         
         if (i == 0) {
             first_thrust = thrust;
@@ -131,13 +229,14 @@ void main() {
         pos += vel * dt;
         
         // Accumulate costs
+        vec2 to_predicted = (target_pos + target_vel * (float(i) * dt)) - pos;
         float dist_sq = dot(to_predicted, to_predicted);
         distance_cost += dist_sq * meters_per_pixel * meters_per_pixel;
         
         if (length(vel) > 10.0) {
             float vel_angle = atan(vel.y, vel.x);
             float align_error = abs(angle_difference(orientation, vel_angle));
-            alignment_cost += align_error * alignment_weight;
+            alignment_cost += align_error * template_params.w;
         }
         
         control_cost += abs(rotation_rate) * 0.1;
@@ -149,7 +248,22 @@ void main() {
     float final_dist_sq = dot(final_error, final_error);
     distance_cost += final_dist_sq * meters_per_pixel * meters_per_pixel * 10.0;
     
-    total_cost = distance_cost + control_cost + alignment_cost;
+    // Type-specific final costs
+    if (trajectory_type == TRAJECTORY_MULTI_ANGLE) {
+        // Check if we achieved good angle separation
+        float final_velocity_angle = atan(vel.y, vel.x);
+        float expected_perpendicular = flight_plan.y * 1.5708;  // ±90 degrees
+        float angle_error = abs(angle_difference(final_velocity_angle, expected_perpendicular));
+        type_specific_cost = angle_error * 100.0;
+        
+    } else if (trajectory_type == TRAJECTORY_SIMULTANEOUS) {
+        // Check if we're on track for simultaneous impact
+        float target_impact_time = flight_plan.z;
+        float time_error = abs(float(num_steps) * dt - target_impact_time);
+        type_specific_cost = time_error * 50.0;
+    }
+    
+    total_cost = distance_cost + control_cost + alignment_cost + type_specific_cost;
     
     // Store in shared memory for reduction
     shared_costs[template_id] = total_cost;
@@ -173,14 +287,22 @@ void main() {
         uint best_idx = shared_indices[0];
         vec4 best_template = templates.template_params[best_idx];
         
-        // Recalculate first control for best template
-        vec2 init_to_target = target_pos_vel.xy - torpedo_pos_vel.xy;
-        float init_angle = atan(init_to_target.y, init_to_target.x) + radians(best_template.z);
-        float init_error = angle_difference(torpedo_orient.x, init_angle);
+        // Recalculate first control for best template using proper trajectory type
+        vec2 init_control = calculate_trajectory_control(
+            trajectory_type,
+            torpedo_pos_vel.xy,
+            torpedo_pos_vel.zw,
+            torpedo_orient.x,
+            target_pos_vel.xy,
+            target_pos_vel.zw,
+            0.0,  // progress = 0 for first control
+            best_template,
+            flight_plan
+        );
         
         results.best_controls[torpedo_id] = vec4(
-            max_accel * best_template.x,  // thrust
-            clamp(init_error * best_template.y, -max_rotation, max_rotation),  // rotation
+            init_control.x * max_accel,  // thrust
+            init_control.y * max_rotation,  // rotation
             shared_costs[0],  // best cost
             float(best_idx)   // best template index
         );
