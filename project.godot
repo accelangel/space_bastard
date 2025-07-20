@@ -18,7 +18,7 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
 GameMode="*res://Scripts/Systems/GameMode.gd"
-TunerSystem="*res://Scripts/Systems/PIDTuner.gd"
+MPCTunerSystem="*res://Scripts/Systems/MPCTuner.gd"
 
 [display]
 
