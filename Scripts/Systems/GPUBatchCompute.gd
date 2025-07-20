@@ -2,6 +2,8 @@
 class_name GPUBatchCompute
 extends RefCounted
 
+var verbose_init: bool = false  # Set to true only when debugging GPU issues
+
 var rd: RenderingDevice
 var shader: RID
 var pipeline: RID
@@ -32,6 +34,13 @@ func _init():
 	
 	# Try to get the main rendering device first
 	rd = RenderingServer.create_local_rendering_device()
+	
+	if verbose_init:
+		print("[GPU Batch] Device: %s" % rd.get_device_name())
+		print("[GPU Batch] Vendor: %s" % rd.get_device_vendor_name())
+		print("[GPU Batch] Device Limits:")
+	else:
+		print("[GPU Batch] GPU initialized: %s" % rd.get_device_name())
 	
 	if not rd:
 		print("[GPU Batch] Local rendering device failed, trying global device...")
@@ -235,7 +244,7 @@ func evaluate_torpedo_batch(
 		push_error("[GPU Batch] Invalid batch size: %d (max: %d)" % [batch_size, max_torpedoes])
 		return []
 	
-	if debug_enabled:
+	if debug_enabled and batch_size > 10:  # Only print for large batches
 		print("[GPU Batch] Evaluating batch of %d torpedoes" % batch_size)
 	
 	# Pack torpedo states (reuse buffer)
@@ -347,7 +356,7 @@ func evaluate_torpedo_batch(
 	last_compute_time = (Time.get_ticks_usec() - start_time) / 1000.0
 	total_evaluations += batch_size * template_count
 	
-	if debug_enabled:
+	if debug_enabled and batch_size > 10:  # Only print for large batches
 		print("[GPU Batch] Evaluated %d torpedoes (%d trajectories) in %.2fms" % [
 			batch_size, 
 			batch_size * template_count,
@@ -415,4 +424,5 @@ func update_templates(evolved_templates: Array):
 	# Update GPU buffer
 	rd.buffer_update(template_buffer, 0, min(template_data.size() * 4, template_count * 4 * 4), template_data.to_byte_array())
 	
-	print("[GPU Batch] Updated %d templates on GPU" % evolved_templates.size())
+	# Don't print every update - let BatchMPCManager handle it
+	# print("[GPU Batch] Updated %d templates on GPU" % evolved_templates.size())

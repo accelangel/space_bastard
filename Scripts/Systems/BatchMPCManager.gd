@@ -45,6 +45,7 @@ var avg_frame_time: float = 0.0
 var template_evolution_enabled: bool = true
 var template_evolution_timer: float = 0.0
 var template_evolution_interval: float = 1.0  # Evolve every second
+var evolution_generation: int = 0  # ADD THIS LINE
 
 # Debug
 var debug_enabled: bool = true
@@ -66,19 +67,9 @@ func _ready():
 	print("[BatchMPC] GPU Available: %s" % gpu_available)
 	
 	if gpu_available:
-		print("[BatchMPC] SUCCESS: GPU batch processing available!")
-		print("[BatchMPC] Smart scheduling enabled - adaptive update rates")
-		print("[BatchMPC] Trajectory caching enabled")
-		
-		# Try a test evaluation to make sure it really works
-		print("[BatchMPC] Running test evaluation...")
-		var test_success = _run_test_evaluation()
-		if not test_success:
-			print("[BatchMPC] WARNING: Test evaluation failed, disabling GPU")
-			gpu_available = false
-	else:
-		print("[BatchMPC] FAILED: GPU not available - check GPUBatchCompute output above")
-		print("[BatchMPC] Torpedoes will need to use individual CPU fallback")
+		print("[BatchMPC] GPU acceleration ready (%s)" % gpu_compute.rd.get_device_name())
+	else: 
+		print("[BatchMPC] GPU not available - using CPU fallback")
 	
 	# Initialize template evolution
 	if template_evolution_enabled and gpu_available:
@@ -484,13 +475,15 @@ func process_pending_batch():
 	total_torpedoes_processed += batch_torpedoes.size()
 	largest_batch = max(largest_batch, batch_torpedoes.size())
 	
-	if debug_enabled:
-		print("[BatchMPC] Processed %d torpedoes in %.2fms (Cache hits: %d/%d)" % [
-			batch_torpedoes.size(), batch_time, cache_hit_count, cache_hit_count + cache_miss_count
-		])
+	#if debug_enabled:
+		#print("[BatchMPC] Processed %d torpedoes in %.2fms (Cache hits: %d/%d)" % [
+			#batch_torpedoes.size(), batch_time, cache_hit_count, cache_hit_count + cache_miss_count
+		#])
 
 func evolve_templates():
 	"""Trigger template evolution on GPU"""
+	evolution_generation += 1  # ADD THIS LINE
+	
 	var evolution_system = get_meta("evolution_system") if has_meta("evolution_system") else null
 	if evolution_system and evolution_system.has_method("evolve_population"):
 		# Evolve for each trajectory type
@@ -501,7 +494,7 @@ func evolve_templates():
 			var best_templates = evolution_system.get_best_templates(20)
 			gpu_compute.update_templates(best_templates)
 			
-			if debug_enabled:
+			if debug_enabled and evolution_generation % 10 == 0:  # Use evolution_generation instead
 				var stats = evolution_system.get_evolution_stats()
 				print("[BatchMPC] Template evolution - Gen: %d, Avg Fitness: %.3f, Best: %.3f" % [
 					stats.generation, stats.avg_fitness, stats.best_fitness

@@ -76,7 +76,7 @@ func _configure_for_mode(mode: GameMode.Mode):
 		GameMode.Mode.MPC_TUNING:
 			enabled = false
 			emergency_stop()
-			print("PDC %s: Disabled for MPC Tuning Mode" % pdc_id)
+			#print("PDC %s: Disabled for MPC Tuning Mode" % pdc_id)
 		_:
 			enabled = false
 
@@ -355,7 +355,7 @@ func angle_difference(from: float, to: float) -> float:
 	return diff
 
 func emergency_stop():
-	print("PDC %s: EMERGENCY STOP" % pdc_id)
+	#print("PDC %s: EMERGENCY STOP" % pdc_id)
 	current_target = null
 	stop_firing()
 	emergency_slew = false
