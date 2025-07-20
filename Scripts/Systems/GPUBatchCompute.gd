@@ -164,6 +164,20 @@ func _create_persistent_buffers():
 	template_count = templates.size()
 	print("[GPU Batch] Creating %d templates" % template_count)
 	
+	# DEBUG: Log template parameters
+	if debug_enabled:
+		print("\n[TEMPLATE DEBUG] === INITIAL TEMPLATE PARAMETERS ===")
+		for i in range(min(5, templates.size())):  # Log first 5 templates
+			print("[TEMPLATE DEBUG] Template %d:" % i)
+			print("  thrust_factor: %.2f" % templates[i].thrust_factor)
+			print("  rotation_gain: %.2f" % templates[i].rotation_gain)
+			print("  initial_angle_offset: %.1f°" % templates[i].initial_angle_offset)
+			print("  alignment_weight: %.2f" % templates[i].alignment_weight)
+			
+			# Check for suspicious gain values
+			if templates[i].rotation_gain > 15.0:
+				print("  !!! WARNING: Very high rotation_gain detected !!!")
+	
 	# Pack template data
 	var template_data = PackedFloat32Array()
 	for t in templates:
@@ -244,12 +258,15 @@ func evaluate_torpedo_batch(
 		push_error("[GPU Batch] Invalid batch size: %d (max: %d)" % [batch_size, max_torpedoes])
 		return []
 	
-	if debug_enabled and batch_size > 10:  # Only print for large batches
-		print("[GPU Batch] Evaluating batch of %d torpedoes" % batch_size)
+	# DEBUG: Log what we're sending to GPU for small batches
+	if debug_enabled and batch_size <= 2:
+		print("\n[GPU BOUNDARY] === SENDING TO GPU ===")
+		print("[GPU BOUNDARY] Batch size: %d torpedoes" % batch_size)
 	
 	# Pack torpedo states (reuse buffer)
 	var torpedo_data = PackedFloat32Array()
-	for state in torpedo_states:
+	for i in range(torpedo_states.size()):
+		var state = torpedo_states[i]
 		# Position and velocity
 		torpedo_data.append(state.position.x)
 		torpedo_data.append(state.position.y)
@@ -261,6 +278,18 @@ func evaluate_torpedo_batch(
 		torpedo_data.append(state.get("angular_velocity", 0.0))
 		torpedo_data.append(state.get("max_acceleration", 490.5))
 		torpedo_data.append(state.get("max_rotation_rate", deg_to_rad(1080.0)))
+		
+		# DEBUG: Log the values being sent
+		if debug_enabled and i < 2:  # Only first 2
+			print("\n[GPU BOUNDARY] Torpedo %d:" % i)
+			print("  position: (%.1f, %.1f)" % [state.position.x, state.position.y])
+			print("  velocity: (%.1f, %.1f)" % [state.velocity.x, state.velocity.y])
+			print("  orientation: %.2f rad (%.1f°)" % [state.orientation, rad_to_deg(state.orientation)])
+			print("  max_rotation_rate: %.2f rad/s (%.1f°/s)" % [
+				state.get("max_rotation_rate", deg_to_rad(1080.0)),
+				rad_to_deg(state.get("max_rotation_rate", deg_to_rad(1080.0)))
+			])
+			print("  GPU buffer[%d+7]: max_rotation=%.2f" % [i*8, torpedo_data[i*8 + 7]])
 	
 	# Pack target states
 	var target_data = PackedFloat32Array()
@@ -349,6 +378,32 @@ func evaluate_torpedo_batch(
 			"template_index": int(output_data[offset + 3])
 		})
 	
+	# DEBUG: Log what we received from GPU
+	if debug_enabled and batch_size <= 2:
+		print("\n[GPU BOUNDARY] === RECEIVED FROM GPU ===")
+		for i in range(min(2, results.size())):
+			print("\n[GPU BOUNDARY] Result %d:" % i)
+			print("  thrust: %.2f" % results[i].thrust)
+			print("  rotation_rate: %.2f rad/s (%.1f°/s)" % [
+				results[i].rotation_rate,
+				rad_to_deg(results[i].rotation_rate)
+			])
+			print("  cost: %.2f" % results[i].cost)
+			print("  template_index: %d" % results[i].get("template_index", -1))
+			
+			# Check for the suspicious value
+			if abs(results[i].rotation_rate) > 50.0:
+				print("  !!! SUSPICIOUS VALUE DETECTED: %.2f rad !!!" % results[i].rotation_rate)
+				print("  !!! This is exactly: %.2f * PI !!!" % (results[i].rotation_rate / PI))
+				print("  !!! Or: PI * %.2f !!!" % (results[i].rotation_rate / PI))
+				
+				# Check if it's PI * max_rotation
+				var expected_max = torpedo_states[i].get("max_rotation_rate", deg_to_rad(1080.0))
+				var ratio = results[i].rotation_rate / expected_max
+				print("  !!! Ratio to max_rotation: %.2f !!!" % ratio)
+				if abs(ratio - PI) < 0.1:
+					print("  !!! CONFIRMED: This is PI * max_rotation_rate !!!")
+	
 	# Clean up only the uniform set (buffers are persistent)
 	rd.free_rid(uniform_set)
 	
@@ -362,7 +417,6 @@ func evaluate_torpedo_batch(
 			batch_size * template_count,
 			last_compute_time
 		])
-		print("[GPU Batch] First result: thrust=%.2f, rotation=%.2f" % [results[0].thrust, results[0].rotation_rate])
 	
 	return results
 
@@ -404,6 +458,16 @@ func update_templates(evolved_templates: Array):
 		push_error("[GPU Batch] Cannot update templates - GPU not initialized!")
 		return
 	
+	# DEBUG: Log the evolved templates
+	if debug_enabled:
+		print("\n[TEMPLATE DEBUG] === EVOLVED TEMPLATES UPDATE ===")
+		for i in range(min(3, evolved_templates.size())):
+			var template = evolved_templates[i]
+			print("[TEMPLATE DEBUG] Evolved template %d:" % i)
+			print("  rotation_gain: %.2f" % template.get("rotation_gain", 10.0))
+			if template.get("rotation_gain", 10.0) > 15.0:
+				print("  !!! WARNING: Evolved template has very high rotation_gain !!!")
+	
 	# Convert evolved templates to GPU format
 	var template_data = PackedFloat32Array()
 	
@@ -423,6 +487,3 @@ func update_templates(evolved_templates: Array):
 	
 	# Update GPU buffer
 	rd.buffer_update(template_buffer, 0, min(template_data.size() * 4, template_count * 4 * 4), template_data.to_byte_array())
-	
-	# Don't print every update - let BatchMPCManager handle it
-	# print("[GPU Batch] Updated %d templates on GPU" % evolved_templates.size())

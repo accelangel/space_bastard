@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoMPC.gd - Enhanced Version
+# Scripts/Entities/Weapons/TorpedoMPC.gd - Enhanced Version with Debug
 extends Area2D
 class_name TorpedoMPC
 
@@ -77,6 +77,11 @@ var computation_times: Array = []
 var debug_trail: PackedVector2Array = []
 var max_trail_points: int = 100
 var debug_enabled: bool = false
+
+# Rotation debugging
+var rotation_debug_enabled: bool = true
+var debug_frame_counter: int = 0
+var suspicious_rotation_count: int = 0
 
 func _ready():
 	# Generate ID
@@ -303,6 +308,38 @@ func apply_mpc_control(control: Dictionary):
 		push_error("Invalid control dictionary from batch MPC")
 		return
 	
+	# Debug logging for first few frames
+	debug_frame_counter += 1
+	if rotation_debug_enabled and debug_frame_counter <= 10:
+		print("\n[TORPEDO CONTROL] === Frame %d - %s ===" % [debug_frame_counter, torpedo_id])
+		print("[TORPEDO CONTROL] Received control from batch MPC:")
+		print("  rotation_rate: %.2f rad/s (%.1f°/s)" % [
+			control.rotation_rate,
+			rad_to_deg(control.rotation_rate)
+		])
+		print("  max_rotation_rate: %.2f rad/s (%.1f°/s)" % [
+			max_rotation_rate,
+			rad_to_deg(max_rotation_rate)
+		])
+		print("  thrust: %.2f" % control.thrust)
+		
+		# Check for the suspicious value
+		if abs(control.rotation_rate) > 50.0:
+			suspicious_rotation_count += 1
+			print("  !!! RECEIVED SUSPICIOUS VALUE: %.2f rad/s !!!" % control.rotation_rate)
+			print("  !!! Ratio to max: %.2f !!!" % (control.rotation_rate / max_rotation_rate))
+			print("  !!! Ratio to PI: %.2f !!!" % (control.rotation_rate / PI))
+			print("  !!! This is the %d-th suspicious value !!!" % suspicious_rotation_count)
+			
+			# Diagnostic check
+			if abs(control.rotation_rate / max_rotation_rate - PI) < 0.1:
+				print("  !!! CONFIRMED: rotation_rate = PI * max_rotation_rate !!!")
+				print("  !!! The shader is outputting clamped values multiplied by max_rotation !!!")
+		
+		# Log template index if available
+		if control.has("template_index"):
+			print("  template_index: %d" % control.template_index)
+	
 	# Reset update counter
 	frames_since_update = 0
 	last_update_time = Time.get_ticks_msec() / 1000.0
@@ -310,7 +347,7 @@ func apply_mpc_control(control: Dictionary):
 	# Store control for reuse
 	last_control = control
 	
-	# Apply the control
+	# Apply the control with safety clamping
 	apply_control(control, get_physics_process_delta_time())
 	
 	# Update performance metrics
@@ -336,12 +373,23 @@ func apply_cached_trajectory(trajectory_data: Dictionary):
 	apply_control(trajectory_data.control, get_physics_process_delta_time())
 
 func apply_control(control: Dictionary, delta: float):
-	"""Apply MPC control output to torpedo physics"""
+	"""Apply MPC control output to torpedo physics with safety clamping"""
 	
-	# Update orientation
-	orientation += control.rotation_rate * delta
+	var received_rotation = control.rotation_rate
+	
+	# SAFETY CLAMP - This is critical!
+	var clamped_rotation = clamp(control.rotation_rate, -max_rotation_rate, max_rotation_rate)
+	
+	if rotation_debug_enabled and abs(received_rotation) > max_rotation_rate:
+		print("\n[TORPEDO CONTROL] !!! CLAMPING ROTATION in apply_control() !!!")
+		print("  Received: %.2f rad/s (%.1f°/s)" % [received_rotation, rad_to_deg(received_rotation)])
+		print("  Clamped to: %.2f rad/s (%.1f°/s)" % [clamped_rotation, rad_to_deg(clamped_rotation)])
+		print("  This should NOT happen if the GPU shader is working correctly!")
+	
+	# Update orientation with clamped value
+	orientation += clamped_rotation * delta
 	orientation = wrapf(orientation, -PI, PI)
-	angular_velocity = control.rotation_rate
+	angular_velocity = clamped_rotation
 	
 	# Update velocity
 	var thrust_direction = Vector2.from_angle(orientation)
@@ -477,6 +525,13 @@ func is_valid_target(target: Node2D) -> bool:
 func mark_for_destruction(reason: String):
 	if marked_for_death:
 		return
+	
+	# Report rotation debug summary if we had issues
+	if rotation_debug_enabled and suspicious_rotation_count > 0:
+		print("\n[TORPEDO CONTROL] === FINAL ROTATION DEBUG SUMMARY ===")
+		print("Torpedo %s had %d suspicious rotation values" % [torpedo_id, suspicious_rotation_count])
+		print("This suggests the GPU shader is outputting clamped values * max_rotation")
+		print("===================================================\n")
 	
 	# Report template performance if using evolution
 	if assigned_template_index >= 0 and batch_manager:

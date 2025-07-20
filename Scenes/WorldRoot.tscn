@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://iolvmgmbu42d"]
+[gd_scene load_steps=12 format=3 uid="uid://iolvmgmbu42d"]
 
 [ext_resource type="Script" path="res://Scripts/Systems/GameCamera.gd" id="1_at0gn"]
 [ext_resource type="Script" path="res://Scripts/UI/GridOverlay.gd" id="1_bm7um"]
@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://Scripts/UI/PiPCamera.gd" id="7_uajus"]
 [ext_resource type="Script" path="res://Scripts/UI/GridSizeLabel.gd" id="9_2gyfj"]
 [ext_resource type="Script" path="res://Scripts/Systems/TestComputeShader.gd" id="10_poj3p"]
+[ext_resource type="Script" path="res://Scripts/Systems/RotationDiagnosticTest.gd" id="11_feqrt"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -97,3 +98,6 @@ script = ExtResource("9_2gyfj")
 
 [node name="GPUTest" type="Node" parent="."]
 script = ExtResource("10_poj3p")
+
+[node name="RotationDiagnosticTest" type="Node" parent="."]
+script = ExtResource("11_feqrt")

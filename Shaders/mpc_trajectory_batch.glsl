@@ -63,7 +63,8 @@ vec2 calculate_trajectory_control(
     vec2 target_vel,
     float progress,
     vec4 template_params,
-    vec4 flight_plan
+    vec4 flight_plan,
+    float max_rotation  // PASS THIS IN!
 ) {
     float thrust_factor = template_params.x;
     float rotation_gain = template_params.y;
@@ -136,7 +137,17 @@ vec2 calculate_trajectory_control(
     
     // Calculate control outputs
     float angle_error = angle_difference(orientation, desired_angle);
-    float rotation_rate = clamp(angle_error * rotation_gain, -3.14159, 3.14159);  // Assuming normalized max_rotation
+    
+    // THE FIX: Clamp BEFORE multiplying by max_rotation!
+    float normalized_rotation_rate = clamp(angle_error * rotation_gain, -3.14159, 3.14159);
+    
+    // Now scale to actual rotation rate
+    float rotation_rate = normalized_rotation_rate;  // Already in rad/s, no need to multiply!
+    
+    // Actually, let's be more careful here:
+    // rotation_gain should produce a value that when multiplied by angle_error gives us rad/s directly
+    // So we should clamp to actual max_rotation, not PI
+    rotation_rate = clamp(angle_error * rotation_gain, -max_rotation, max_rotation);
     
     // Thrust based on alignment
     float alignment = abs(angle_error);
@@ -209,11 +220,12 @@ void main() {
             target_vel,
             progress,
             template_params,
-            flight_plan
+            flight_plan,
+            max_rotation  // Pass the actual max_rotation!
         );
         
         float thrust = control.x * max_accel;
-        float rotation_rate = control.y * max_rotation;
+        float rotation_rate = control.y;  // Already in rad/s and clamped!
         
         if (i == 0) {
             first_thrust = thrust;
@@ -298,14 +310,16 @@ void main() {
             target_pos_vel.zw,
             0.0,  // progress = 0 for first control
             best_template,
-            flight_plan
+            flight_plan,
+            max_rotation  // Pass the actual max_rotation!
         );
         
+        // CRITICAL FIX: Store the actual rotation rate, not multiplied by max_rotation!
         results.best_controls[torpedo_id] = vec4(
             init_control.x * max_accel,  // thrust
-            init_control.y * max_rotation,  // rotation
-            shared_costs[0],  // best cost
-            float(best_idx)   // best template index
+            init_control.y,               // rotation_rate - already in rad/s!
+            shared_costs[0],              // best cost
+            float(best_idx)               // best template index
         );
     }
 }
