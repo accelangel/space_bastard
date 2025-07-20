@@ -103,9 +103,6 @@ func _setup_shader():
 	if compile_error and compile_error != "":
 		push_error("[GPU Batch] SHADER COMPILATION ERROR:")
 		push_error(compile_error)
-		# Try to get more specific error info
-		var stage_count = shader_spirv.get_stage_count() if shader_spirv else 0
-		push_error("[GPU Batch] Stage count: %d" % stage_count)
 		return
 	
 	if not shader_spirv:
@@ -113,39 +110,20 @@ func _setup_shader():
 		push_error("[GPU Batch] The shader may have syntax errors")
 		return
 	
-	# Additional validation
-	var stage_count = shader_spirv.get_stage_count()
-	print("[GPU Batch] SPIR-V has %d stages" % stage_count)
-	
-	if stage_count == 0:
-		push_error("[GPU Batch] FAILED: SPIR-V has no stages!")
-		push_error("[GPU Batch] The compute shader may not be compiling correctly")
-		return
-	
-	# Check the bytecode for each stage
-	for i in range(stage_count):
-		var stage_bytecode = shader_spirv.get_stage_bytecode(i)
-		print("[GPU Batch] Stage %d bytecode size: %d bytes" % [i, stage_bytecode.size()])
-		if stage_bytecode.size() == 0:
-			push_error("[GPU Batch] Stage %d has no bytecode!" % i)
-			return
-	
 	print("[GPU Batch] Creating shader from SPIR-V...")
-	# Create shader from SPIR-V
+	# Create shader from SPIR-V - simplified validation
 	shader = rd.shader_create_from_spirv(shader_spirv)
 	
-	if not shader:
+	if not shader or shader == RID():
 		push_error("[GPU Batch] FAILED: Could not create shader from SPIR-V!")
-		# compile_error was already checked above, so just show the error
-		if compile_error:
-			push_error("[GPU Batch] Reminder - Shader compile error was: %s" % compile_error)
+		push_error("[GPU Batch] The shader may have errors or use unsupported features")
 		return
 	
 	print("[GPU Batch] Creating compute pipeline...")
 	# Create compute pipeline
 	pipeline = rd.compute_pipeline_create(shader)
 	
-	if not pipeline:
+	if not pipeline or pipeline == RID():
 		push_error("[GPU Batch] FAILED: Could not create compute pipeline!")
 		push_error("[GPU Batch] This usually means the shader has an error or uses unsupported features")
 		return
@@ -192,7 +170,7 @@ func _create_persistent_buffers():
 		template_data.to_byte_array()
 	)
 	
-	if not template_buffer:
+	if not template_buffer or template_buffer == RID():
 		push_error("[GPU Batch] Failed to create template buffer!")
 		pipeline_valid = false
 		return
@@ -204,7 +182,7 @@ func _create_persistent_buffers():
 	empty_torpedo_data.resize(torpedo_size)
 	torpedo_buffer = rd.storage_buffer_create(torpedo_size, empty_torpedo_data)
 	
-	if not torpedo_buffer:
+	if not torpedo_buffer or torpedo_buffer == RID():
 		push_error("[GPU Batch] Failed to create torpedo buffer!")
 		pipeline_valid = false
 		return
@@ -331,7 +309,7 @@ func evaluate_torpedo_batch(
 	
 	var uniform_set = rd.uniform_set_create(bindings, shader, 0)
 	
-	if not uniform_set:
+	if not uniform_set or uniform_set == RID():
 		push_error("[GPU Batch] Failed to create uniform set!")
 		return []
 	
@@ -392,28 +370,28 @@ func is_available() -> bool:
 func cleanup():
 	if rd:
 		# Free all persistent buffers
-		if template_buffer:
+		if template_buffer and template_buffer != RID():
 			rd.free_rid(template_buffer)
-		if torpedo_buffer:
+		if torpedo_buffer and torpedo_buffer != RID():
 			rd.free_rid(torpedo_buffer)
-		if target_buffer:
+		if target_buffer and target_buffer != RID():
 			rd.free_rid(target_buffer)
-		if sim_buffer:
+		if sim_buffer and sim_buffer != RID():
 			rd.free_rid(sim_buffer)
-		if flight_plan_buffer:
+		if flight_plan_buffer and flight_plan_buffer != RID():
 			rd.free_rid(flight_plan_buffer)
-		if result_buffer:
+		if result_buffer and result_buffer != RID():
 			rd.free_rid(result_buffer)
-		if shader:
+		if shader and shader != RID():
 			rd.free_rid(shader)
-		if pipeline:
+		if pipeline and pipeline != RID():
 			rd.free_rid(pipeline)
 	print("[GPU Batch] Cleaned up GPU resources")
 
 func update_templates(evolved_templates: Array):
 	"""Update GPU templates with evolved parameters"""
 	
-	if not rd or not template_buffer:
+	if not rd or not template_buffer or template_buffer == RID():
 		push_error("[GPU Batch] Cannot update templates - GPU not initialized!")
 		return
 	
