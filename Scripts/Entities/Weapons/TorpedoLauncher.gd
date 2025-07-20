@@ -12,7 +12,7 @@ class_name TorpedoLauncher
 @export var auto_volley: bool = false  # MUST BE FALSE - manual fire only
 
 # Fixed launcher parameters
-const TORPEDOES_PER_VOLLEY: int = 8  # ALWAYS 8
+const TORPEDOES_PER_VOLLEY: int = 2  # ALWAYS 8
 const TUBES_PER_SIDE: int = 4  # 4 port, 4 starboard
 const TUBE_SPACING: float = 30.0  # pixels between tubes
 const LATERAL_OFFSET: float = 60.0  # pixels from ship center to tubes
@@ -343,7 +343,6 @@ func _draw():
 		draw_circle(starboard_pos, 5, Color.GREEN if starboard_ready else Color.RED)
 
 func reset_all_tubes():
-	"""Reset all tubes to ready state - for PID tuning"""
 	port_tubes_ready = TUBES_PER_SIDE
 	starboard_tubes_ready = TUBES_PER_SIDE
 	for tube_id in reload_timers:

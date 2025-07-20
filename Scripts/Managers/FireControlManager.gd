@@ -151,7 +151,7 @@ func assess_threat_immediate(torpedo: Node2D) -> Dictionary:
 	
 	var ship_pos = parent_ship.global_position
 	var torpedo_pos = torpedo.global_position
-	var torpedo_vel = torpedo.get("velocity_mps") if torpedo.has("velocity_mps") else Vector2.ZERO
+	var torpedo_vel = torpedo.get("velocity_mps") if "velocity_mps" in torpedo else Vector2.ZERO
 	
 	# Calculate everything fresh
 	var distance = ship_pos.distance_to(torpedo_pos)
@@ -278,7 +278,7 @@ func find_best_pdc_for_target(torpedo: Node2D, already_assigned: Dictionary) -> 
 			continue
 		
 		# Skip if PDC is already engaged with a valid target
-		if pdc.has("current_target") and pdc.current_target:
+		if "current_target" in pdc and pdc.current_target:
 			# Check instance validity before calling is_valid_target
 			if is_instance_valid(pdc.current_target):
 				if pdc.has_method("is_valid_target") and pdc.is_valid_target(pdc.current_target):
@@ -327,11 +327,11 @@ func calculate_pdc_efficiency(pdc: Node2D, torpedo: Node2D) -> float:
 		required_ship_angle += TAU
 	
 	# Calculate rotation needed
-	var current_angle = pdc.get("current_rotation") if pdc.has("current_rotation") else 0.0
+	var current_angle = pdc.get("current_rotation") if "current_rotation" in pdc else 0.0
 	var rotation_needed = abs(pdc.angle_difference(current_angle, required_ship_angle))
 	
 	# Factor in rotation time
-	var rotation_speed = pdc.get("turret_rotation_speed") if pdc.has("turret_rotation_speed") else 360.0
+	var rotation_speed = pdc.get("turret_rotation_speed") if "turret_rotation_speed" in pdc else 360.0
 	var rotation_time = rotation_needed / deg_to_rad(rotation_speed)
 	
 	# Score based on how quickly PDC can engage
@@ -371,7 +371,7 @@ func emergency_stop_all():
 func get_debug_info() -> String:
 	var active_pdcs = 0
 	for pdc in registered_pdcs.values():
-		if is_instance_valid(pdc) and pdc.has("current_target") and pdc.current_target:
+		if is_instance_valid(pdc) and "current_target" in pdc and pdc.current_target:
 			# Check if target is still valid before counting
 			if is_instance_valid(pdc.current_target):
 				active_pdcs += 1

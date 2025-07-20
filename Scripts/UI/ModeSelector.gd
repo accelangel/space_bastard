@@ -3,7 +3,7 @@ extends Control
 class_name ModeSelector
 
 @onready var battle_label: Label = $VBoxContainer/BattleMode
-@onready var pid_label: Label = $VBoxContainer/PIDTuningMode
+@onready var mpc_label: Label = $VBoxContainer/MPCTuningMode
 
 var mode_selected: bool = false
 var normal_color: Color = Color("#FF69B4")  # Pink
@@ -25,17 +25,17 @@ func _ready():
 	
 	# Set up labels
 	setup_label(battle_label, "Battle Mode")
-	setup_label(pid_label, "PID Tuning Mode")
+	setup_label(mpc_label, "MPC Tuning Mode")
 	
 	# Connect mouse events
 	battle_label.gui_input.connect(_on_battle_input)
-	pid_label.gui_input.connect(_on_pid_input)
+	mpc_label.gui_input.connect(_on_mpc_input)
 	
 	# Mouse enter/exit for hover effects
 	battle_label.mouse_entered.connect(func(): _on_label_hover(battle_label, true))
 	battle_label.mouse_exited.connect(func(): _on_label_hover(battle_label, false))
-	pid_label.mouse_entered.connect(func(): _on_label_hover(pid_label, true))
-	pid_label.mouse_exited.connect(func(): _on_label_hover(pid_label, false))
+	mpc_label.mouse_entered.connect(func(): _on_label_hover(mpc_label, true))
+	mpc_label.mouse_exited.connect(func(): _on_label_hover(mpc_label, false))
 
 func setup_label(label: Label, text: String):
 	label.text = text
@@ -78,16 +78,16 @@ func _on_battle_input(event: InputEvent):
 			else:
 				start_battle_mode()
 
-func _on_pid_input(event: InputEvent):
+func _on_mpc_input(event: InputEvent):
 	if mode_selected:
 		return
 		
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				animate_click(pid_label)
+				animate_click(mpc_label)
 			else:
-				start_pid_tuning()
+				start_mpc_tuning()
 
 func animate_click(label: Label):
 	# Kill any existing tween
@@ -124,21 +124,21 @@ func start_battle_mode():
 		if player.has_method("start_battle_timer"):
 			player.start_battle_timer()
 
-func start_pid_tuning():
+func start_mpc_tuning():
 	if mode_selected:
 		return
 		
 	mode_selected = true
 	
 	# Set game mode - this will configure all systems
-	GameMode.set_mode(GameMode.Mode.PID_TUNING)
+	GameMode.set_mode(GameMode.Mode.MPC_TUNING)
 	
 	fade_ui()
 	
 	# Enable ship movement
 	enable_all_ship_movement()
 	
-	# PIDTuner will start automatically from mode signal
+	# MPCTuner will start automatically from mode signal
 
 func enable_all_ship_movement():
 	var ships = get_tree().get_nodes_in_group("ships")
@@ -151,11 +151,11 @@ func fade_ui():
 	var fade_tween = create_tween()
 	fade_tween.set_parallel(true)
 	fade_tween.tween_property(battle_label, "modulate:a", inactive_alpha, 0.3)
-	fade_tween.tween_property(pid_label, "modulate:a", inactive_alpha, 0.3)
+	fade_tween.tween_property(mpc_label, "modulate:a", inactive_alpha, 0.3)
 	
 	# Disable mouse interaction
 	battle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pid_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mpc_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 # Handle window resize
 func _notification(what):

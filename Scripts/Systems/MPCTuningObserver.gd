@@ -38,12 +38,12 @@ func _ready():
 	set_process(false)
 
 func _on_mode_changed(new_mode: GameMode.Mode):
-	set_process(new_mode == GameMode.Mode.PID_TUNING)  # Reusing PID mode for MPC
-	if new_mode == GameMode.Mode.PID_TUNING:
+	set_process(new_mode == GameMode.Mode.MPC_TUNING)
+	if new_mode == GameMode.Mode.MPC_TUNING:
 		reset_cycle_data()
 
 func _process(delta):
-	if not GameMode.is_pid_tuning_mode():
+	if not GameMode.is_mpc_tuning_mode():
 		return
 	
 	sample_timer += delta
@@ -100,7 +100,7 @@ func set_trajectory_type(type: String):
 	current_trajectory_type = type
 
 func on_entity_spawned(entity: Node2D, entity_type: String):
-	if not GameMode.is_pid_tuning_mode():
+	if not GameMode.is_mpc_tuning_mode():
 		return
 	
 	if entity_type == "torpedo":
@@ -125,7 +125,7 @@ func on_entity_spawned(entity: Node2D, entity_type: String):
 		torpedo_outcomes.append(torpedo_data)
 
 func on_entity_dying(entity: Node2D, reason: String):
-	if not GameMode.is_pid_tuning_mode():
+	if not GameMode.is_mpc_tuning_mode():
 		return
 	
 	if entity.is_in_group("torpedoes"):
@@ -192,7 +192,7 @@ func on_entity_dying(entity: Node2D, reason: String):
 
 func on_torpedo_miss(miss_data: Dictionary):
 	"""Called by MPC torpedoes when they miss"""
-	if not GameMode.is_pid_tuning_mode():
+	if not GameMode.is_mpc_tuning_mode():
 		return
 	
 	# Update torpedo outcome data
@@ -204,7 +204,7 @@ func on_torpedo_miss(miss_data: Dictionary):
 
 func on_torpedo_hit(hit_data: Dictionary):
 	"""Called by MPC torpedoes when they hit"""
-	if not GameMode.is_pid_tuning_mode():
+	if not GameMode.is_mpc_tuning_mode():
 		return
 	
 	# Update torpedo outcome data

@@ -105,8 +105,8 @@ func toggle_test_acceleration():
 	else:
 		set_movement_direction(Vector2.ZERO)
 
-# Reset functions for PID tuning
-func reset_for_pid_cycle():
+# Reset functions for MPC tuning
+func reset_for_mpc_cycle():
 	global_position = Vector2(60000, -33000)  # Actual position from scene
 	rotation = -2.35619  # -135 degrees
 	velocity_mps = Vector2.ZERO
@@ -115,7 +115,7 @@ func reset_for_pid_cycle():
 		set_acceleration(test_gs)
 
 func force_reset_physics():
-	"""Force physics state reset for PID tuning"""
+	"""Force physics state reset for MPC tuning"""
 	velocity_mps = Vector2.ZERO
 	movement_direction = test_direction
 	

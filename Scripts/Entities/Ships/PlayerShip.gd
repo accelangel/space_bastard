@@ -41,8 +41,8 @@ var battle_start_delay: float = 2.0
 var battle_timer: float = 0.0
 var battle_timer_enabled: bool = false
 
-# PID Tuner reference
-var pid_tuner: Node = null
+# MPC Tuner reference
+var mpc_tuner: Node = null
 
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
@@ -54,10 +54,10 @@ func _ready():
 	# Generate unique ID
 	entity_id = "player_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	
-	# Get PID tuner reference
+	# Get MPC tuner reference
 	if Engine.has_singleton("TunerSystem"):
-		pid_tuner = Engine.get_singleton("TunerSystem")
-		print("[PlayerShip] PID tuner reference: %s" % ("Found" if pid_tuner else "NOT FOUND"))
+		mpc_tuner = Engine.get_singleton("TunerSystem")
+		print("[PlayerShip] MPC tuner reference: %s" % ("Found" if mpc_tuner else "NOT FOUND"))
 	
 	# Configure torpedo launcher for trajectory type
 	if torpedo_launcher:
@@ -176,11 +176,11 @@ func _input(event):
 	if event.is_action_pressed("ui_accept"):
 		print("[PlayerShip] SPACE key pressed")
 		print("  battle_timer_enabled: %s" % battle_timer_enabled)
-		print("  pid_tuner exists: %s" % (pid_tuner != null))
-		print("  is_tuning_active: %s" % (pid_tuner.is_tuning_active() if pid_tuner else "N/A"))
+		print("  mpc_tuner exists: %s" % (mpc_tuner != null))
+		print("  is_tuning_active: %s" % (mpc_tuner.is_tuning_active() if mpc_tuner else "N/A"))
 		
 		# Only allow manual torpedo fire if not in any mode
-		if not battle_timer_enabled and (!pid_tuner or !pid_tuner.is_tuning_active()):
+		if not battle_timer_enabled and (!mpc_tuner or !mpc_tuner.is_tuning_active()):
 			print("[PlayerShip] Manual torpedo launch triggered")
 			fire_torpedoes_at_enemy()
 		else:
@@ -197,7 +197,7 @@ func _input(event):
 		update_torpedo_launcher_settings()
 		print("Switched to Simultaneous Impact mode")
 		# Only fire if appropriate
-		if not battle_timer_enabled and (!pid_tuner or !pid_tuner.is_tuning_active()):
+		if not battle_timer_enabled and (!mpc_tuner or !mpc_tuner.is_tuning_active()):
 			fire_torpedoes_at_enemy()
 
 func cycle_torpedo_mode():
@@ -224,8 +224,8 @@ func fire_torpedoes_at_enemy():
 		return
 	
 	# Don't fire during tuning
-	if pid_tuner and pid_tuner.is_tuning_active():
-		print("Cannot fire manually during PID tuning")
+	if mpc_tuner and mpc_tuner.is_tuning_active():
+		print("Cannot fire manually during MPC tuning")
 		return
 		
 	# Find closest enemy ship
@@ -263,8 +263,8 @@ func toggle_test_acceleration():
 	else:
 		set_movement_direction(Vector2.ZERO)
 
-# Reset functions for PID tuning
-func reset_for_pid_cycle():
+# Reset functions for MPC tuning
+func reset_for_mpc_cycle():
 	global_position = Vector2(-64000, 35500)
 	rotation = 0.785398  # 45 degrees
 	velocity_mps = Vector2.ZERO
@@ -273,7 +273,7 @@ func reset_for_pid_cycle():
 		set_acceleration(test_gs)
 
 func force_reset_physics():
-	"""Force physics state reset for PID tuning"""
+	"""Force physics state reset for MPC tuning"""
 	velocity_mps = Vector2.ZERO
 	movement_direction = test_direction
 	

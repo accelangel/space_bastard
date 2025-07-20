@@ -115,7 +115,7 @@ func _ready():
 	print("MPCTuner singleton ready")
 
 func _on_mode_changed(new_mode: GameMode.Mode):
-	if new_mode == GameMode.Mode.PID_TUNING:  # We'll reuse PID_TUNING mode for MPC
+	if new_mode == GameMode.Mode.MPC_TUNING:
 		start_tuning()
 	else:
 		stop_tuning()
@@ -714,14 +714,14 @@ func reset_battle_positions():
 	if player_ship:
 		player_ship.set_deferred("global_position", PLAYER_START_POS)
 		player_ship.set_deferred("rotation", PLAYER_START_ROT)
-		if player_ship.has_method("force_reset_physics"):
-			player_ship.call_deferred("force_reset_physics")
+		if player_ship.has_method("reset_for_mpc_cycle"):
+			player_ship.call_deferred("reset_for_mpc_cycle")
 	
 	if enemy_ship:
 		enemy_ship.set_deferred("global_position", ENEMY_START_POS)
 		enemy_ship.set_deferred("rotation", ENEMY_START_ROT)
-		if enemy_ship.has_method("force_reset_physics"):
-			enemy_ship.call_deferred("force_reset_physics")
+		if enemy_ship.has_method("reset_for_mpc_cycle"):
+			enemy_ship.call_deferred("reset_for_mpc_cycle")
 	
 	if torpedo_launcher and torpedo_launcher.has_method("reset_all_tubes"):
 		torpedo_launcher.reset_all_tubes()

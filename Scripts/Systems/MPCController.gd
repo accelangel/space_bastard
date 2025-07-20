@@ -50,8 +50,48 @@ var trajectory_shift_time: float = 0.0
 # Debug
 var debug_enabled: bool = false
 
+# Performance monitoring
+var perf_stats = {
+	"updates_this_second": 0,
+	"trajectories_evaluated": 0,
+	"total_update_time": 0.0,
+	"max_update_time": 0.0,
+	"recycled_trajectories": 0,
+	"fresh_trajectories": 0
+}
+var perf_timer: float = 0.0
+var last_perf_report_time: float = 0.0
+
 func _init():
 	current_trajectory = Trajectory.new()
+
+func process_performance(delta: float):
+	perf_timer += delta
+	if perf_timer >= 1.0:
+		# Print performance report
+		if perf_stats.updates_this_second > 0:
+			var avg_time = perf_stats.total_update_time / perf_stats.updates_this_second * 1000.0
+			var avg_trajectories = float(perf_stats.trajectories_evaluated) / float(perf_stats.updates_this_second)
+			var recycle_rate = 0.0
+			if perf_stats.recycled_trajectories + perf_stats.fresh_trajectories > 0:
+				recycle_rate = float(perf_stats.recycled_trajectories) / float(perf_stats.recycled_trajectories + perf_stats.fresh_trajectories) * 100.0
+			
+			print("[MPC PERF] Updates/s: %d | Avg: %.1fms | Max: %.1fms | Traj/update: %.1f | Recycled: %.0f%%" % [
+				perf_stats.updates_this_second,
+				avg_time,
+				perf_stats.max_update_time * 1000.0,
+				avg_trajectories,
+				recycle_rate
+			])
+		
+		# Reset stats
+		perf_stats.updates_this_second = 0
+		perf_stats.trajectories_evaluated = 0
+		perf_stats.total_update_time = 0.0
+		perf_stats.max_update_time = 0.0
+		perf_stats.recycled_trajectories = 0
+		perf_stats.fresh_trajectories = 0
+		perf_timer = 0.0
 
 # Main MPC update function
 func update_trajectory(

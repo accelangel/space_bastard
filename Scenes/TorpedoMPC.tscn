@@ -40,4 +40,4 @@ shape = SubResource("CapsuleShape2D_a800a")
 rotation = 1.5708
 scale = Vector2(0.05, 0.05)
 sprite_frames = SubResource("SpriteFrames_ioos4")
-frame_progress = 0.877609
+frame_progress = 0.0662101

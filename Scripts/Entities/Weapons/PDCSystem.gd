@@ -26,7 +26,7 @@ var is_alive: bool = true
 var marked_for_death: bool = false
 
 # Tuning support
-var enabled: bool = true  # Can be disabled during PID tuning
+var enabled: bool = true  # Can be disabled during MPC tuning
 
 # References
 var parent_ship: Node2D
@@ -73,10 +73,10 @@ func _configure_for_mode(mode: GameMode.Mode):
 		GameMode.Mode.BATTLE:
 			enabled = true
 			print("PDC %s: Enabled for Battle Mode" % pdc_id)
-		GameMode.Mode.PID_TUNING:
+		GameMode.Mode.MPC_TUNING:
 			enabled = false
 			emergency_stop()
-			print("PDC %s: Disabled for PID Tuning Mode" % pdc_id)
+			print("PDC %s: Disabled for MPC Tuning Mode" % pdc_id)
 		_:
 			enabled = false
 

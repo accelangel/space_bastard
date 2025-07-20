@@ -4,7 +4,7 @@ extends Node
 enum Mode {
 	NONE,           # No mode selected yet
 	BATTLE,         # Normal battle mode
-	PID_TUNING      # PID tuning mode
+	MPC_TUNING      # MPC tuning mode
 }
 
 var current_mode: Mode = Mode.NONE
@@ -29,8 +29,8 @@ func set_mode(new_mode: Mode):
 	match current_mode:
 		Mode.BATTLE:
 			_cleanup_battle_mode()
-		Mode.PID_TUNING:
-			_cleanup_pid_tuning_mode()
+		Mode.MPC_TUNING:
+			_cleanup_mpc_tuning_mode()
 	
 	# Set new mode
 	current_mode = new_mode
@@ -41,11 +41,11 @@ func set_mode(new_mode: Mode):
 	
 	# Handle FPS settings for different modes
 	match new_mode:
-		Mode.PID_TUNING:
-			# Lock to 60 FPS for consistent PID tuning
+		Mode.MPC_TUNING:
+			# Lock to 60 FPS for consistent MPC tuning
 			Engine.max_fps = 60
 			Engine.physics_ticks_per_second = 60
-			print("FPS LOCKED TO 60 FOR PID TUNING")
+			print("FPS LOCKED TO 60 FOR MPC TUNING")
 		Mode.BATTLE:
 			# Restore original FPS for battle mode
 			Engine.max_fps = original_max_fps
@@ -64,8 +64,8 @@ func set_mode(new_mode: Mode):
 func is_battle_mode() -> bool:
 	return current_mode == Mode.BATTLE
 
-func is_pid_tuning_mode() -> bool:
-	return current_mode == Mode.PID_TUNING
+func is_mpc_tuning_mode() -> bool:
+	return current_mode == Mode.MPC_TUNING
 
 func get_mode_name() -> String:
 	return Mode.keys()[current_mode]
@@ -80,7 +80,7 @@ func _cleanup_battle_mode():
 	# Clean up all combat entities
 	_cleanup_all_combat_entities()
 
-func _cleanup_pid_tuning_mode():
+func _cleanup_mpc_tuning_mode():
 	# Stop any active tuning
 	if Engine.has_singleton("TunerSystem"):
 		var tuner = Engine.get_singleton("TunerSystem")
