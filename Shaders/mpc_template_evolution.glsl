@@ -1,3 +1,4 @@
+#[compute]
 #version 450
 
 // GPU Template Evolution for MPC System

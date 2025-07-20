@@ -16,42 +16,30 @@ func _ready():
 	print("SUCCESS: Created rendering device")
 	print("Device: %s" % rd.get_device_name())
 	
-	# Create the simplest possible compute shader
-	var shader_source = """
-#version 450
-
-layout(local_size_x = 1) in;
-
-layout(set = 0, binding = 0, std430) buffer DataBuffer {
-	float data[];
-} buf;
-
-void main() {
-	uint i = gl_GlobalInvocationID.x;
-	buf.data[i] = buf.data[i] * 2.0;
-}
-"""
+	# Create a temporary compute shader file
+	create_test_shader_file()
 	
-	# Create shader file
-	var shader_file = RDShaderFile.new()
-	shader_file.set_stage_source(RDShaderFile.STAGE_COMPUTE, shader_source)
-	
-	# Try to compile
-	var shader_spirv = shader_file.get_spirv()
-	
-	if not shader_spirv:
-		print("FAILED: Cannot compile shader")
-		var error = shader_file.get_base_error()
-		if error:
-			print("Error: %s" % error)
+	# Load the shader file (Godot's way for compute shaders)
+	var shader_file = load("res://test_compute_shader.glsl")
+	if not shader_file:
+		print("FAILED: Cannot load shader file")
 		return
 	
-	print("SUCCESS: Shader compiled to SPIR-V")
+	print("SUCCESS: Loaded shader file")
 	
-	# Create shader
+	# Get SPIR-V bytecode
+	var shader_spirv: RDShaderSPIRV = shader_file.get_spirv()
+	
+	if not shader_spirv:
+		print("FAILED: Cannot get SPIR-V bytecode")
+		return
+	
+	print("SUCCESS: Got SPIR-V bytecode")
+	
+	# Create shader from SPIR-V
 	var shader = rd.shader_create_from_spirv(shader_spirv)
 	
-	if not shader:
+	if not shader.is_valid():
 		print("FAILED: Cannot create shader from SPIR-V")
 		return
 	
@@ -60,7 +48,7 @@ void main() {
 	# Create pipeline
 	var pipeline = rd.compute_pipeline_create(shader)
 	
-	if not pipeline:
+	if not pipeline.is_valid():
 		print("FAILED: Cannot create pipeline")
 		return
 	
@@ -68,9 +56,10 @@ void main() {
 	
 	# Create test data
 	var test_data = PackedFloat32Array([1.0, 2.0, 3.0, 4.0])
-	var buffer = rd.storage_buffer_create(test_data.size() * 4, test_data.to_byte_array())
+	var input_bytes = test_data.to_byte_array()
+	var buffer = rd.storage_buffer_create(input_bytes.size(), input_bytes)
 	
-	# Create uniform set
+	# Create uniform
 	var uniform := RDUniform.new()
 	uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	uniform.binding = 0
@@ -94,9 +83,9 @@ void main() {
 	print("Output data: %s" % str(output))
 	
 	# Verify it worked
-	if output[0] == 2.0 and output[1] == 4.0 and output[2] == 6.0 and output[3] == 8.0:
+	if output.size() == 4 and output[0] == 2.0 and output[1] == 4.0 and output[2] == 6.0 and output[3] == 8.0:
 		print("\n*** GPU COMPUTE IS WORKING! ***")
-		print("The problem is with the complex MPC shader, not GPU support")
+		print("The problem might be with the MPC shader file loading")
 	else:
 		print("\n*** GPU COMPUTE FAILED ***")
 		print("Results are wrong - GPU compute isn't working properly")
@@ -107,4 +96,34 @@ void main() {
 	rd.free_rid(shader)
 	rd.free_rid(pipeline)
 	
+	# Clean up temporary file
+	DirAccess.remove_absolute("res://test_compute_shader.glsl")
+	DirAccess.remove_absolute("res://test_compute_shader.glsl.import")
+	
 	print("=== TEST COMPLETE ===\n")
+
+func create_test_shader_file():
+	"""Create a temporary compute shader file for testing"""
+	var shader_source = """#[compute]
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) restrict buffer DataBuffer {
+	float data[];
+}
+data_buffer;
+
+void main() {
+	uint index = gl_GlobalInvocationID.x;
+	data_buffer.data[index] = data_buffer.data[index] * 2.0;
+}
+"""
+	
+	var file = FileAccess.open("res://test_compute_shader.glsl", FileAccess.WRITE)
+	if file:
+		file.store_string(shader_source)
+		file.close()
+		print("Created temporary shader file")
+	else:
+		print("FAILED: Cannot create temporary shader file")

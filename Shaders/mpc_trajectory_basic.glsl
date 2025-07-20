@@ -1,3 +1,4 @@
+#[compute]
 #version 450
 
 // Each thread evaluates one trajectory candidate

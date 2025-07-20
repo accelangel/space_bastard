@@ -81,4 +81,4 @@ select_ship={
 
 [rendering]
 
-vulkan/descriptor_pools/max_descriptors_per_pool=4096
+rendering_device/vulkan/max_descriptors_per_pool=4096

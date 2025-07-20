@@ -1,3 +1,4 @@
+#[compute]
 #version 450
 
 // Fixed workgroup layout: x = template index within workgroup
