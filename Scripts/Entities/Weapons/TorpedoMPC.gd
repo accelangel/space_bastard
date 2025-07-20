@@ -273,33 +273,33 @@ func update_mpc_control(delta: float):
 
 func calculate_update_priority() -> float:
 	"""Calculate priority for batch update scheduling"""
-	var priority = 1.0
+	var update_priority = 1.0  # Changed from 'priority' to avoid shadowing Area2D's built-in property
 	
 	# Distance to target
 	if target_node and is_instance_valid(target_node):
 		var distance = global_position.distance_to(target_node.global_position)
 		
 		if distance < 2000:  # Very close
-			priority = 10.0
+			update_priority = 10.0
 		elif distance < 5000:  # Close
-			priority = 5.0
+			update_priority = 5.0
 		elif distance < 10000:  # Medium
-			priority = 2.0
+			update_priority = 2.0
 	
 	# Time since launch
 	var age = (Time.get_ticks_msec() / 1000.0) - launch_start_time
 	if age < 2.0:  # Just launched
-		priority *= 2.0
+		update_priority *= 2.0
 	
 	# Frames since last update
 	if frames_since_update > 5:
-		priority *= 1.5
+		update_priority *= 1.5
 	
 	# Trajectory quality - request more updates if trajectory is poor
 	if trajectory_smoothness < 0.5:
-		priority *= 1.5
+		update_priority *= 1.5
 	
-	return priority
+	return update_priority
 
 func apply_mpc_control(control: Dictionary):
 	"""Apply control calculated by batch MPC system"""
@@ -400,7 +400,7 @@ func apply_control(control: Dictionary, delta: float):
 	if velocity_mps.length() > max_speed_mps:
 		velocity_mps = velocity_mps.normalized() * max_speed_mps
 
-func update_performance_metrics(control: Dictionary, delta: float):
+func update_performance_metrics(control: Dictionary, _delta: float):
 	"""Track performance metrics for analysis and evolution feedback"""
 	
 	# Update control history
