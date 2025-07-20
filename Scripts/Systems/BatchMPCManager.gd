@@ -428,19 +428,19 @@ func process_pending_batch():
 		
 		# Get flight plan data
 		var flight_plan = {
-			"type": torpedo.get("flight_plan_type", "straight"),
+			"type": torpedo.flight_plan_type if "flight_plan_type" in torpedo else "straight",
 			"side": 0.0,
 			"impact_time": 0.0
 		}
 		
 		# For multi-angle, determine side
 		if flight_plan.type == "multi_angle":
-			var launch_side = torpedo.get("launch_side", 1)
+			var launch_side = torpedo.launch_side if "launch_side" in torpedo else 1
 			flight_plan.side = float(launch_side)
 		
 		# For simultaneous, get assigned angle and impact time
 		elif flight_plan.type == "simultaneous":
-			var flight_data = torpedo.get("flight_plan_data", {})
+			var flight_data = torpedo.flight_plan_data if "flight_plan_data" in torpedo else {}
 			if flight_data.has("impact_angle"):
 				flight_plan.side = flight_data.impact_angle  # Using side field for angle
 			if flight_data.has("impact_time"):
