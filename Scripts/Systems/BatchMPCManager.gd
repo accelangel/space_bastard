@@ -51,19 +51,34 @@ var debug_enabled: bool = true
 var performance_overlay: Node = null
 
 func _ready():
+	print("[BatchMPC] === BATCH MPC MANAGER INITIALIZATION ===")
+	
 	# Set up as singleton
 	set_process(true)
 	
 	# Initialize GPU compute
+	print("[BatchMPC] Step 1: Creating GPUBatchCompute instance...")
 	gpu_compute = GPUBatchCompute.new()
+	
+	print("[BatchMPC] Step 2: Checking GPU availability...")
 	gpu_available = gpu_compute.is_available()
 	
+	print("[BatchMPC] GPU Available: %s" % gpu_available)
+	
 	if gpu_available:
-		print("[BatchMPC] GPU batch processing available!")
+		print("[BatchMPC] SUCCESS: GPU batch processing available!")
 		print("[BatchMPC] Smart scheduling enabled - adaptive update rates")
 		print("[BatchMPC] Trajectory caching enabled")
+		
+		# Try a test evaluation to make sure it really works
+		print("[BatchMPC] Running test evaluation...")
+		var test_success = _run_test_evaluation()
+		if not test_success:
+			print("[BatchMPC] WARNING: Test evaluation failed, disabling GPU")
+			gpu_available = false
 	else:
-		print("[BatchMPC] GPU not available - torpedoes will use individual CPU fallback")
+		print("[BatchMPC] FAILED: GPU not available - check GPUBatchCompute output above")
+		print("[BatchMPC] Torpedoes will need to use individual CPU fallback")
 	
 	# Initialize template evolution
 	if template_evolution_enabled and gpu_available:
@@ -78,6 +93,48 @@ func _ready():
 	# Create performance overlay
 	if debug_enabled:
 		create_performance_overlay()
+	
+	print("[BatchMPC] === INITIALIZATION COMPLETE ===")
+
+func _run_test_evaluation() -> bool:
+	"""Run a simple test to verify GPU compute actually works"""
+	print("[BatchMPC] Test: Creating dummy torpedo and target...")
+	
+	var test_torpedo_state = {
+		"position": Vector2(0, 0),
+		"velocity": Vector2(100, 0),
+		"orientation": 0.0,
+		"angular_velocity": 0.0,
+		"max_acceleration": 490.5,
+		"max_rotation_rate": deg_to_rad(1080.0)
+	}
+	
+	var test_target_state = {
+		"position": Vector2(1000, 0),
+		"velocity": Vector2(0, 0)
+	}
+	
+	var test_flight_plan = {
+		"type": "straight",
+		"side": 0.0,
+		"impact_time": 0.0
+	}
+	
+	print("[BatchMPC] Test: Calling evaluate_torpedo_batch...")
+	var results = gpu_compute.evaluate_torpedo_batch(
+		[test_torpedo_state],
+		[test_target_state],
+		[test_flight_plan]
+	)
+	
+	if results.size() > 0:
+		print("[BatchMPC] Test SUCCESS: Got result with thrust=%.2f, rotation=%.2f" % [
+			results[0].thrust, results[0].rotation_rate
+		])
+		return true
+	else:
+		print("[BatchMPC] Test FAILED: No results returned from GPU")
+		return false
 
 func _on_mode_changed(new_mode: GameMode.Mode):
 	if new_mode != GameMode.Mode.BATTLE:

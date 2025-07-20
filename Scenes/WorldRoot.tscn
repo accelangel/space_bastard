@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://iolvmgmbu42d"]
+[gd_scene load_steps=11 format=3 uid="uid://iolvmgmbu42d"]
 
 [ext_resource type="Script" path="res://Scripts/Systems/GameCamera.gd" id="1_at0gn"]
 [ext_resource type="Script" path="res://Scripts/UI/GridOverlay.gd" id="1_bm7um"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" uid="uid://bm7h0d3d32r42" path="res://Scenes/ModeSelector.tscn" id="7_dsscj"]
 [ext_resource type="Script" path="res://Scripts/UI/PiPCamera.gd" id="7_uajus"]
 [ext_resource type="Script" path="res://Scripts/UI/GridSizeLabel.gd" id="9_2gyfj"]
+[ext_resource type="Script" path="res://Scripts/Systems/TestComputeShader.gd" id="10_poj3p"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -93,3 +94,6 @@ anchors_preset = 0
 offset_right = 40.0
 offset_bottom = 40.0
 script = ExtResource("9_2gyfj")
+
+[node name="GPUTest" type="Node" parent="."]
+script = ExtResource("10_poj3p")

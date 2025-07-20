@@ -1,7 +1,7 @@
 #version 450
 
-// Workgroup layout: x = torpedo index, y = template index
-layout(local_size_x = 1, local_size_y = 32, local_size_z = 1) in;
+// Fixed workgroup layout: x = template index within workgroup
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 // Input: Multiple torpedoes and their targets
 layout(set = 0, binding = 0, std430) restrict readonly buffer TorpedoStates {
@@ -147,9 +147,9 @@ vec2 calculate_trajectory_control(
 
 void main() {
     uint torpedo_id = gl_WorkGroupID.x;
-    uint template_id = gl_LocalInvocationID.y;
+    uint template_id = gl_LocalInvocationID.x;  // Changed from .y to .x
     uint num_torpedoes = uint(sim_params.params.w);
-    uint num_templates = uint(templates.template_params.length());
+    uint num_templates = templates.template_params.length();
     
     // Bounds check
     if (torpedo_id >= num_torpedoes || template_id >= num_templates) return;
