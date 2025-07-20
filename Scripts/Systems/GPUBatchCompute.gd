@@ -305,3 +305,34 @@ func cleanup():
 		if pipeline.is_valid():
 			rd.free_rid(pipeline)
 	print("[GPU Batch] Cleaned up GPU resources")
+
+# Add this method to your existing GPUBatchCompute.gd file:
+
+func update_templates(evolved_templates: Array):
+	"""Update GPU templates with evolved parameters"""
+	
+	if not rd or not template_buffer.is_valid():
+		push_error("[GPU Batch] Cannot update templates - GPU not initialized!")
+		return
+	
+	# Convert evolved templates to GPU format
+	var template_data = PackedFloat32Array()
+	
+	for template in evolved_templates:
+		template_data.append(template.get("thrust_factor", 0.9))
+		template_data.append(template.get("rotation_gain", 10.0))
+		template_data.append(template.get("initial_angle_offset", 0.0))
+		template_data.append(template.get("alignment_weight", 0.5))
+	
+	# Fill remaining slots if we have fewer than expected
+	while template_data.size() < template_count * 4:
+		# Add default template
+		template_data.append(0.9)   # thrust_factor
+		template_data.append(10.0)  # rotation_gain
+		template_data.append(0.0)   # initial_angle_offset
+		template_data.append(0.5)   # alignment_weight
+	
+	# Update GPU buffer
+	rd.buffer_update(template_buffer, 0, min(template_data.size() * 4, template_count * 4 * 4), template_data.to_byte_array())
+	
+	print("[GPU Batch] Updated %d templates on GPU" % evolved_templates.size())

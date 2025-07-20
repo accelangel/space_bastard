@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/TorpedoMPC.gd - MPC-Controlled Torpedo
+# Scripts/Entities/Weapons/TorpedoMPC.gd - Enhanced Version
 extends Area2D
 class_name TorpedoMPC
 
@@ -21,18 +21,29 @@ var launcher_ship: Node2D
 var velocity_mps: Vector2 = Vector2.ZERO
 var orientation: float = 0.0
 var angular_velocity: float = 0.0
-var max_speed_mps: float = 2000.0  # Will be removed later
+var max_speed_mps: float = 2000.0
 var max_acceleration: float = 490.5  # 50G
 var max_rotation_rate: float = deg_to_rad(1080.0)
 
-# MPC Controller
-var mpc_controller: MPCController
+# MPC Controller (only used if batch system unavailable)
+var mpc_controller: MPCController = null
 
 # Batch update system
 var batch_manager: Node = null
 var use_batch_updates: bool = true
 var frames_since_update: int = 0
-var max_frames_between_updates: int = 3  # Update every 3 frames max
+var max_frames_between_updates: int = 3
+var last_update_time: float = 0.0
+var last_control: Dictionary = {"thrust": 0.0, "rotation_rate": 0.0}
+
+# Trajectory caching support
+var cached_trajectory: Dictionary = {}
+var trajectory_valid_until: float = 0.0
+var using_cached_trajectory: bool = false
+
+# Template tracking (for evolution feedback)
+var assigned_template_index: int = -1
+var template_performance: float = 0.0
 
 # Flight plan configuration
 var flight_plan_type: String = "straight"
@@ -58,6 +69,9 @@ var has_passed_target: bool = false
 # Performance tracking
 var control_history: Array = []
 var trajectory_smoothness: float = 0.0
+var total_control_changes: float = 0.0
+var alignment_quality: float = 0.0
+var computation_times: Array = []
 
 # Debug
 var debug_trail: PackedVector2Array = []
@@ -72,36 +86,26 @@ func _ready():
 	birth_time = Time.get_ticks_msec() / 1000.0
 	launch_start_time = birth_time
 	
-	# Create MPC controller
-	mpc_controller = MPCController.new()
-	mpc_controller.max_acceleration = max_acceleration
-	mpc_controller.max_rotation_rate = max_rotation_rate
-	mpc_controller.max_speed = max_speed_mps
-	
-	# Report GPU status
-	if mpc_controller.gpu_available:
-		print("TorpedoMPC %s: GPU acceleration AVAILABLE (%s mode)" % [
-			torpedo_id,
-			"ENABLED" if mpc_controller.use_gpu else "DISABLED"
-		])
-	else:
-		print("TorpedoMPC %s: GPU acceleration NOT AVAILABLE - using CPU" % torpedo_id)
-	
 	# Check for batch manager
 	if use_batch_updates:
 		batch_manager = get_node_or_null("/root/BatchMPCManager")
 		if batch_manager and batch_manager.has_method("register_torpedo"):
 			batch_manager.register_torpedo(self)
-			print("TorpedoMPC %s: Registered with batch manager" % torpedo_id)
+			print("TorpedoMPC %s: Registered with enhanced batch manager" % torpedo_id)
 		else:
-			print("TorpedoMPC %s: No batch manager found, using individual updates" % torpedo_id)
+			print("TorpedoMPC %s: No batch manager found, using individual MPC" % torpedo_id)
 			use_batch_updates = false
+			# Create individual MPC controller as fallback
+			mpc_controller = MPCController.new()
+			mpc_controller.max_acceleration = max_acceleration
+			mpc_controller.max_rotation_rate = max_rotation_rate
+			mpc_controller.max_speed = max_speed_mps
 	
 	# Groups
 	add_to_group("torpedoes")
 	add_to_group("combat_entities")
 	
-	# Enable input for GPU toggle
+	# Enable input for debug
 	set_process_unhandled_input(true)
 	
 	# Metadata
@@ -191,71 +195,106 @@ func _physics_process(delta):
 		get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
 
 func update_mpc_control(delta: float):
-	"""Main MPC control update - now uses batch system when available"""
+	"""Main MPC control update - enhanced with caching and smart scheduling"""
 	
-	if use_batch_updates and batch_manager:
-		# Request batch update instead of doing it ourselves
-		frames_since_update += 1
-		
-		# Calculate priority based on situation
-		var update_priority = 1.0
-		
-		# Higher priority if close to target
-		if target_node:
-			var distance = global_position.distance_to(target_node.global_position)
-			if distance < 2000:  # Very close
-				update_priority = 10.0
-			elif distance < 5000:  # Close
-				update_priority = 5.0
-		
-		# Higher priority if we haven't updated recently
-		if frames_since_update >= max_frames_between_updates:
-			update_priority *= 2.0
-		
-		# Request update from batch system
-		if batch_manager.has_method("request_update"):
-			batch_manager.request_update(self, update_priority)
-		
-		# Don't do our own update - wait for batch result
+	# Check if we have a valid cached trajectory
+	var current_time = Time.get_ticks_msec() / 1000.0
+	if using_cached_trajectory and current_time < trajectory_valid_until:
+		# Apply cached control
+		apply_control(cached_trajectory.control, delta)
+		update_performance_metrics(cached_trajectory.control, delta)
 		return
 	
-	# Fall back to individual update if no batch system
-	# Get current state
-	var current_state = {
-		"position": global_position,
-		"velocity": velocity_mps,
-		"orientation": orientation,
-		"angular_velocity": angular_velocity
-	}
+	using_cached_trajectory = false
 	
-	# Get target state
-	var target_state = {
-		"position": target_node.global_position,
-		"velocity": get_target_velocity()
-	}
+	if use_batch_updates and batch_manager:
+		# Calculate update priority
+		var update_priority = calculate_update_priority()
+		
+		# Request batch update
+		frames_since_update += 1
+		
+		# Only request if we haven't updated recently or priority is high
+		if frames_since_update >= max_frames_between_updates or update_priority > 5.0:
+			if batch_manager.has_method("request_update"):
+				batch_manager.request_update(self, update_priority)
+		
+		# Apply last known control while waiting for update
+		apply_control(last_control, delta)
+		return
 	
-	# Convert positions to world coordinates
-	current_state.position *= WorldSettings.meters_per_pixel
-	target_state.position *= WorldSettings.meters_per_pixel
+	# Fallback to individual MPC update
+	if mpc_controller:
+		var start_time = Time.get_ticks_usec()
+		
+		# Get current state
+		var current_state = {
+			"position": global_position,
+			"velocity": velocity_mps,
+			"orientation": orientation,
+			"angular_velocity": angular_velocity
+		}
+		
+		# Get target state
+		var target_state = {
+			"position": target_node.global_position,
+			"velocity": get_target_velocity()
+		}
+		
+		# Convert positions to world coordinates
+		current_state.position *= WorldSettings.meters_per_pixel
+		target_state.position *= WorldSettings.meters_per_pixel
+		
+		# Get MPC control
+		var control = mpc_controller.update_trajectory(
+			current_state,
+			target_state,
+			flight_plan_type,
+			flight_plan_data,
+			delta
+		)
+		
+		# Track computation time
+		var compute_time = (Time.get_ticks_usec() - start_time) / 1000000.0
+		computation_times.append(compute_time)
+		if computation_times.size() > 10:
+			computation_times.pop_front()
+		
+		# Apply control
+		apply_control(control, delta)
+		update_performance_metrics(control, delta)
+		last_control = control
+		last_update_time = current_time
+
+func calculate_update_priority() -> float:
+	"""Calculate priority for batch update scheduling"""
+	var priority = 1.0
 	
-	# Get MPC control
-	var control = mpc_controller.update_trajectory(
-		current_state,
-		target_state,
-		flight_plan_type,
-		flight_plan_data,
-		delta
-	)
+	# Distance to target
+	if target_node and is_instance_valid(target_node):
+		var distance = global_position.distance_to(target_node.global_position)
+		
+		if distance < 2000:  # Very close
+			priority = 10.0
+		elif distance < 5000:  # Close
+			priority = 5.0
+		elif distance < 10000:  # Medium
+			priority = 2.0
 	
-	# Apply control
-	apply_control(control, delta)
+	# Time since launch
+	var age = (Time.get_ticks_msec() / 1000.0) - launch_start_time
+	if age < 2.0:  # Just launched
+		priority *= 2.0
 	
-	# Track control smoothness
-	control_history.append(control)
-	if control_history.size() > 10:
-		control_history.pop_front()
+	# Frames since last update
+	if frames_since_update > 5:
+		priority *= 1.5
 	
-	update_trajectory_smoothness()
+	# Trajectory quality - request more updates if trajectory is poor
+	if trajectory_smoothness < 0.5:
+		priority *= 1.5
+	
+	return priority
 
 func apply_mpc_control(control: Dictionary):
 	"""Apply control calculated by batch MPC system"""
@@ -266,16 +305,35 @@ func apply_mpc_control(control: Dictionary):
 	
 	# Reset update counter
 	frames_since_update = 0
+	last_update_time = Time.get_ticks_msec() / 1000.0
+	
+	# Store control for reuse
+	last_control = control
 	
 	# Apply the control
 	apply_control(control, get_physics_process_delta_time())
 	
-	# Update trajectory smoothness tracking
-	control_history.append(control)
-	if control_history.size() > 10:
-		control_history.pop_front()
+	# Update performance metrics
+	update_performance_metrics(control, get_physics_process_delta_time())
 	
-	update_trajectory_smoothness()
+	# Track template performance if assigned
+	if assigned_template_index >= 0 and control.has("template_index"):
+		if int(control.template_index) == assigned_template_index:
+			# Template is performing well if still being selected
+			template_performance += 0.1
+
+func apply_cached_trajectory(trajectory_data: Dictionary):
+	"""Apply a cached trajectory from the batch manager"""
+	
+	if not trajectory_data.has("control") or not trajectory_data.has("timestamp"):
+		return
+	
+	cached_trajectory = trajectory_data
+	trajectory_valid_until = trajectory_data.timestamp + 0.5  # Cache valid for 0.5 seconds
+	using_cached_trajectory = true
+	
+	# Apply the cached control
+	apply_control(trajectory_data.control, get_physics_process_delta_time())
 
 func apply_control(control: Dictionary, delta: float):
 	"""Apply MPC control output to torpedo physics"""
@@ -294,6 +352,31 @@ func apply_control(control: Dictionary, delta: float):
 	if velocity_mps.length() > max_speed_mps:
 		velocity_mps = velocity_mps.normalized() * max_speed_mps
 
+func update_performance_metrics(control: Dictionary, delta: float):
+	"""Track performance metrics for analysis and evolution feedback"""
+	
+	# Update control history
+	control_history.append(control)
+	if control_history.size() > 10:
+		control_history.pop_front()
+	
+	# Calculate trajectory smoothness
+	update_trajectory_smoothness()
+	
+	# Track total control changes
+	if control_history.size() > 1:
+		var prev = control_history[-2]
+		var thrust_change = abs(control.thrust - prev.thrust)
+		var rotation_change = abs(control.rotation_rate - prev.rotation_rate)
+		total_control_changes += thrust_change / max_acceleration + rotation_change / max_rotation_rate
+	
+	# Track alignment quality
+	if velocity_mps.length() > 10.0:
+		var velocity_angle = velocity_mps.angle()
+		var alignment_error = abs(angle_difference(orientation, velocity_angle))
+		var instant_alignment = 1.0 - (alignment_error / PI)
+		alignment_quality = lerp(alignment_quality, instant_alignment, 0.1)
+
 func update_trajectory_smoothness():
 	"""Calculate how smooth the control history is"""
 	if control_history.size() < 2:
@@ -308,6 +391,19 @@ func update_trajectory_smoothness():
 	
 	# Normalize to 0-1 range (1 = very smooth, 0 = very jerky)
 	trajectory_smoothness = 1.0 / (1.0 + total_change)
+
+func get_trajectory_smoothness() -> float:
+	return trajectory_smoothness
+
+func get_last_mpc_compute_time() -> float:
+	"""Get average computation time for performance monitoring"""
+	if computation_times.is_empty():
+		return 0.0
+	
+	var sum = 0.0
+	for time in computation_times:
+		sum += time
+	return sum / computation_times.size()
 
 func should_ignite_engines(time_since_launch: float) -> bool:
 	var distance_criteria_met = lateral_distance_traveled >= lateral_launch_distance
@@ -382,6 +478,16 @@ func mark_for_destruction(reason: String):
 	if marked_for_death:
 		return
 	
+	# Report template performance if using evolution
+	if assigned_template_index >= 0 and batch_manager:
+		var hit_success = (reason == "ship_impact")
+		if batch_manager.has_method("report_template_performance"):
+			batch_manager.report_template_performance(
+				assigned_template_index,
+				hit_success,
+				trajectory_smoothness
+			)
+	
 	# Unregister from batch manager
 	if use_batch_updates and batch_manager and batch_manager.has_method("unregister_torpedo"):
 		batch_manager.unregister_torpedo(torpedo_id)
@@ -434,7 +540,10 @@ func report_miss(reason: String):
 		"closest_approach": closest_approach_distance,
 		"lifetime": (Time.get_ticks_msec() / 1000.0) - launch_start_time,
 		"reason": reason,
-		"trajectory_smoothness": trajectory_smoothness
+		"trajectory_smoothness": trajectory_smoothness,
+		"alignment_quality": alignment_quality,
+		"total_control_changes": total_control_changes,
+		"template_index": assigned_template_index
 	}
 	
 	# Report to any listening systems
@@ -446,7 +555,10 @@ func report_hit():
 		"torpedo_id": torpedo_id,
 		"flight_plan_type": flight_plan_type,
 		"time_to_impact": (Time.get_ticks_msec() / 1000.0) - launch_start_time,
-		"trajectory_smoothness": trajectory_smoothness
+		"trajectory_smoothness": trajectory_smoothness,
+		"alignment_quality": alignment_quality,
+		"total_control_changes": total_control_changes,
+		"template_index": assigned_template_index
 	}
 	
 	# Report to any listening systems
@@ -456,6 +568,14 @@ func update_debug_trail():
 	debug_trail.append(global_position)
 	if debug_trail.size() > max_trail_points:
 		debug_trail.remove_at(0)
+
+func angle_difference(from: float, to: float) -> float:
+	var diff = to - from
+	while diff > PI:
+		diff -= TAU
+	while diff < -PI:
+		diff += TAU
+	return diff
 
 # Configuration methods
 func set_target(target: Node2D):
@@ -473,6 +593,10 @@ func set_flight_plan(plan_type: String, plan_data: Dictionary = {}):
 	flight_plan_type = plan_type
 	flight_plan_data = plan_data
 
+func set_template_index(index: int):
+	"""Assign a specific template for evolution tracking"""
+	assigned_template_index = index
+
 # Getters for compatibility
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
@@ -481,14 +605,7 @@ func get_current_position() -> Vector2:
 	return global_position
 
 func get_predicted_position(time_ahead: float) -> Vector2:
-	# Get prediction from MPC trajectory
-	if mpc_controller and mpc_controller.current_trajectory.states.size() > 0:
-		var state = mpc_controller.current_trajectory.get_state_at_time(time_ahead)
-		if state.has("position"):
-			# Convert from meters to pixels
-			return state.position / WorldSettings.meters_per_pixel
-	
-	# Fallback to linear prediction
+	# Simple linear prediction
 	return global_position + (velocity_mps / WorldSettings.meters_per_pixel) * time_ahead
 
 func get_orientation() -> float:
@@ -496,15 +613,11 @@ func get_orientation() -> float:
 
 # Debug input
 func _unhandled_input(event):
-	# Debug: Toggle GPU with G key
+	# Debug: Toggle performance overlay with P key
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_G:
-			if mpc_controller and mpc_controller.gpu_available:
-				mpc_controller.use_gpu = !mpc_controller.use_gpu
-				print("TorpedoMPC %s: GPU %s" % [
-					torpedo_id,
-					"ENABLED" if mpc_controller.use_gpu else "DISABLED"
-				])
+		if event.keycode == KEY_P:
+			if batch_manager and batch_manager.has_method("toggle_performance_overlay"):
+				batch_manager.toggle_performance_overlay()
 
 # Debug drawing
 func _draw():
@@ -519,13 +632,10 @@ func _draw():
 		var from = to_local(debug_trail[i-1])
 		var to = to_local(debug_trail[i])
 		var alpha = float(i) / float(debug_trail.size())
-		draw_line(from, to, Color(1, 0.5, 0, alpha), 2.0)
-	
-	# Draw MPC predicted trajectory
-	if mpc_controller:
-		var mpc_points = mpc_controller.get_debug_points()
-		if mpc_points.size() > 1:
-			for i in range(1, min(mpc_points.size(), 20)):  # Only show next 20 points
-				var from = to_local(mpc_points[i-1] / WorldSettings.meters_per_pixel)
-				var to = to_local(mpc_points[i] / WorldSettings.meters_per_pixel)
-				draw_line(from, to, Color(0, 1, 0, 0.5), 1.0)
+		var color = Color(1, 0.5, 0, alpha)
+		
+		# Color based on using cached trajectory
+		if using_cached_trajectory:
+			color = Color(0, 1, 0, alpha)  # Green for cached
+		
+		draw_line(from, to, color, 2.0)
