@@ -165,7 +165,7 @@ func _create_persistent_buffers():
 	print("[GPU Batch] Creating %d templates" % template_count)
 	
 	# DEBUG: Log template parameters
-	if debug_enabled:
+	if DebugConfig.should_log("gpu_boundary"):
 		print("\n[TEMPLATE DEBUG] === INITIAL TEMPLATE PARAMETERS ===")
 		for i in range(min(5, templates.size())):  # Log first 5 templates
 			print("[TEMPLATE DEBUG] Template %d:" % i)
@@ -259,7 +259,7 @@ func evaluate_torpedo_batch(
 		return []
 	
 	# DEBUG: Log what we're sending to GPU for small batches
-	if debug_enabled and batch_size <= 2:
+	if DebugConfig.should_log("gpu_boundary") and batch_size <= 2:
 		print("\n[GPU BOUNDARY] === SENDING TO GPU ===")
 		print("[GPU BOUNDARY] Batch size: %d torpedoes" % batch_size)
 	
@@ -280,7 +280,7 @@ func evaluate_torpedo_batch(
 		torpedo_data.append(state.get("max_rotation_rate", deg_to_rad(1080.0)))
 		
 		# DEBUG: Log the values being sent
-		if debug_enabled and i < 2:  # Only first 2
+		if DebugConfig.should_log("gpu_boundary") and i < 2:  # Only first 2
 			print("\n[GPU BOUNDARY] Torpedo %d:" % i)
 			print("  position: (%.1f, %.1f)" % [state.position.x, state.position.y])
 			print("  velocity: (%.1f, %.1f)" % [state.velocity.x, state.velocity.y])
@@ -379,7 +379,7 @@ func evaluate_torpedo_batch(
 		})
 	
 	# DEBUG: Log what we received from GPU
-	if debug_enabled and batch_size <= 2:
+	if DebugConfig.should_log("gpu_boundary") and batch_size <= 2:
 		print("\n[GPU BOUNDARY] === RECEIVED FROM GPU ===")
 		for i in range(min(2, results.size())):
 			print("\n[GPU BOUNDARY] Result %d:" % i)
@@ -411,7 +411,7 @@ func evaluate_torpedo_batch(
 	last_compute_time = (Time.get_ticks_usec() - start_time) / 1000.0
 	total_evaluations += batch_size * template_count
 	
-	if debug_enabled and batch_size > 10:  # Only print for large batches
+	if DebugConfig.should_log("gpu_compute") and batch_size > 10:  # Only print for large batches
 		print("[GPU Batch] Evaluated %d torpedoes (%d trajectories) in %.2fms" % [
 			batch_size, 
 			batch_size * template_count,
@@ -459,7 +459,7 @@ func update_templates(evolved_templates: Array):
 		return
 	
 	# DEBUG: Log the evolved templates
-	if debug_enabled:
+	if DebugConfig.should_log("gpu_boundary"):
 		print("\n[TEMPLATE DEBUG] === EVOLVED TEMPLATES UPDATE ===")
 		for i in range(min(3, evolved_templates.size())):
 			var template = evolved_templates[i]

@@ -222,7 +222,8 @@ func set_target(new_target: Node2D):
 	
 	# Extra validation before setting target
 	if new_target != null and not is_valid_target(new_target):
-		print("PDC %s: Attempted to set invalid target, ignoring" % pdc_id)
+		if DebugConfig.should_log("pdc_targeting"):
+			print("PDC %s: Attempted to set invalid target, ignoring" % pdc_id)
 		current_target = null
 		stop_firing()
 		return
@@ -235,14 +236,16 @@ func set_target(new_target: Node2D):
 			var old_name = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "none"
 			var new_name = new_target.get("torpedo_id") if new_target and is_instance_valid(new_target) else "unknown"
 			
-			print("PDC %s: Target validation SUCCESS (was %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
-			print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
+			if DebugConfig.should_log("pdc_targeting"):
+				print("PDC %s: Target validation SUCCESS (was %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
+				print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
 		
 		current_target = new_target
 		update_target_angle()
 	else:
 		if current_target:
-			print("PDC %s: Target validation FAILED - target_null" % pdc_id)
+			if DebugConfig.should_log("pdc_targeting"):
+				print("PDC %s: Target validation FAILED - target_null" % pdc_id)
 		current_target = null
 		stop_firing()
 
@@ -285,7 +288,8 @@ func start_firing():
 		var error = rad_to_deg(get_tracking_error())
 		# Safe property access
 		var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
-		print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, target_id, error])
+		if DebugConfig.should_log("pdc_targeting"):
+			print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, target_id, error])
 
 func stop_firing():
 	if is_firing:
