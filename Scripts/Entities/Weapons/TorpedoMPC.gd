@@ -212,16 +212,13 @@ func update_mpc_control(delta: float):
 	using_cached_trajectory = false
 	
 	if use_batch_updates and batch_manager:
-		# Calculate update priority
-		var update_priority = calculate_update_priority()
-		
 		# Request batch update
 		frames_since_update += 1
-		
-		# Only request if we haven't updated recently or priority is high
-		if frames_since_update >= max_frames_between_updates or update_priority > 5.0:
+	
+		# Only request if we haven't updated recently
+		if frames_since_update >= max_frames_between_updates:
 			if batch_manager.has_method("request_update"):
-				batch_manager.request_update(self, update_priority)
+				batch_manager.request_update(self)
 		
 		# Apply last known control while waiting for update
 		apply_control(last_control, delta)
@@ -269,36 +266,6 @@ func update_mpc_control(delta: float):
 		update_performance_metrics(control, delta)
 		last_control = control
 		last_update_time = current_time
-
-func calculate_update_priority() -> float:
-	"""Calculate priority for batch update scheduling"""
-	var update_priority = 1.0  # Changed from 'priority' to avoid shadowing Area2D's built-in property
-	
-	# Distance to target
-	if target_node and is_instance_valid(target_node):
-		var distance = global_position.distance_to(target_node.global_position)
-		
-		if distance < 2000:  # Very close
-			update_priority = 10.0
-		elif distance < 5000:  # Close
-			update_priority = 5.0
-		elif distance < 10000:  # Medium
-			update_priority = 2.0
-	
-	# Time since launch
-	var age = (Time.get_ticks_msec() / 1000.0) - launch_start_time
-	if age < 2.0:  # Just launched
-		update_priority *= 2.0
-	
-	# Frames since last update
-	if frames_since_update > 5:
-		update_priority *= 1.5
-	
-	# Trajectory quality - request more updates if trajectory is poor
-	if trajectory_smoothness < 0.5:
-		update_priority *= 1.5
-	
-	return update_priority
 
 func apply_mpc_control(control: Dictionary):
 	"""Apply control calculated by batch MPC system"""
@@ -581,7 +548,6 @@ func report_miss(reason: String):
 		"trajectory_smoothness": trajectory_smoothness,
 		"alignment_quality": alignment_quality,
 		"total_control_changes": total_control_changes,
-		"template_index": assigned_template_index
 	}
 	
 	# Report to any listening systems
@@ -596,7 +562,6 @@ func report_hit():
 		"trajectory_smoothness": trajectory_smoothness,
 		"alignment_quality": alignment_quality,
 		"total_control_changes": total_control_changes,
-		"template_index": assigned_template_index
 	}
 	
 	# Report to any listening systems
