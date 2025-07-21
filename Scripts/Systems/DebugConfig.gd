@@ -13,7 +13,10 @@ var categories = {
 	# Not needed right now
 	"pdc_targeting": false,    # PDC acquisition/firing
 	"cache_performance": false, # Cache hit/miss spam
-	"trajectory_details": false # Individual torpedo paths
+	"trajectory_details": false, # Individual torpedo paths
+	
+	"rotation_clamping": false  # Silences the clamping warnings
+
 }
 
 func should_log(category: String) -> bool:

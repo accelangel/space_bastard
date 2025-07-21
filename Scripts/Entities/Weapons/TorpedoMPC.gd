@@ -23,7 +23,7 @@ var orientation: float = 0.0
 var angular_velocity: float = 0.0
 var max_speed_mps: float = 2000.0
 var max_acceleration: float = 490.5  # 50G
-var max_rotation_rate: float = deg_to_rad(1080.0)
+var max_rotation_rate: float = deg_to_rad(360.0)
 
 # MPC Controller (only used if batch system unavailable)
 var mpc_controller: MPCController = null
@@ -62,7 +62,7 @@ var lateral_distance_traveled: float = 0.0
 # Miss detection
 var miss_detection_timer: float = 0.0
 var miss_detection_threshold: float = 2.0
-var max_lifetime: float = 30.0
+var max_lifetime: float = 60.0
 var closest_approach_distance: float = INF
 var has_passed_target: bool = false
 
@@ -133,6 +133,9 @@ func _ready():
 		var ship_forward = Vector2.UP.rotated(launcher_ship.rotation)
 		orientation = ship_forward.angle()
 		rotation = orientation
+		
+		#var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
+		#velocity_mps += side_direction * lateral_launch_velocity
 		
 		var side_direction = Vector2(-ship_forward.y, ship_forward.x) * launch_side
 		velocity_mps += side_direction * lateral_launch_velocity
@@ -380,7 +383,7 @@ func apply_control(control: Dictionary, delta: float):
 	# SAFETY CLAMP - This is critical!
 	var clamped_rotation = clamp(control.rotation_rate, -max_rotation_rate, max_rotation_rate)
 	
-	if rotation_debug_enabled and abs(received_rotation) > max_rotation_rate:
+	if DebugConfig.should_log("rotation_clamping") and abs(received_rotation) > max_rotation_rate:
 		print("\n[TORPEDO CONTROL] !!! CLAMPING ROTATION in apply_control() !!!")
 		print("  Received: %.2f rad/s (%.1f°/s)" % [received_rotation, rad_to_deg(received_rotation)])
 		print("  Clamped to: %.2f rad/s (%.1f°/s)" % [clamped_rotation, rad_to_deg(clamped_rotation)])

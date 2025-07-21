@@ -148,8 +148,8 @@ func _create_persistent_buffers():
 	# Template buffer - same as before
 	var templates = []
 	var thrust_variations = [0.7, 0.8, 0.9, 1.0]
-	var angle_variations = [-10, -5, 0, 5, 10]
-	var rotation_gains = [8.0, 10.0, 12.0]
+	var angle_variations = [-4, -2, 0, 2, 4]
+	var rotation_gains = [0.5, 0.5, 0.5]
 	
 	for thrust in thrust_variations:
 		for angle in angle_variations:
