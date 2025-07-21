@@ -195,8 +195,8 @@ func evaluate_with_gpu(current_state: Dictionary, target_state: Dictionary) -> D
 	
 	# Create variations
 	var thrust_variations = [0.7, 0.8, 0.9, 1.0]
-	var angle_variations = [-10, -5, 0, 5, 10]
-	var rotation_gains = [8.0, 10.0, 12.0]
+	var angle_variations = [-1, -0.5, 0, 0.5, 1.0]
+	var rotation_gains = [0.02, 0.03, 0.04]
 	
 	for thrust in thrust_variations:
 		for angle in angle_variations:
