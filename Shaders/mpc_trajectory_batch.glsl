@@ -138,16 +138,9 @@ vec2 calculate_trajectory_control(
     // Calculate control outputs
     float angle_error = angle_difference(orientation, desired_angle);
     
-    // THE FIX: Clamp BEFORE multiplying by max_rotation!
-    float normalized_rotation_rate = clamp(angle_error * rotation_gain, -3.14159, 3.14159);
-    
-    // Now scale to actual rotation rate
-    float rotation_rate = normalized_rotation_rate;  // Already in rad/s, no need to multiply!
-    
-    // Actually, let's be more careful here:
-    // rotation_gain should produce a value that when multiplied by angle_error gives us rad/s directly
-    // So we should clamp to actual max_rotation, not PI
-    rotation_rate = clamp(angle_error * rotation_gain, -max_rotation, max_rotation);
+    // FIXED: Calculate rotation rate directly in rad/s and clamp to actual limits
+    // rotation_gain should be tuned such that angle_error * rotation_gain gives rad/s
+    float rotation_rate = clamp(angle_error * rotation_gain, -max_rotation, max_rotation);
     
     // Thrust based on alignment
     float alignment = abs(angle_error);
