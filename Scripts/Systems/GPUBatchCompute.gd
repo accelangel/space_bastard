@@ -19,7 +19,7 @@ var result_buffer: RID
 
 # Buffer sizes
 var max_torpedoes: int = 256
-var template_count: int = 60
+var template_count: int = 5
 
 # Performance tracking
 var last_compute_time: float = 0.0
@@ -145,24 +145,51 @@ func _create_persistent_buffers():
 	
 	print("[GPU Batch] Creating persistent buffers...")
 	
-	# Template buffer - same as before
-	var templates = []
-	var thrust_variations = [0.7, 0.8, 0.9, 1.0]
-	var angle_variations = [-4, -2, 0, 2, 4]
-	var rotation_gains = [0.5, 0.5, 0.5]
+	# Template buffer - 5 hand-crafted templates
+	var templates = [
+		# Aggressive - Full thrust, high rotation speed for direct intercept
+		{
+			"thrust_factor": 1.0,
+			"rotation_gain": 15.0,
+			"initial_angle_offset": 0.0,
+			"alignment_weight": 0.3  # Less alignment penalty for aggressive pursuit
+		},
+		# Balanced - Good all-around performance
+		{
+			"thrust_factor": 0.9,
+			"rotation_gain": 10.0,
+			"initial_angle_offset": 0.0,
+			"alignment_weight": 0.5
+		},
+		# Cautious - Lower thrust, slower rotation for energy conservation
+		{
+			"thrust_factor": 0.8,
+			"rotation_gain": 5.0,
+			"initial_angle_offset": 0.0,
+			"alignment_weight": 0.7  # Higher alignment requirement
+		},
+		# Wide arc left - For flanking approaches
+		{
+			"thrust_factor": 0.85,
+			"rotation_gain": 8.0,
+			"initial_angle_offset": -25.0,  # Start angled left
+			"alignment_weight": 0.4
+		},
+		# Wide arc right - For flanking approaches
+		{
+			"thrust_factor": 0.85,
+			"rotation_gain": 8.0,
+			"initial_angle_offset": 25.0,   # Start angled right
+			"alignment_weight": 0.4
+		}
+	]
 	
-	for thrust in thrust_variations:
-		for angle in angle_variations:
-			for gain in rotation_gains:
-				templates.append({
-					"thrust_factor": thrust,
-					"rotation_gain": gain,
-					"initial_angle_offset": angle,
-					"alignment_weight": 0.5
-				})
+	# Template names for debugging
+	var _template_names = ["Aggressive", "Balanced", "Cautious", "Arc-Left", "Arc-Right"]	
 	
 	template_count = templates.size()
-	print("[GPU Batch] Creating %d templates" % template_count)
+	print("[GPU Batch] Creating %d hand-crafted templates" % template_count)
+	print("[GPU Batch] Templates: Aggressive, Balanced, Cautious, Arc-Left, Arc-Right")
 	
 	# DEBUG: Log template parameters
 	if DebugConfig.should_log("gpu_boundary"):
@@ -389,7 +416,11 @@ func evaluate_torpedo_batch(
 				rad_to_deg(results[i].rotation_rate)
 			])
 			print("  cost: %.2f" % results[i].cost)
-			print("  template_index: %d" % results[i].get("template_index", -1))
+			var template_idx = int(results[i].get("template_index", -1))
+			var template_name = "Unknown"
+			if template_idx >= 0 and template_idx < 5:
+				template_name = ["Aggressive", "Balanced", "Cautious", "Arc-Left", "Arc-Right"][template_idx]
+			print("  template_index: %d (%s)" % [template_idx, template_name])
 			
 			# Check for the suspicious value
 			if abs(results[i].rotation_rate) > 50.0:
@@ -450,40 +481,3 @@ func cleanup():
 		if pipeline and pipeline != RID():
 			rd.free_rid(pipeline)
 	print("[GPU Batch] Cleaned up GPU resources")
-
-func update_templates(evolved_templates: Array):
-	"""Update GPU templates with evolved parameters"""
-	
-	if not rd or not template_buffer or template_buffer == RID():
-		push_error("[GPU Batch] Cannot update templates - GPU not initialized!")
-		return
-	
-	# DEBUG: Log the evolved templates
-	if DebugConfig.should_log("gpu_boundary"):
-		print("\n[TEMPLATE DEBUG] === EVOLVED TEMPLATES UPDATE ===")
-		for i in range(min(3, evolved_templates.size())):
-			var template = evolved_templates[i]
-			print("[TEMPLATE DEBUG] Evolved template %d:" % i)
-			print("  rotation_gain: %.2f" % template.get("rotation_gain", 10.0))
-			if template.get("rotation_gain", 10.0) > 15.0:
-				print("  !!! WARNING: Evolved template has very high rotation_gain !!!")
-	
-	# Convert evolved templates to GPU format
-	var template_data = PackedFloat32Array()
-	
-	for template in evolved_templates:
-		template_data.append(template.get("thrust_factor", 0.9))
-		template_data.append(template.get("rotation_gain", 10.0))
-		template_data.append(template.get("initial_angle_offset", 0.0))
-		template_data.append(template.get("alignment_weight", 0.5))
-	
-	# Fill remaining slots if we have fewer than expected
-	while template_data.size() < template_count * 4:
-		# Add default template
-		template_data.append(0.9)   # thrust_factor
-		template_data.append(10.0)  # rotation_gain
-		template_data.append(0.0)   # initial_angle_offset
-		template_data.append(0.5)   # alignment_weight
-	
-	# Update GPU buffer
-	rd.buffer_update(template_buffer, 0, min(template_data.size() * 4, template_count * 4 * 4), template_data.to_byte_array())

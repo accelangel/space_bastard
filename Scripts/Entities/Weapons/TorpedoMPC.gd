@@ -41,10 +41,6 @@ var cached_trajectory: Dictionary = {}
 var trajectory_valid_until: float = 0.0
 var using_cached_trajectory: bool = false
 
-# Template tracking (for evolution feedback)
-var assigned_template_index: int = -1
-var template_performance: float = 0.0
-
 # Flight plan configuration
 var flight_plan_type: String = "straight"
 var flight_plan_data: Dictionary = {}
@@ -355,12 +351,6 @@ func apply_mpc_control(control: Dictionary):
 	
 	# Update performance metrics
 	update_performance_metrics(control, get_physics_process_delta_time())
-	
-	# Track template performance if assigned
-	if assigned_template_index >= 0 and control.has("template_index"):
-		if int(control.template_index) == assigned_template_index:
-			# Template is performing well if still being selected
-			template_performance += 0.1
 
 func apply_cached_trajectory(trajectory_data: Dictionary):
 	"""Apply a cached trajectory from the batch manager"""
@@ -536,16 +526,6 @@ func mark_for_destruction(reason: String):
 		print("This suggests the GPU shader is outputting clamped values * max_rotation")
 		print("===================================================\n")
 	
-	# Report template performance if using evolution
-	if assigned_template_index >= 0 and batch_manager:
-		var hit_success = (reason == "ship_impact")
-		if batch_manager.has_method("report_template_performance"):
-			batch_manager.report_template_performance(
-				assigned_template_index,
-				hit_success,
-				trajectory_smoothness
-			)
-	
 	# Unregister from batch manager
 	if use_batch_updates and batch_manager and batch_manager.has_method("unregister_torpedo"):
 		batch_manager.unregister_torpedo(torpedo_id)
@@ -651,10 +631,6 @@ func set_flight_plan(plan_type: String, plan_data: Dictionary = {}):
 	flight_plan_type = plan_type
 	flight_plan_data = plan_data
 
-func set_template_index(index: int):
-	"""Assign a specific template for evolution tracking"""
-	assigned_template_index = index
-
 # Getters for compatibility
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
@@ -668,14 +644,6 @@ func get_predicted_position(time_ahead: float) -> Vector2:
 
 func get_orientation() -> float:
 	return orientation
-
-# Debug input
-func _unhandled_input(event):
-	# Debug: Toggle performance overlay with P key
-	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_P:
-			if batch_manager and batch_manager.has_method("toggle_performance_overlay"):
-				batch_manager.toggle_performance_overlay()
 
 # Debug drawing
 func _draw():
