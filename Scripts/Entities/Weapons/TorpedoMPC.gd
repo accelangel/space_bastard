@@ -23,7 +23,7 @@ var orientation: float = 0.0
 var angular_velocity: float = 0.0
 var max_speed_mps: float = 2000.0
 var max_acceleration: float = 490.5  # 50G
-var max_rotation_rate: float = deg_to_rad(360.0)
+var max_rotation_rate: float = deg_to_rad(1080.0)
 
 # MPC Controller (only used if batch system unavailable)
 var mpc_controller: MPCController = null
