@@ -94,3 +94,20 @@ func set_launcher(ship: Node2D):
 
 func set_launch_side(side: int):
 	launch_side = side
+
+func apply_waypoint_update(new_waypoints: Array, protected_count: int):
+	# Preserve current and next N waypoints
+	var preserved = []
+	for i in range(min(protected_count, waypoints.size() - current_waypoint_index)):
+		preserved.append(waypoints[current_waypoint_index + i])
+	
+	
+	# Clear old waypoints
+	waypoints.clear()
+	
+	# Add preserved waypoints first
+	waypoints.append_array(preserved)
+	
+	# Add new waypoints
+	for wp in new_waypoints:
+		waypoints.append(wp)

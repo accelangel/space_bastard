@@ -138,6 +138,8 @@ func apply_adaptive_waypoint_density(waypoints: Array, threshold: float) -> Arra
 	if waypoints.size() < 2:
 		return waypoints
 	
+	waypoint_density_threshold = TuningParams.get_parameter("universal.waypoint_density_threshold", 0.2)
+	
 	var densified = []
 	densified.append(waypoints[0])
 	

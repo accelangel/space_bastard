@@ -60,7 +60,7 @@ func create_layer1_sliders():
 
 func create_layer2_sliders():
 	# Create sliders for Layer 2 parameters with performance indicators
-	var params = ManualTuningParameters.get_layer2_parameters()
+	var params = TuningParams.get_layer2_parameters()
 	
 	for param_name in params:
 		var slider_control = create_parameter_slider(param_name, params[param_name])
