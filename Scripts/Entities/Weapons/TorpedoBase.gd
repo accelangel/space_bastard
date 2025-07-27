@@ -19,7 +19,7 @@ class Waypoint extends RefCounted:
 		if pos_error < 500.0:  # 500m acceptance radius
 			return true
 			
-		# Also accept if we're close in velocity and moving toward waypointty
+		# Also accept if we're close in velocity and moving toward waypoint
 		if vel_error < velocity_tolerance and is_moving_toward_waypoint(torpedo_pos, position, torpedo_velocity_vec):
 			return true
 			
@@ -33,7 +33,6 @@ class Waypoint extends RefCounted:
 		
 		var velocity_dot = torpedo_vel.normalized().dot(to_waypoint.normalized())
 		return velocity_dot > 0.5  # Moving generally toward waypoint (within 60 degrees)
-	
 
 # Identity
 @export var torpedo_id: String = ""
@@ -79,6 +78,12 @@ var marked_for_death: bool = false
 var flight_plan_type: String = "straight"
 var flight_plan_data: Dictionary = {}
 
+# Miss detection
+var miss_detection_timer: float = 0.0
+var miss_detection_active: bool = false
+var last_distance_to_target: float = INF
+var getting_farther_count: int = 0
+
 func _ready():
 	# Generate ID if not provided
 	if torpedo_id == "":
@@ -106,7 +111,7 @@ func _physics_process(delta):
 	# Add at top of _physics_process after the marked_for_death check
 	if DebugConfig.should_log("waypoint_system") and Engine.get_physics_frames() % 60 == 0:
 		var current_thrust = 0.0
-		if proportional_nav and proportional_nav.has("last_thrust"):
+		if proportional_nav:
 			current_thrust = proportional_nav.last_thrust
 	
 		print("[Torpedo %s] Waypoint %d/%d, Vel: %.1f m/s, Thrust: %.2f" % [
@@ -116,8 +121,6 @@ func _physics_process(delta):
 			velocity_mps.length(),
 			current_thrust
 		])
-	
-	
 	
 	# Update guidance if we have waypoints
 	if waypoints.size() > 0 and current_waypoint_index < waypoints.size():
@@ -135,7 +138,7 @@ func _physics_process(delta):
 		apply_control(guidance, delta)
 		
 		# Check waypoint acceptance
-		if current_wp.should_accept(global_position, velocity_mps.length()):
+		if current_wp.should_accept(global_position, velocity_mps.length(), velocity_mps):
 			current_waypoint_index += 1
 	
 	# Update position
@@ -147,6 +150,9 @@ func _physics_process(delta):
 	
 	# Update quality metrics
 	update_trail_quality()
+	
+	# Check for miss detection
+	check_miss_detection(delta)
 
 func apply_control(control: Dictionary, delta: float):
 	# Update orientation
@@ -239,6 +245,36 @@ func update_trail_color():
 	if trail_line:
 		trail_line.default_color = color
 
+func check_miss_detection(delta: float):
+	if not target_node or marked_for_death:
+		return
+		
+	var current_distance = global_position.distance_to(target_node.global_position)
+	
+	# Check if we're getting farther from target
+	if current_distance > last_distance_to_target:
+		getting_farther_count += 1
+		
+		# Start miss timer after consistently getting farther
+		if getting_farther_count > 10 and not miss_detection_active:
+			miss_detection_active = true
+			miss_detection_timer = 0.0
+			print("[Torpedo %s] Started miss detection timer - moving away from target" % torpedo_id.substr(0, 10))
+	else:
+		# Reset if we start getting closer again
+		getting_farther_count = 0
+		miss_detection_active = false
+		miss_detection_timer = 0.0
+	
+	# Update miss timer
+	if miss_detection_active:
+		miss_detection_timer += delta
+		if miss_detection_timer >= 10.0:
+			print("[Torpedo %s] Despawning - missed target (10s timeout)" % torpedo_id.substr(0, 10))
+			mark_for_destruction("missed_target")
+	
+	last_distance_to_target = current_distance
+
 func angle_difference(from: float, to: float) -> float:
 	var diff = to - from
 	while diff > PI:
@@ -254,6 +290,11 @@ func _on_area_entered(area: Area2D):
 	# Handle collisions
 	if area.is_in_group("ships") and area.get("faction") != faction:
 		mark_for_destruction("ship_impact")
+		
+		# Notify tuning panel of hit
+		var tuning_panel = get_tree().get_first_node_in_group("tuning_panels")
+		if tuning_panel and tuning_panel.has_method("on_torpedo_hit"):
+			tuning_panel.on_torpedo_hit()
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:

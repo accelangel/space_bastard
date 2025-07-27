@@ -28,8 +28,6 @@ func _ready():
 	print("Debug to see if read() is being called in MatchMPCManager.gd")
 
 func _process(delta):
-	if DebugConfig.should_log("mpc_batch_updates") and int(update_timer * 10) % 10 == 0:
-		print("[BatchMPC] Update timer: %.2f / %.2f" % [update_timer, current_update_interval])
 	# Use real-world time for updates during time dilation
 	var effective_delta = delta
 	if use_real_time_updates and Engine.time_scale != 1.0:

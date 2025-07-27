@@ -61,7 +61,7 @@ func update_waypoint_markers(torpedo: Node2D, waypoints: Array):
 		marker.visible = false
 	
 	# Get current waypoint index from torpedo if available
-	var current_waypoint_index = torpedo.get("current_waypoint_index") if torpedo.has("current_waypoint_index") else -1
+	var current_waypoint_index = torpedo.get("current_waypoint_index") if "current_waypoint_index" in torpedo else -1
 	
 	# Show markers for waypoints
 	for i in range(min(waypoints.size(), waypoint_pool.size())):
@@ -98,7 +98,7 @@ func flash_waypoints(torpedo_id: String):
 	if not torpedo:
 		return
 		
-	var waypoint_count = torpedo.waypoints.size() if torpedo.has("waypoints") else 0
+	var waypoint_count = torpedo.waypoints.size() if "waypoints" in torpedo else 0
 	
 	# Create flash animation
 	for i in range(min(waypoint_count, waypoint_pool.size())):

@@ -4,15 +4,35 @@ class_name ManualTuningPanel
 
 # UI References
 @onready var vbox_container: VBoxContainer = $VBoxContainer
-@onready var time_scale_container: HBoxContainer = $VBoxContainer/TimeScaleContainer
+
+# Torpedo selection
+@onready var straight_button: Button = $VBoxContainer/TorpedoSelectionContainer/StraightButton
+@onready var multi_angle_button: Button = $VBoxContainer/TorpedoSelectionContainer/MultiAngleButton
+@onready var simultaneous_button: Button = $VBoxContainer/TorpedoSelectionContainer/SimultaneousButton
+
+# Auto-launch
+@onready var auto_launch_toggle: CheckBox = $VBoxContainer/AutoLaunchContainer/AutoLaunchToggle
+
+# Time scale
 @onready var time_scale_slider: HSlider = $VBoxContainer/TimeScaleContainer/TimeScaleSlider
 @onready var time_scale_label: Label = $VBoxContainer/TimeScaleContainer/TimeScaleLabel
-@onready var scroll_container: ScrollContainer = $VBoxContainer/ScrollContainer
+
+# Parameters
 @onready var parameter_container: VBoxContainer = $VBoxContainer/ScrollContainer/ParameterContainer
+
+# Current torpedo type
+enum TorpedoType { STRAIGHT, MULTI_ANGLE, SIMULTANEOUS }
+var current_torpedo_type: TorpedoType = TorpedoType.STRAIGHT
+
+# Auto-launch state
+var auto_launch_enabled: bool = false
+var cycle_in_progress: bool = false
+var waiting_for_next_cycle: bool = false
 
 # Slider controls
 var layer1_sliders: Dictionary = {}
 var layer2_sliders: Dictionary = {}
+var current_layer1_sliders: Array = []  # Currently visible L1 sliders
 
 # Performance tracking
 var update_timer: float = 0.0
@@ -30,18 +50,20 @@ const LABEL_WIDTH: float = 250.0
 const VALUE_LABEL_WIDTH: float = 80.0
 
 func _ready():
-	# Ensure UI structure exists
-	if not parameter_container:
-		parameter_container = VBoxContainer.new()
-		parameter_container.name = "ParameterContainer"
-		scroll_container.add_child(parameter_container)
+	# Set up torpedo type buttons
+	setup_torpedo_buttons()
+	
+	# Set up auto-launch toggle
+	auto_launch_toggle.toggled.connect(_on_auto_launch_toggled)
 	
 	# Set up time scale slider
 	setup_time_scale_control()
 	
-	# Create parameter sliders
-	create_layer1_sliders()
-	create_layer2_sliders()
+	# Create ALL parameter sliders (but hide them)
+	create_all_parameter_sliders()
+	
+	# Show only straight torpedo params by default
+	show_parameters_for_type(TorpedoType.STRAIGHT)
 	
 	# Add cycle statistics display
 	create_statistics_display()
@@ -51,6 +73,132 @@ func _ready():
 	
 	# Listen for mode changes
 	GameMode.mode_changed.connect(_on_mode_changed)
+
+func setup_torpedo_buttons():
+	# Style buttons
+	straight_button.toggle_mode = true
+	multi_angle_button.toggle_mode = true
+	simultaneous_button.toggle_mode = true
+	
+	# Connect signals
+	straight_button.pressed.connect(func(): _on_torpedo_type_selected(TorpedoType.STRAIGHT))
+	multi_angle_button.pressed.connect(func(): _on_torpedo_type_selected(TorpedoType.MULTI_ANGLE))
+	simultaneous_button.pressed.connect(func(): _on_torpedo_type_selected(TorpedoType.SIMULTANEOUS))
+	
+	# Select straight by default
+	straight_button.button_pressed = true
+
+func _on_torpedo_type_selected(type: TorpedoType):
+	current_torpedo_type = type
+	
+	# Update button states
+	straight_button.button_pressed = (type == TorpedoType.STRAIGHT)
+	multi_angle_button.button_pressed = (type == TorpedoType.MULTI_ANGLE)
+	simultaneous_button.button_pressed = (type == TorpedoType.SIMULTANEOUS)
+	
+	# Show only relevant parameters
+	show_parameters_for_type(type)
+	
+	# Reset cycle stats when switching types
+	reset_cycle_stats()
+	
+	# Configure player ship torpedo launcher
+	configure_player_torpedo_type(type)
+	
+	print("\n=== SELECTED TORPEDO TYPE: %s ===" % get_torpedo_type_name(type))
+
+func get_torpedo_type_name(type: TorpedoType) -> String:
+	match type:
+		TorpedoType.STRAIGHT: return "STRAIGHT"
+		TorpedoType.MULTI_ANGLE: return "MULTI-ANGLE"
+		TorpedoType.SIMULTANEOUS: return "SIMULTANEOUS"
+		_: return "UNKNOWN"
+
+func configure_player_torpedo_type(type: TorpedoType):
+	var player_ships = get_tree().get_nodes_in_group("player_ships")
+	if player_ships.is_empty():
+		return
+		
+	var player = player_ships[0]
+	match type:
+		TorpedoType.STRAIGHT:
+			player.use_multi_angle_torpedoes = false
+			player.use_simultaneous_impact = false
+		TorpedoType.MULTI_ANGLE:
+			player.use_multi_angle_torpedoes = true
+			player.use_simultaneous_impact = false
+		TorpedoType.SIMULTANEOUS:
+			player.use_multi_angle_torpedoes = false
+			player.use_simultaneous_impact = true
+	
+	player.update_torpedo_launcher_settings()
+
+func _on_auto_launch_toggled(pressed: bool):
+	auto_launch_enabled = pressed
+	
+	if pressed:
+		print("Auto-launch ENABLED - Cycles will fire automatically")
+		# Start first cycle immediately if not already in progress
+		if not cycle_in_progress:
+			fire_torpedo_volley()
+	else:
+		print("Auto-launch DISABLED")
+
+func show_parameters_for_type(type: TorpedoType):
+	# Hide all layer 1 sliders
+	for slider_control in current_layer1_sliders:
+		slider_control.container.visible = false
+	current_layer1_sliders.clear()
+	
+	# Show relevant sliders
+	match type:
+		TorpedoType.STRAIGHT:
+			show_straight_parameters()
+		TorpedoType.MULTI_ANGLE:
+			show_multi_angle_parameters()
+		TorpedoType.SIMULTANEOUS:
+			show_simultaneous_parameters()
+	
+	# Layer 2 is always visible - just make sure
+	for key in layer2_sliders:
+		layer2_sliders[key].container.visible = true
+
+func show_straight_parameters():
+	var params = ["waypoint_density_threshold", "straight.lateral_separation", 
+				  "straight.convergence_delay", "straight.initial_boost_duration"]
+	
+	for param in params:
+		if param in layer1_sliders:
+			layer1_sliders[param].container.visible = true
+			current_layer1_sliders.append(layer1_sliders[param])
+
+func show_multi_angle_parameters():
+	# For now, show a message since it's not implemented
+	print("Multi-angle trajectories not yet implemented - showing straight parameters")
+	show_straight_parameters()
+
+func show_simultaneous_parameters():
+	# For now, show a message since it's not implemented
+	print("Simultaneous trajectories not yet implemented - showing straight parameters")
+	show_straight_parameters()
+
+func create_all_parameter_sliders():
+	# Create the layer labels and ALL sliders, but they start hidden
+	var layer1_label = Label.new()
+	layer1_label.text = "=== LAYER 1 - TRAJECTORY SHAPING ==="
+	layer1_label.add_theme_font_size_override("font_size", 16)
+	layer1_label.add_theme_color_override("font_color", Color.CYAN)
+	parameter_container.add_child(layer1_label)
+	
+	# Create ALL layer 1 sliders
+	create_layer1_sliders()
+	
+	# Create layer 2 sliders (always visible)
+	create_layer2_sliders()
+	
+	# Hide all layer 1 sliders initially
+	for key in layer1_sliders:
+		layer1_sliders[key].container.visible = false
 
 func setup_time_scale_control():
 	time_scale_slider.min_value = -2.0  # 0.1x speed
@@ -86,12 +234,6 @@ func _on_time_scale_changed(value: float):
 		batch_manager.use_real_time_updates = true
 
 func create_layer1_sliders():
-	var layer1_label = Label.new()
-	layer1_label.text = "=== LAYER 1 - TRAJECTORY SHAPING ==="
-	layer1_label.add_theme_font_size_override("font_size", 16)
-	layer1_label.add_theme_color_override("font_color", Color.CYAN)
-	parameter_container.add_child(layer1_label)
-	
 	# Universal parameters
 	add_section_label("Universal Parameters")
 	layer1_sliders["waypoint_density_threshold"] = create_parameter_slider(
@@ -272,12 +414,25 @@ func create_statistics_display():
 func _process(delta):
 	if not visible:
 		return
-		
+	
+	# Update performance feedback
 	update_timer += delta
 	if update_timer >= update_interval:
 		update_timer = 0.0
 		update_layer2_feedback()
 		check_cycle_completion()
+
+func fire_torpedo_volley():
+	var player_ships = get_tree().get_nodes_in_group("player_ships")
+	if player_ships.is_empty():
+		return
+	
+	var player = player_ships[0]
+	player.fire_torpedoes_at_enemy()
+	torpedoes_fired += 1
+	cycle_in_progress = true
+	
+	print("Fired torpedo volley #%d for cycle #%d" % [torpedoes_fired, total_cycles + 1])
 
 func update_layer2_feedback():
 	var metrics = collect_torpedo_metrics()
@@ -350,6 +505,9 @@ func collect_torpedo_metrics() -> Dictionary:
 	return metrics
 
 func check_cycle_completion():
+	if not cycle_in_progress:
+		return
+		
 	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
 	var active_count = 0
 	
@@ -358,9 +516,21 @@ func check_cycle_completion():
 			active_count += 1
 	
 	# Cycle complete when no torpedoes remain
-	if active_count == 0 and torpedoes_fired > 0:
+	if active_count == 0:
+		cycle_in_progress = false
 		print_cycle_statistics()
-		reset_cycle_stats()
+		
+		# Start next cycle if auto-launch is enabled
+		if auto_launch_enabled:
+			# Small delay before next cycle for clarity
+			waiting_for_next_cycle = true
+			await get_tree().create_timer(0.5).timeout
+			waiting_for_next_cycle = false
+			
+			reset_cycle_stats()
+			fire_torpedo_volley()
+		else:
+			reset_cycle_stats()
 
 func print_cycle_statistics():
 	total_cycles += 1
@@ -370,6 +540,11 @@ func print_cycle_statistics():
 	print("\n=== TUNING CYCLE %d RESULTS ===" % total_cycles)
 	print("Cycle Duration: %.1f seconds" % cycle_time)
 	print("Hit Rate: %d/%d (%.1f%%)" % [torpedoes_hit, torpedoes_fired, hit_rate])
+	
+	# Call the final parameters print if this is a good cycle
+	if hit_rate > 80.0:
+		print("Good hit rate! Current parameters:")
+		print_final_tuned_parameters()
 	
 	# Update UI statistics
 	var stats_text = parameter_container.get_node_or_null("StatsText")
@@ -387,6 +562,24 @@ func reset_cycle_stats():
 	torpedoes_fired = 0
 	torpedoes_hit = 0
 	cycle_start_time = Time.get_ticks_msec() / 1000.0
+
+func print_final_tuned_parameters():
+	print("\n" + "=".repeat(60))
+	print("FINAL TUNED PARAMETERS - %s TORPEDO" % get_torpedo_type_name(current_torpedo_type))
+	print("=".repeat(60))
+	
+	print("\n# Copy these values to your torpedo configuration:")
+	print("# Layer 1 Parameters:")
+	for slider_control in current_layer1_sliders:
+		if slider_control.container.visible:
+			print("%s = %.3f" % [slider_control.param_name, slider_control.slider.value])
+	
+	print("\n# Layer 2 Parameters:")
+	for key in layer2_sliders:
+		var control = layer2_sliders[key]
+		print("%s = %.3f" % [control.param_name, control.slider.value])
+	
+	print("\n" + "=".repeat(60))
 
 # Inner class for slider controls
 class SliderControl extends RefCounted:

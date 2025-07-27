@@ -25,6 +25,48 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 5
 
+[node name="TorpedoSelectionContainer" type="HBoxContainer" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+
+[node name="TorpedoTypeLabel" type="Label" parent="VBoxContainer/TorpedoSelectionContainer"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Torpedo Type:"
+
+[node name="StraightButton" type="Button" parent="VBoxContainer/TorpedoSelectionContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+toggle_mode = true
+text = "Straight"
+
+[node name="MultiAngleButton" type="Button" parent="VBoxContainer/TorpedoSelectionContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+toggle_mode = true
+text = "Multi-Angle"
+
+[node name="SimultaneousButton" type="Button" parent="VBoxContainer/TorpedoSelectionContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+toggle_mode = true
+text = "Simultaneous"
+
+[node name="AutoLaunchContainer" type="HBoxContainer" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+
+[node name="AutoLaunchLabel" type="Label" parent="VBoxContainer/AutoLaunchContainer"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Auto-Launch:"
+
+[node name="AutoLaunchToggle" type="CheckBox" parent="VBoxContainer/AutoLaunchContainer"]
+layout_mode = 2
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
 [node name="TimeScaleContainer" type="HBoxContainer" parent="VBoxContainer"]
 custom_minimum_size = Vector2(580, 40)
 layout_mode = 2
