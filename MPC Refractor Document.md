@@ -1,8 +1,8 @@
-# MPC Torpedo System Refactoring Plan v8.0 - Complete Physics-First Implementation with Tuning System
+# MPC Torpedo System Refactoring Plan v9.0 - Physics-First Implementation with Clean Data Architecture
 
 ## The Problem
 
-The current MPC system is overcomplicated and fights against physics. Torpedoes oscillate between templates, can't hit stationary targets, and the "MPC" is really just template selection. The system tries to recalculate everything every frame instead of committing to a plan and following it smoothly. Templates are parameter sets, not actual trajectories, leading to jerky, unpredictable motion.
+The current MPC system is overcomplicated and fights against physics. Torpedoes oscillate between templates, can't hit stationary targets, and the "MPC" is really just template selection. The system tries to recalculate everything every frame instead of committing to a plan and following it smoothly. Templates are parameter sets, not actual trajectories, leading to jerky, unpredictable motion. Most critically, the data flow is tangled with circular dependencies, no clear ownership boundaries, and systems trying to do too many things at once.
 
 ### The Fundamental Physics Challenge
 
@@ -23,9 +23,17 @@ The old system tried to solve "sideways torpedoes" by adding alignment weights t
 
 The real problem wasn't alignment - it was trying to execute impossible trajectories.
 
+### The Data Architecture Problem
+
+Beyond physics, the current system violates fundamental software architecture principles:
+- **No Single Source of Truth**: Multiple systems track the same data differently
+- **Circular Dependencies**: Torpedoes call managers which call planners which modify torpedoes
+- **Mixed Responsibilities**: Systems try to handle planning, execution, and analysis simultaneously
+- **Push-Based Chaos**: Every torpedo independently requests updates, causing stampedes
+
 ## The Solution
 
-A true layered guidance system where GPU-based trajectory planning (Layer 1) generates physically-achievable waypoint paths with velocity profiles, and simple proportional navigation (Layer 2) smoothly flies through them matching both position and velocity targets. When physics demands it, we employ flip-and-burn maneuvers - the same technique The Expanse's ships use for navigation.
+A true layered guidance system with clean data architecture where GPU-based trajectory planning (Layer 1) generates physically-achievable waypoint paths with velocity profiles through a pull-based update system, and simple proportional navigation (Layer 2) smoothly flies through them matching both position and velocity targets. When physics demands it, we employ flip-and-burn maneuvers - the same technique The Expanse's ships use for navigation. All systems follow single-responsibility principles with unidirectional data flow.
 
 ### The Flip-and-Burn Revolution
 
@@ -41,6 +49,16 @@ Example: To approach from 90° at 4,000 km:
 - With flip-burn: Decelerate to 2,000 m/s, arc with 2.7 km radius (easy!)
 
 This isn't slower - it's the ONLY way to achieve sharp angle changes at combat velocities.
+
+### Clean Data Architecture Principles
+
+The V9 architecture follows these core principles:
+
+1. **Single Responsibility**: Each system does exactly one thing
+2. **Single Source of Truth**: One authoritative owner for each piece of data
+3. **No Cross-Dependencies**: Systems communicate through events, not direct calls
+4. **Pull-Based Updates**: Centralized scheduling prevents update stampedes
+5. **Unidirectional Data Flow**: Data flows in one direction through the pipeline
 
 ## Critical Design Consideration: Terminal Alignment (Natural Solution)
 
@@ -64,6 +82,7 @@ With physics-based trajectories and velocity management:
 - **20-100% throttle range** (no reverse thrust except via flip maneuver)
 - **Turn radius = v²/a** (emerges from physics, not programmed)
 - **Lateral launch ejection** (all torpedoes launch sideways from tubes)
+- **GPU compute required** (no CPU fallback - this is non-negotiable)
 
 ### What We DON'T Want
 - Arbitrary speed caps (old 2000 m/s limit)
@@ -72,116 +91,141 @@ With physics-based trajectories and velocity management:
 - Competing control objectives (alignment vs tracking)
 - Different physics for different torpedo types
 - Multiple flip-burns per approach (maximum 1, rarely 2)
+- CPU trajectory calculations (too slow to be usable)
 
-## Core Data Architecture Principles
+## Core Data Architecture
 
-### Immediate State & Zero-Trust Design
-**Why**: Godot's node system creates temporal coupling issues. Nodes can be freed between frames, references become invalid, and ID mismatches cause cascading failures. The time between storing a reference and using it is an eternity in game time - ships explode, torpedoes hit targets, PDCs intercept threats. By the time you use a stored reference, the entire battlefield may have changed.
+### Pull-Based Update System
 
-### Fundamental Rules
+The V9 architecture uses a **pull-based update system** where BatchMPCManager owns the update schedule:
 
-1. **Never Store Node References**
-   ```gdscript
-   # WRONG - Reference might be invalid next frame
-   var my_target: Node2D = torpedo_node
-   
-   # RIGHT - Store ID, validate every access
-   var target_id: String = torpedo.torpedo_id
-   func get_target() -> Node2D:
-       return validate_and_get_torpedo(target_id)
-   ```
+```
+Every 1-3Hz (based on time-to-impact):
+BatchMPCManager timer tick →
+BatchMPCManager collects all torpedo states →
+BatchMPCManager validates states →
+BatchMPCManager sends batch to TrajectoryPlanner →
+TrajectoryPlanner executes GPU computation →
+GPU returns new waypoints for all torpedoes →
+BatchMPCManager applies waypoints to each torpedo →
+BatchMPCManager emits "waypoints_updated" signal →
+Torpedoes continue following updated waypoints
+```
 
-2. **Every Frame is a Fresh Start**
-   ```gdscript
-   func _physics_process(delta):
-       # Re-validate EVERYTHING
-       if not is_instance_valid(current_waypoint_marker):
-           current_waypoint_marker = null
-       
-       # Fresh queries for current state
-       var valid_torpedoes = get_tree().get_nodes_in_group("torpedoes")
-       for torpedo in valid_torpedoes:
-           if is_valid_entity(torpedo):
-               process_torpedo(torpedo)
-   ```
+This eliminates update stampedes, ensures perfect GPU batching, and maintains predictable performance.
 
-3. **Self-Identifying Nodes**
-   - Every torpedo carries its own complete identity
-   - No external ID generation or mapping
-   - Identity baked into the node as exported properties
-   - Metadata redundancy for safety
+### System Responsibilities
 
-4. **Mark for Death Pattern**
-   ```gdscript
-   func mark_for_destruction(reason: String):
-       if marked_for_death:
-           return  # Already dying
-       
-       marked_for_death = true
-       is_alive = false
-       
-       # Immediate state changes
-       set_physics_process(false)
-       $CollisionShape2D.disabled = true
-       
-       # Notify then cleanup
-       get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
-       queue_free()
-   ```
+**BatchMPCManager** (Scheduling & Coordination):
+- Owns the 1-3Hz update schedule
+- Determines update frequency based on time-to-impact
+- Collects and validates all torpedo states
+- Batches GPU requests efficiently
+- Applies results back to torpedoes
+- Emits waypoint update events
+- **Does NOT**: Generate trajectories, understand physics, or make tactical decisions
 
-### System-Specific Implications
+**TrajectoryPlanner** (GPU Trajectory Generation):
+- Owns the GPU compute shader interface
+- Generates physically-valid waypoints
+- Validates trajectory feasibility
+- Manages GPU resources and buffers
+- **Does NOT**: Schedule updates, track individual torpedoes, or apply results
 
-**TrajectoryPlanner**:
-- Don't store torpedo references between frames
-- Each update request includes full torpedo state
-- Waypoints returned as positions with velocity targets, not node references
-- Validate torpedo still exists before applying updates
+**TorpedoBase** (State & Execution):
+- Stores current waypoints
+- Maintains physics state (position, velocity, orientation)
+- Executes waypoint following via ProportionalNavigation
+- **Does NOT**: Request updates, generate trajectories, or modify waypoints
 
-**ProportionalNavigation**:
-- No stored reference to "current waypoint node"
-- Calculate fresh each frame from waypoint array
-- Match both position AND velocity targets from waypoints
-- Validate torpedo exists before calculating guidance
+**ProportionalNavigation** (Moment-to-Moment Control):
+- Calculates thrust and rotation to follow waypoints
+- Matches both position and velocity targets
+- Handles special maneuvers (flips)
+- **Does NOT**: Plan trajectories, modify waypoints, or make strategic decisions
 
-**TorpedoVisualizer**:
-- Trail nodes might be freed - check is_instance_valid()
-- Waypoint markers are visual only - don't rely on them for logic
-- Clear all visuals when torpedo dies, don't assume they'll clean themselves
-- Show velocity targets and maneuver types visually
+**TorpedoVisualizer** (Pure Observer):
+- Listens for waypoint update events
+- Reads torpedo states for visualization
+- Renders trails and waypoint markers
+- **Does NOT**: Modify any game state
 
-**SimpleAutoTuner**:
-- Don't track torpedoes across cycles
-- Count hits/misses through event observation, not direct tracking
-- Ship reset positions are fresh teleports, not state preservation
-- Tune for both position accuracy AND velocity matching
+### Zero-Trust Validation
 
-This architecture principle overrides any implementation detail that would violate it. When in doubt: query fresh, validate everything, trust nothing across frames.
+All validation happens in **BatchMPCManager** during state collection:
+
+```gdscript
+func collect_torpedo_states() -> Array:
+    var valid_states = []
+    var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+    
+    for torpedo in torpedoes:
+        # Zero-trust validation
+        if not is_instance_valid(torpedo):
+            continue
+        if not torpedo.is_inside_tree():
+            continue
+        if torpedo.get("marked_for_death"):
+            continue
+        if not validate_physics_state(torpedo):
+            continue
+            
+        valid_states.append(extract_torpedo_state(torpedo))
+    
+    return valid_states
+```
+
+This single validation point protects the entire pipeline from invalid data.
+
+### Event-Based Communication
+
+Systems communicate through signals, not direct method calls:
+
+```gdscript
+# BatchMPCManager emits
+signal waypoints_updated(torpedo_id: String, waypoints: Array)
+signal batch_update_started()
+signal batch_update_completed(torpedo_count: int)
+
+# TorpedoVisualizer listens
+func _ready():
+    var batch_manager = get_node("/root/BatchMPCManager")
+    batch_manager.waypoints_updated.connect(_on_waypoints_updated)
+```
 
 ## Files to DELETE
 
 ### Complete Removal
-- `BatchMPCManager.gd` - replaced by TrajectoryPlanner
+- `BatchMPCManager.gd` - replaced by new pull-based version
 - `GPUBatchCompute.gd` - replaced by cleaner GPU planner
-- `MPCController.gd` - no longer needed
-- `MPCTuner.gd` - replaced by new manual tuning system
-- `MPCTuningObserver.gd` - replaced by new preview mode
-- `mpc_trajectory_batch.glsl` - replaced with trajectory planning shader
+- `MPCController.gd` - no CPU fallback needed
+- `MPCTuner.gd` - replaced by manual tuning system
+- `MPCTuningObserver.gd` - replaced by simpler feedback system
+- `mpc_trajectory_batch.glsl` - replaced with cleaner shader
+- `TestComputeShader.gd` - test file no longer needed
+- `test_compute.glsl` - test shader no longer needed
+- `test_compute_shader.glsl` - test shader no longer needed
 
 ### Heavy Modification
 - `TorpedoMPC.gd` - becomes SmartTorpedo.gd (90% rewrite)
-- `ProportionalNavigation.gd` - add velocity matching (50% rewrite)
-- `TrajectoryPlanner.gd` - add physics simulation (75% rewrite)
+
+### NEW Files to Create
+- `ProportionalNavigation.gd` -  Layer 2 guidance system
+- `TrajectoryPlanner.gd` -  GPU-based Layer 1 trajectory planning
+- `ManualTuningParameters.gd` -  Autoload singleton for parameters
+- `ManualTuningPanel.gd` -  UI for real-time tuning
+- `trajectory_planning_v9.glsl` -  New GPU compute shader
 
 ## New Architecture
 
 ### **TorpedoBase.gd**
-**Why**: Shared foundation prevents code duplication and ensures consistent physics, launch behavior, and now velocity tracking
+**Why**: Shared foundation prevents code duplication and ensures consistent physics, launch behavior, and velocity tracking
 
 Provides ALL torpedoes with:
 - Core physics state (position, velocity, orientation)
 - Thrust and rotation application
 - **Lateral launch system** (unchanged from v6.1)
-- Trail rendering
+- Trail rendering with quality-based coloring
 - Enhanced waypoint structure with velocity profiles:
 
 ```gdscript
@@ -200,64 +244,68 @@ class Waypoint:
         if pos_error < acceptance_radius_meters:
             return true
             
-        # NEW: Also accept if we're close in velocity and moving toward waypoint
+        # Also accept if we're close in velocity and moving toward waypoint
         if vel_error < velocity_tolerance and is_moving_toward_waypoint(torpedo_pos, position):
             return true
             
         return false
 ```
 
-Waypoint acceptance logic enhanced:
+Trail Quality Rendering:
 ```gdscript
-@export var acceptance_radius: float = 100.0  # meters
-@export var waypoint_timeout: float = 10.0    # seconds per waypoint
-@export var velocity_acceptance: float = 500.0 # m/s tolerance
+var trail_quality: float = 0.0
+var trail_quality_factors = {
+    "alignment_error": 0.3,      # 30% weight
+    "velocity_matching": 0.3,    # 30% weight  
+    "control_smoothness": 0.2,   # 20% weight
+    "path_accuracy": 0.2         # 20% weight
+}
 
-func check_waypoint_advance():
-    if current_waypoint_index >= waypoints.size() - 1:
-        return  # Already at final waypoint
+func update_trail_quality():
+    # Calculate each factor
+    var alignment_score = calculate_alignment_score()
+    var velocity_score = calculate_velocity_matching_score()
+    var smoothness_score = calculate_control_smoothness()
+    var path_score = calculate_path_accuracy()
     
-    var current_waypoint = waypoints[current_waypoint_index]
-    var to_waypoint = current_waypoint.position - global_position
-    var distance = to_waypoint.length()
-    var distance_meters = distance * WorldSettings.meters_per_pixel
+    # Weighted average
+    trail_quality = (
+        alignment_score * trail_quality_factors.alignment_error +
+        velocity_score * trail_quality_factors.velocity_matching +
+        smoothness_score * trail_quality_factors.control_smoothness +
+        path_score * trail_quality_factors.path_accuracy
+    )
     
-    # NEW: Check velocity matching
-    var velocity_error = abs(velocity_mps.length() - current_waypoint.velocity_target)
-    var velocity_matched = velocity_error < current_waypoint.velocity_tolerance
-    
-    # Three conditions for advancing (enhanced)
-    if distance_meters < acceptance_radius:
-        advance_waypoint("reached")
-    elif to_waypoint.dot(velocity) < 0 and velocity_matched:
-        advance_waypoint("passed_with_velocity_match")
-    elif Time.get_ticks_msec() / 1000.0 - waypoint_start_time > waypoint_timeout:
-        advance_waypoint("timeout")
-        # Log velocity mismatch if that's why we timed out
-        if not velocity_matched:
-            print("Torpedo %s: Waypoint timeout with velocity error: %.1f m/s" % [torpedo_id, velocity_error])
+    # Update trail color
+    update_trail_color()
 
-func advance_waypoint(reason: String):
-    # Store velocity achievement for tuning
-    var wp = waypoints[current_waypoint_index]
-    var velocity_achievement = 1.0 - (abs(velocity_mps.length() - wp.velocity_target) / wp.velocity_target)
+func update_trail_color():
+    var color: Color
+    if trail_quality > 0.9:
+        color = Color.GREEN
+    elif trail_quality > 0.7:
+        color = Color.YELLOW
+    elif trail_quality > 0.5:
+        color = Color.ORANGE
+    else:
+        color = Color.RED
     
-    current_waypoint_index += 1
-    waypoint_start_time = Time.get_ticks_msec() / 1000.0
-    emit_signal("waypoint_reached", current_waypoint_index - 1, reason, velocity_achievement)
+    if trail_line:
+        trail_line.default_color = color
 ```
 
 **What NOT to do**: 
-- Don't put trajectory-specific logic here
-- Don't add velocity control logic - that's Layer 2's job
-- Don't make waypoint acceptance too strict on velocity
+- Don't request trajectory updates
+- Don't communicate with BatchMPCManager
+- Don't make waypoint decisions
 
 ### **StandardTorpedo.gd** (extends TorpedoBase)
 **Why**: Even simple torpedoes benefit from waypoint visualization and velocity planning
 
 Simple direct-attack torpedo with velocity awareness:
 ```gdscript
-func generate_waypoints():
+func generate_initial_waypoints():
+    # Called once at launch - BatchMPCManager will update later
     var to_target = target.global_position - global_position
     var distance = to_target.length()
     var distance_meters = distance * WorldSettings.meters_per_pixel
@@ -272,239 +320,201 @@ func generate_waypoints():
         generate_velocity_managed_waypoints(distance, to_target)
     else:
         generate_simple_waypoints(distance, to_target)
-
-func generate_simple_waypoints(distance: float, to_target: Vector2):
-    # Initial offset to clear launching ship
-    var offset_dir = Vector2.UP.rotated(launcher.rotation + launch_side * PI/2)
-    waypoints.append(Waypoint.new(
-        global_position + offset_dir * 100,
-        500.0,  # Low initial velocity target
-        "cruise",
-        0.8
-    ))
-    
-    # Acceleration phase waypoints
-    for i in range(1, 4):
-        var t = float(i) / 4.0
-        waypoints.append(Waypoint.new(
-            global_position + to_target * t,
-            2000.0 + t * 8000.0,  # Ramping velocity
-            "cruise",
-            1.0
-        ))
-    
-    # Terminal waypoint
-    waypoints.append(Waypoint.new(
-        target.global_position,
-        10000.0,  # High impact velocity
-        "terminal",
-        1.0
-    ))
-
-func generate_velocity_managed_waypoints(distance: float, to_target: Vector2):
-    # This is rare for straight torpedoes but handles extreme range
-    # Plan a slight S-curve to manage velocity
-    # ... implementation for velocity management
 ```
-
-**What NOT to do**: 
-- Don't make these use different physics or guidance laws
-- Don't skip velocity planning even for "simple" torpedoes
 
 ### **SmartTorpedo.gd** (extends TorpedoBase)
 **Why**: Complex trajectories REQUIRE velocity management and flip-burn capabilities
 
-Advanced multi-role torpedo with physics-based planning:
+Advanced multi-role torpedo that receives trajectory updates from BatchMPCManager:
 
-**Multi-Angle Attack with Flip-Burn**:
 ```gdscript
-func generate_multi_angle_waypoints():
-    var to_target = target.global_position - global_position
-    var distance = to_target.length()
-    var distance_meters = distance * WorldSettings.meters_per_pixel
-    var perpendicular = to_target.rotated(approach_side * PI/2).normalized()
+extends TorpedoBase
+
+# Flight plan set at launch
+var flight_plan_type: String = "straight"
+var flight_plan_data: Dictionary = {}
+
+func _ready():
+    # Parent handles physics setup
+    super._ready()
     
-    # Physics calculation - can we arc without flip-burn?
-    var direct_velocity = calculate_direct_intercept_velocity(distance_meters)
-    var turn_radius = (direct_velocity * direct_velocity) / max_acceleration
-    var min_safe_radius = distance_meters * 0.15  # Need 15% of distance for safe arc
+    # Generate initial waypoints based on flight plan
+    match flight_plan_type:
+        "straight":
+            generate_initial_straight_waypoints()
+        "multi_angle":
+            generate_initial_multi_angle_waypoints()
+        "simultaneous":
+            generate_initial_simultaneous_waypoints()
     
+    # BatchMPCManager will update our waypoints via pull system
+
+# Called by BatchMPCManager when new waypoints arrive
+func apply_waypoint_update(new_waypoints: Array, protected_count: int):
+    # Preserve current and next N waypoints
+    var preserved = []
+    for i in range(min(protected_count, waypoints.size())):
+        preserved.append(waypoints[current_waypoint_index + i])
+    
+    # Clear old waypoints
     waypoints.clear()
     
-    if turn_radius > min_safe_radius:
-        # MUST use flip-burn approach
-        print("Torpedo %s: Turn radius %.1f km exceeds safe limit %.1f km - using flip-burn" % 
-              [torpedo_id, turn_radius/1000.0, min_safe_radius/1000.0])
-        generate_flip_burn_multi_angle()
-    else:
-        # Can use curved approach
-        generate_curved_multi_angle()
-
-func generate_flip_burn_multi_angle():
-    # Phase 1: Aggressive positioning burn (30-40 waypoints)
-    var burn_angle = PI/3 * approach_side  # 60° off direct path
-    var burn_direction = to_target.rotated(burn_angle).normalized()
+    # Add preserved waypoints first
+    waypoints.append_array(preserved)
     
-    # Calculate burn duration to reach position
-    var lateral_displacement_needed = distance * 0.3  # Get 30% to the side
-    var burn_time = calculate_burn_time_for_displacement(lateral_displacement_needed)
-    var waypoints_for_burn = int(burn_time * 2)  # 2 waypoints per second
-    
-    for i in range(waypoints_for_burn):
-        var t = float(i) / float(waypoints_for_burn - 1)
-        var accel_profile = ease(t, 0.2)  # Smooth acceleration ramp
-        
-        waypoints.append(Waypoint.new(
-            global_position + burn_direction * lateral_displacement_needed * accel_profile,
-            1000.0 + 40000.0 * t,  # Accelerate to 41 km/s
-            "cruise",
-            0.9 + 0.1 * t  # Ramp thrust from 90% to 100%
-        ))
-    
-    # Phase 2: Flip maneuver (3 waypoints)
-    var flip_position = waypoints[-1].position
-    var flip_velocity = waypoints[-1].velocity_target
-    
-    waypoints.append(Waypoint.new(
-        flip_position + velocity.normalized() * 50,  # Pre-flip coast
-        flip_velocity,
-        "flip",
-        0.0  # No thrust during flip
-    ))
-    
-    waypoints.append(Waypoint.new(
-        flip_position + velocity.normalized() * 150,  # Mid-flip
-        flip_velocity,
-        "flip",
-        0.0
-    ))
-    
-    waypoints.append(Waypoint.new(
-        flip_position + velocity.normalized() * 250,  # Post-flip
-        flip_velocity,
-        "flip",
-        0.0
-    ))
-    
-    # Phase 3: Deceleration burn (20-30 waypoints)
-    var decel_waypoints = 25
-    var target_velocity = 2000.0  # Decelerate to 2 km/s for arc
-    
-    for i in range(decel_waypoints):
-        var t = float(i) / float(decel_waypoints - 1)
-        var vel = flip_velocity - (flip_velocity - target_velocity) * ease(t, 0.5)
-        
-        # Continue moving forward while decelerating
-        var decel_pos = flip_position + burn_direction * (300 + i * 20)
-        
-        waypoints.append(Waypoint.new(
-            decel_pos,
-            vel,
-            "burn",
-            1.0  # Maximum thrust for deceleration
-        ))
-    
-    # Phase 4: Arc approach at manageable velocity (40-50 waypoints)
-    var arc_start_pos = waypoints[-1].position
-    var arc_waypoints = 45
-    
-    for i in range(arc_waypoints):
-        var t = float(i) / float(arc_waypoints - 1)
-        
-        # Calculate arc position
-        var arc_progress = ease(t, 0.3)
-        var to_target_from_arc = target.global_position - arc_start_pos
-        
-        # Blend from perpendicular to direct approach
-        var blend_factor = 1.0 - pow(t, 2)  # Start perpendicular, end direct
-        var arc_offset = perpendicular * distance * 0.4 * blend_factor
-        var arc_pos = arc_start_pos + to_target_from_arc * arc_progress + arc_offset
-        
-        # Gradually increase velocity during approach
-        var approach_velocity = target_velocity + t * 8000.0  # Accelerate to 10 km/s
-        
-        waypoints.append(Waypoint.new(
-            arc_pos,
-            approach_velocity,
-            "curve",
-            0.7 + 0.3 * t  # Increase thrust as we straighten out
-        ))
-    
-    # Final approach waypoint
-    waypoints.append(Waypoint.new(
-        target.global_position,
-        10000.0,  # Maximum impact velocity
-        "terminal",
-        1.0
-    ))
+    # Add new waypoints
+    for wp in new_waypoints:
+        if waypoints.size() < preserved.size() or wp != waypoints[-1]:
+            waypoints.append(wp)
 ```
 
-**Simultaneous Impact with Velocity Coordination**:
+### **BatchMPCManager.gd** (Singleton)
+**Why**: Centralized pull-based scheduling eliminates update stampedes and ensures efficient GPU usage
+
+Manages the pull-based update cycle:
+
 ```gdscript
-func generate_simultaneous_waypoints(assigned_angle: float, impact_time: float):
-    # Calculate required path length based on impact time
-    var direct_distance = global_position.distance_to(target.global_position)
-    var direct_distance_meters = direct_distance * WorldSettings.meters_per_pixel
-    
-    # Physics check - can we reach target in time?
-    var min_flight_time = calculate_minimum_flight_time(direct_distance_meters)
-    if impact_time < min_flight_time:
-        print("WARNING: Impact time %.1fs less than minimum %.1fs" % [impact_time, min_flight_time])
-        impact_time = min_flight_time * 1.1  # Add 10% margin
-    
-    waypoints.clear()
-    
-    # Fan angle determines how extreme our trajectory is
-    var extreme_angle = abs(assigned_angle) > deg_to_rad(60)
-    
-    if extreme_angle:
-        generate_extreme_simultaneous_trajectory(assigned_angle, impact_time)
-    else:
-        generate_moderate_simultaneous_trajectory(assigned_angle, impact_time)
+extends Node
+class_name BatchMPCManager
 
-func generate_extreme_simultaneous_trajectory(assigned_angle: float, impact_time: float):
-    # For ±70-80° approaches, we NEED flip-burn
+# Update scheduling
+var update_timer: float = 0.0
+var base_update_interval: float = 1.0  # 1 Hz baseline
+var current_update_interval: float = 1.0
+
+# System references  
+var trajectory_planner: TrajectoryPlanner
+
+# Batch state
+var current_batch_size: int = 0
+var last_update_time: float = 0.0
+
+# Signals for event-based architecture
+signal waypoints_updated(torpedo_id: String, waypoints: Array)
+signal batch_update_started()
+signal batch_update_completed(torpedo_count: int)
+
+# Time dilation support
+var use_real_time_updates: bool = true  # For tuning mode
+
+func _ready():
+    trajectory_planner = get_node("/root/TrajectoryPlanner")
+    set_process(true)
+
+func _process(delta):
+    # Use real-world time for updates during time dilation
+    var effective_delta = delta
+    if use_real_time_updates and Engine.time_scale != 1.0:
+        effective_delta = delta / Engine.time_scale
     
-    # Phase 1: Fan out aggressively (20 waypoints)
-    var fan_direction = Vector2.from_angle(parent_ship.rotation + assigned_angle)
-    var fan_distance = 500.0  # kilometers
+    update_timer += effective_delta
     
-    for i in range(20):
-        var t = float(i) / 19.0
-        var fan_progress = ease(t, 0.2)
+    if update_timer >= current_update_interval:
+        update_timer = 0.0
+        execute_batch_update()
+
+func execute_batch_update():
+    emit_signal("batch_update_started")
+    var start_time = Time.get_ticks_usec()
+    
+    # Collect all valid torpedo states (with zero-trust validation)
+    var torpedo_states = collect_and_validate_torpedo_states()
+    
+    if torpedo_states.is_empty():
+        emit_signal("batch_update_completed", 0)
+        return
+    
+    current_batch_size = torpedo_states.size()
+    
+    # Calculate dynamic update rate based on closest time-to-impact
+    var min_time_to_impact = calculate_minimum_time_to_impact(torpedo_states)
+    current_update_interval = calculate_update_interval(min_time_to_impact)
+    
+    # Send batch to GPU via TrajectoryPlanner
+    var gpu_results = trajectory_planner.generate_waypoints_batch(torpedo_states)
+    
+    # Apply results to torpedoes
+    apply_batch_results(gpu_results, torpedo_states)
+    
+    # Performance tracking
+    var batch_time = (Time.get_ticks_usec() - start_time) / 1000.0
+    last_update_time = batch_time
+    
+    emit_signal("batch_update_completed", current_batch_size)
+
+func collect_and_validate_torpedo_states() -> Array:
+    var valid_states = []
+    var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+    
+    for torpedo in torpedoes:
+        # Zero-trust validation
+        if not is_instance_valid(torpedo):
+            continue
+        if not torpedo.is_inside_tree():
+            continue
+        if torpedo.get("marked_for_death"):
+            continue
+            
+        # Validate physics state
+        var pos = torpedo.global_position
+        var vel = torpedo.get("velocity_mps")
+        if not vel or vel.length() > 1000000:  # Sanity check
+            continue
+            
+        # Package state for GPU
+        var state = {
+            "torpedo_ref": torpedo,
+            "torpedo_id": torpedo.get("torpedo_id"),
+            "position": pos,
+            "velocity": vel,
+            "orientation": torpedo.get("orientation"),
+            "max_acceleration": torpedo.get("max_acceleration"),
+            "max_rotation_rate": torpedo.get("max_rotation_rate"),
+            "target_position": get_target_position(torpedo),
+            "target_velocity": get_target_velocity(torpedo),
+            "flight_plan_type": torpedo.get("flight_plan_type"),
+            "flight_plan_data": torpedo.get("flight_plan_data")
+        }
         
-        waypoints.append(Waypoint.new(
-            global_position + fan_direction * fan_distance * fan_progress,
-            500.0 + 20000.0 * t,  # Accelerate to 20.5 km/s
-            "cruise",
-            1.0
-        ))
+        valid_states.append(state)
     
-    # Phase 2: Flip maneuver
-    # Similar to multi-angle but timed for simultaneous arrival
-    # ... (flip waypoints as before)
-    
-    # Phase 3: Deceleration to manageable speed
-    # ... (deceleration waypoints)
-    
-    # Phase 4: Timed approach
-    var remaining_time = impact_time - calculate_elapsed_time(waypoints)
-    var remaining_distance = calculate_remaining_distance(waypoints[-1].position, target.global_position)
-    var required_velocity = remaining_distance / remaining_time
-    
-    # Generate waypoints to match timing requirement
-    # ... (timed approach waypoints)
-```
+    return valid_states
 
-**What NOT to do**: 
-- Don't add special physics - complexity comes from waypoints
-- Don't allow more than one flip-burn per trajectory
-- Don't generate physically impossible velocity transitions
+func calculate_update_interval(time_to_impact: float) -> float:
+    # Dynamic update rate: 1-3 Hz based on urgency
+    if time_to_impact >= 15.0:
+        return 1.0  # 1 Hz for distant targets
+    elif time_to_impact >= 10.0:
+        return 0.5  # 2 Hz for medium range
+    elif time_to_impact >= 5.0:
+        return 0.33  # 3 Hz for close range
+    else:
+        return 0.33  # Cap at 3 Hz even in terminal phase
+
+func apply_batch_results(gpu_results: Array, torpedo_states: Array):
+    # Protected waypoint count (current + next 2)
+    var protected_count = 3
+    
+    for i in range(min(gpu_results.size(), torpedo_states.size())):
+        var result = gpu_results[i]
+        var state = torpedo_states[i]
+        var torpedo = state.torpedo_ref
+        
+        if not is_instance_valid(torpedo):
+            continue
+            
+        # Apply waypoint update to torpedo
+        if torpedo.has_method("apply_waypoint_update"):
+            torpedo.apply_waypoint_update(result.waypoints, protected_count)
+            
+            # Emit signal for visualization
+            emit_signal("waypoints_updated", state.torpedo_id, result.waypoints)
+```
 
 ### **TrajectoryPlanner.gd** (Singleton)
-**Why**: GPU acceleration makes complex trajectory optimization with physics validation feasible
+**Why**: GPU acceleration makes complex trajectory optimization with full physics validation feasible
 
-GPU-accelerated trajectory optimization with full physics simulation:
+GPU-only trajectory generation with zero CPU fallback:
 
 ```gdscript
 extends Node
@@ -515,62 +525,97 @@ var rd: RenderingDevice
 var shader: RID
 var pipeline: RID
 
+# Error handling
+var gpu_available: bool = false
+var initialization_error: String = ""
+
 # Physics validation parameters
 const TURN_RADIUS_SAFETY_FACTOR: float = 1.5  # 50% safety margin
 const MIN_WAYPOINT_SPACING_METERS: float = 100.0
 const FLIP_DURATION_SECONDS: float = 2.5
 const VELOCITY_CHANGE_RATE_LIMIT: float = 2000.0  # m/s per second max
 
-# Tuning parameters loaded from UI
+# Tuning parameters loaded from ManualTuningParameters singleton
 var trajectory_params: Dictionary = {}
 
-# NEW: Waypoint density control
+# Waypoint density control
 var waypoint_density_threshold: float = 0.2  # From manual tuning
 
-func generate_waypoints_gpu(torpedo: SmartTorpedo) -> Array:
+func _ready():
+    initialize_gpu_compute()
+    
+    if not gpu_available:
+        push_error("GPU Compute Required - This game requires GPU compute shaders")
+        get_tree().quit()
+
+func initialize_gpu_compute():
+    # Create rendering device
+    rd = RenderingServer.create_local_rendering_device()
+    
+    if not rd:
+        initialization_error = "Failed to create rendering device - GPU compute not supported"
+        return
+    
+    # Load and compile shader
+    var shader_file = load("res://Shaders/trajectory_planning_v9.glsl")
+    if not shader_file:
+        initialization_error = "Failed to load trajectory planning shader"
+        return
+        
+    var shader_spirv = shader_file.get_spirv()
+    shader = rd.shader_create_from_spirv(shader_spirv)
+    
+    if not shader or shader == RID():
+        initialization_error = "Failed to create shader from SPIR-V"
+        return
+        
+    # Create compute pipeline
+    pipeline = rd.compute_pipeline_create(shader)
+    
+    if not pipeline or pipeline == RID():
+        initialization_error = "Failed to create compute pipeline"
+        return
+    
+    gpu_available = true
+    print("TrajectoryPlanner: GPU compute initialized successfully")
+
+func generate_waypoints_batch(torpedo_states: Array) -> Array:
+    if not gpu_available:
+        push_error("TrajectoryPlanner: GPU not available!")
+        return []
+    
     var start_time = Time.get_ticks_usec()
     
-    # Prepare state for GPU
-    var current_state = torpedo.get_physics_state()
-    var target_state = torpedo.get_target_state()
-    var constraints = torpedo.get_trajectory_constraints()
+    # Get tuned parameters from singleton
+    var params = ManualTuningParameters.get_current_parameters()
     
-    # Get tuned parameters from manual UI
-    var params = get_tuned_parameters(torpedo.flight_plan_type)
+    # Prepare GPU buffers
+    var gpu_input = prepare_gpu_input(torpedo_states, params)
+    var gpu_output = execute_gpu_computation(gpu_input)
     
-    # Determine if flip-burn is required based on tuned threshold
-    var needs_flip_burn = evaluate_flip_burn_requirement(
-        current_state, target_state, constraints, params.flip_burn_threshold
-    )
-    
-    if needs_flip_burn:
-        # Generate flip-burn trajectory on CPU (too complex for current GPU shader)
-        var trajectory = generate_flip_burn_trajectory_cpu(
-            current_state, target_state, constraints, params
-        )
-        trajectory = apply_adaptive_waypoint_density(trajectory)
-        validate_trajectory_physics(trajectory)
-        return trajectory
-    
-    # Use GPU for standard trajectory optimization
-    var gpu_result = compute_trajectory_gpu(current_state, target_state, constraints)
-    gpu_result = apply_adaptive_waypoint_density(gpu_result)
-    
-    # Validate physics
-    if not validate_trajectory_physics(gpu_result):
-        # GPU trajectory is impossible - fall back to flip-burn
-        print("GPU trajectory failed physics validation - using flip-burn")
-        return generate_flip_burn_trajectory_cpu(
-            current_state, target_state, constraints, params
-        )
+    # Process results
+    var results = []
+    for i in range(torpedo_states.size()):
+        var waypoints = extract_waypoints_for_torpedo(gpu_output, i)
+        waypoints = apply_adaptive_waypoint_density(waypoints, params.waypoint_density_threshold)
+        
+        # Validate physics
+        if not validate_trajectory_physics(waypoints):
+            # If invalid, generate emergency straight-line waypoints
+            waypoints = generate_emergency_waypoints(torpedo_states[i])
+        
+        results.append({
+            "torpedo_id": torpedo_states[i].torpedo_id,
+            "waypoints": waypoints
+        })
     
     var compute_time = (Time.get_ticks_usec() - start_time) / 1000.0
-    if compute_time > 10.0:  # Log slow computations
-        print("Trajectory planning took %.1f ms" % compute_time)
+    if compute_time > 10.0:
+        print("TrajectoryPlanner: Slow computation - %.1f ms for %d torpedoes" % [compute_time, torpedo_states.size()])
     
-    return gpu_result
+    return results
 
-func apply_adaptive_waypoint_density(waypoints: Array) -> Array:
+func apply_adaptive_waypoint_density(waypoints: Array, threshold: float) -> Array:
     """Subdivide waypoints based on velocity changes"""
     if waypoints.size() < 2:
         return waypoints
@@ -583,8 +628,8 @@ func apply_adaptive_waypoint_density(waypoints: Array) -> Array:
         var wp2 = waypoints[i]
         
         # Check velocity change
-        var vel_change = abs(wp2.velocity_target - wp1.velocity_target) / wp1.velocity_target
-        var needs_subdivision = vel_change > waypoint_density_threshold
+        var vel_change = abs(wp2.velocity_target - wp1.velocity_target) / max(wp1.velocity_target, 100.0)
+        var needs_subdivision = vel_change > threshold
         
         # Also check direction change
         if wp1.velocity_target > 100 and wp2.velocity_target > 100:
@@ -596,7 +641,9 @@ func apply_adaptive_waypoint_density(waypoints: Array) -> Array:
         
         if needs_subdivision:
             # Add intermediate waypoints
-            var subdivisions = ceil(vel_change / waypoint_density_threshold)
+            var subdivisions = ceil(vel_change / threshold)
+            subdivisions = min(subdivisions, 5)  # Cap at 5
+            
             for j in range(1, subdivisions):
                 var t = float(j) / subdivisions
                 var mid_waypoint = interpolate_waypoints(wp1, wp2, t)
@@ -604,43 +651,12 @@ func apply_adaptive_waypoint_density(waypoints: Array) -> Array:
         
         densified.append(wp2)
     
+    # Ensure we don't exceed max waypoints
+    var max_waypoints = ManualTuningParameters.get_parameter("max_waypoints", 100)
+    if densified.size() > max_waypoints:
+        densified = reduce_waypoint_count(densified, max_waypoints)
+    
     return densified
-
-func evaluate_flip_burn_requirement(current_state: Dictionary, target_state: Dictionary, 
-                                   constraints: Dictionary, threshold_multiplier: float) -> bool:
-    """Determine if physics requires flip-burn maneuver with tunable threshold"""
-    
-    var to_target = target_state.position - current_state.position
-    var distance = to_target.length()
-    
-    # Calculate velocity if we accelerate all the way
-    var final_velocity = sqrt(
-        current_state.velocity.length_squared() + 
-        2 * constraints.max_acceleration * distance
-    )
-    
-    # Calculate turn radius at that velocity
-    var turn_radius = (final_velocity * final_velocity) / constraints.max_acceleration
-    
-    # Apply threshold multiplier from tuning
-    var effective_turn_radius = turn_radius / threshold_multiplier
-    
-    # Check against trajectory requirements
-    match constraints.trajectory_type:
-        "multi_angle":
-            # Need to turn ~90 degrees
-            var required_turn_distance = distance * 0.3  # 30% for safe arc
-            return effective_turn_radius > required_turn_distance
-            
-        "simultaneous":
-            # Check if assigned angle is extreme
-            if abs(constraints.assigned_angle) > deg_to_rad(60):
-                return effective_turn_radius > distance * 0.2
-            return false
-            
-        _:
-            # Straight trajectories rarely need flip-burn
-            return false
 
 func validate_trajectory_physics(waypoints: Array) -> bool:
     """Validate that trajectory is physically achievable"""
@@ -649,7 +665,6 @@ func validate_trajectory_physics(waypoints: Array) -> bool:
         return false
     
     var validation_passed = true
-    var max_violation = 0.0
     
     for i in range(waypoints.size() - 1):
         var wp1 = waypoints[i]
@@ -658,7 +673,6 @@ func validate_trajectory_physics(waypoints: Array) -> bool:
         # Check waypoint spacing
         var distance = wp1.position.distance_to(wp2.position) * WorldSettings.meters_per_pixel
         if distance < MIN_WAYPOINT_SPACING_METERS:
-            print("Waypoints too close: %.1f m" % distance)
             validation_passed = false
             continue
         
@@ -668,8 +682,6 @@ func validate_trajectory_physics(waypoints: Array) -> bool:
         var max_velocity_change = wp1.max_acceleration * time_between
         
         if velocity_change > max_velocity_change * 1.1:  # 10% tolerance
-            print("Velocity change impossible: need %.0f m/s in %.1f s (max: %.0f)" % 
-                  [velocity_change, time_between, max_velocity_change])
             validation_passed = false
         
         # Check turn radius if direction changes significantly
@@ -685,288 +697,21 @@ func validate_trajectory_physics(waypoints: Array) -> bool:
                 var actual_radius = (velocity * velocity) / wp1.max_acceleration
                 
                 if actual_radius > required_radius * TURN_RADIUS_SAFETY_FACTOR:
-                    var violation = actual_radius / required_radius
-                    max_violation = max(max_violation, violation)
-                    print("Turn radius violation at waypoint %d: %.1fx too large" % [i, violation])
                     validation_passed = false
     
     return validation_passed
-
-func generate_flip_burn_trajectory_cpu(current_state: Dictionary, target_state: Dictionary, 
-                                      constraints: Dictionary, params: Dictionary) -> Array:
-    """Generate flip-burn trajectory when physics demands it"""
-    
-    var waypoints = []
-    var to_target = target_state.position - current_state.position
-    var distance = to_target.length()
-    
-    # Determine burn angle based on trajectory type and tuning
-    var burn_angle = calculate_optimal_burn_angle(constraints, params)
-    var burn_direction = to_target.rotated(burn_angle).normalized()
-    
-    # Phase 1: Acceleration burn
-    var burn_time = 30.0  # seconds
-    var burn_waypoints = int(burn_time * 2)  # 2 per second
-    
-    for i in range(burn_waypoints):
-        var t = float(i) / float(burn_waypoints - 1)
-        var acceleration = constraints.max_acceleration * (0.8 + 0.2 * t)  # Ramp up
-        var burn_velocity = acceleration * t * burn_time
-        
-        waypoints.append(create_waypoint(
-            current_state.position + burn_direction * calculate_burn_distance(t, burn_time, acceleration),
-            min(burn_velocity, 50000.0),  # Cap at 50 km/s for safety
-            "cruise",
-            0.8 + 0.2 * t
-        ))
-    
-    # Phase 2: Flip maneuver with tuned timing
-    add_flip_waypoints(waypoints, burn_direction, constraints, params)
-    
-    # Phase 3: Deceleration burn to tuned target velocity
-    var current_velocity = waypoints[-1].velocity_target
-    var target_velocity = params.deceleration_target  # From manual tuning
-    add_deceleration_waypoints(waypoints, current_velocity, target_velocity, constraints)
-    
-    # Phase 4: Final approach
-    add_approach_waypoints(waypoints, target_state, constraints, params)
-    
-    return waypoints
-
-func add_flip_waypoints(waypoints: Array, direction: Vector2, constraints: Dictionary, params: Dictionary):
-    """Add flip maneuver waypoints with elegant timing"""
-    var flip_position = waypoints[-1].position
-    var flip_velocity = waypoints[-1].velocity_target
-    
-    # Pre-flip coast (0.4s)
-    waypoints.append(create_waypoint(
-        flip_position + direction * (flip_velocity * 0.4),
-        flip_velocity,
-        "flip",
-        0.0
-    ))
-    
-    # Mid-flip (0.5s rotation at 1080°/s = 540° = 1.5 rotations)
-    waypoints.append(create_waypoint(
-        flip_position + direction * (flip_velocity * 0.9),
-        flip_velocity,
-        "flip",
-        0.0
-    ))
-    
-    # Post-flip coast (0.4s)
-    waypoints.append(create_waypoint(
-        flip_position + direction * (flip_velocity * 1.3),
-        flip_velocity,
-        "flip",
-        0.0
-    ))
 ```
-
-**Dynamic Update Rate** (unchanged from v6.1 but with velocity profile updates):
-```gdscript
-func calculate_update_rate(time_to_impact: float) -> float:
-    if time_to_impact >= 15.0:
-        return 1.0  # 1 Hz
-    elif time_to_impact >= 10.0:
-        return 2.0  # 2 Hz
-    elif time_to_impact >= 5.0:
-        return 3.0  # 3 Hz
-    else:
-        return 3.0  # Cap at 3 Hz even in terminal phase
-
-func should_update_waypoints(torpedo: SmartTorpedo) -> bool:
-    var time_to_impact = calculate_time_to_impact(torpedo)
-    var update_rate = calculate_update_rate(time_to_impact)
-    var time_since_last = Time.get_ticks_msec() / 1000.0 - torpedo.last_waypoint_update
-    
-    # Force update if physics violation detected
-    if detect_physics_violation(torpedo):
-        print("Physics violation detected - forcing trajectory update")
-        return true
-    
-    return time_since_last >= (1.0 / update_rate)
-
-func update_torpedo_waypoints(torpedo: SmartTorpedo):
-    var new_waypoints = generate_waypoints_gpu(torpedo)
-    
-    # Protect current waypoint AND the next TWO after it
-    var current_idx = torpedo.current_waypoint_index
-    var protected_until = min(current_idx + 3, torpedo.waypoints.size())
-    
-    # Smooth velocity transitions in updated waypoints
-    smooth_velocity_profile(new_waypoints, torpedo.velocity_mps.length(), protected_until)
-    
-    # Only update waypoints after the protection zone
-    for i in range(protected_until, new_waypoints.size()):
-        if i < torpedo.waypoints.size():
-            torpedo.waypoints[i] = new_waypoints[i]
-        else:
-            torpedo.waypoints.append(new_waypoints[i])
-    
-    torpedo.last_waypoint_update = Time.get_ticks_msec() / 1000.0
-```
-
-**What NOT to do**: 
-- Don't update waypoints torpedo is approaching or about to reach
-- Don't generate physically impossible paths
-- Don't allow arbitrary velocity changes between waypoints
-- Don't skip physics validation to save computation time
-
-### **trajectory_planning.glsl** (GPU Compute Shader)
-**Why**: Parallel evaluation of trajectory variations with physics constraints
-
-Enhanced GPU compute shader with velocity planning:
-```glsl
-#version 450
-
-layout(local_size_x = 64) in;
-
-// Torpedo state includes velocity targets now
-struct WaypointData {
-    vec2 position;
-    float velocity_target;
-    float maneuver_type;  // 0=cruise, 1=flip, 2=burn, 3=curve, 4=terminal
-};
-
-// Input buffers
-layout(binding = 0) buffer TorpedoState {
-    vec4 position_velocity;
-    vec4 orientation_params;  // orientation, angular_vel, max_accel, max_rotation
-} torpedo_state;
-
-layout(binding = 1) buffer TargetState {
-    vec4 position_velocity;
-} target_state;
-
-layout(binding = 2) buffer Constraints {
-    vec4 params;  // trajectory_type, assigned_angle, impact_time, reserved
-} constraints;
-
-// Output buffer
-layout(binding = 3) buffer TrajectoryOutput {
-    WaypointData waypoints[100];
-    float total_cost;
-    float physics_valid;
-} output;
-
-// Shared memory for parallel physics validation
-shared float physics_violations[64];
-
-void main() {
-    uint idx = gl_GlobalInvocationID.x;
-    
-    // Each thread evaluates a trajectory variant
-    float variant_param = float(idx) / 64.0;
-    
-    // Initialize trajectory
-    vec2 current_pos = torpedo_state.position_velocity.xy;
-    vec2 current_vel = torpedo_state.position_velocity.zw;
-    float orientation = torpedo_state.orientation_params.x;
-    float max_accel = torpedo_state.orientation_params.z;
-    
-    float total_cost = 0.0;
-    uint num_waypoints = 0;
-    
-    // Generate trajectory based on type
-    if (constraints.params.x == 0.0) {  // Straight
-        num_waypoints = generate_straight_trajectory(variant_param);
-    } else if (constraints.params.x == 1.0) {  // Multi-angle
-        num_waypoints = generate_multi_angle_trajectory(variant_param);
-    } else if (constraints.params.x == 2.0) {  // Simultaneous
-        num_waypoints = generate_simultaneous_trajectory(variant_param);
-    }
-    
-    // Physics validation in parallel
-    float my_violations = 0.0;
-    
-    for (uint i = 1; i < num_waypoints; i++) {
-        vec2 wp1_pos = output.waypoints[i-1].position;
-        vec2 wp2_pos = output.waypoints[i].position;
-        float v1 = output.waypoints[i-1].velocity_target;
-        float v2 = output.waypoints[i].velocity_target;
-        
-        // Check turn radius
-        if (i > 1) {
-            vec2 wp0_pos = output.waypoints[i-2].position;
-            vec2 dir1 = normalize(wp1_pos - wp0_pos);
-            vec2 dir2 = normalize(wp2_pos - wp1_pos);
-            float angle_change = acos(clamp(dot(dir1, dir2), -1.0, 1.0));
-            
-            if (angle_change > 0.087) {  // 5 degrees
-                float turn_radius = v1 * v1 / max_accel;
-                float required_radius = length(wp2_pos - wp1_pos) / (2.0 * sin(angle_change / 2.0));
-                
-                if (turn_radius > required_radius * 1.5) {  // Safety factor
-                    my_violations += (turn_radius / required_radius);
-                }
-            }
-        }
-        
-        // Check velocity change feasibility
-        float time_between = estimate_time_between_waypoints(i-1, i);
-        float max_vel_change = max_accel * time_between;
-        if (abs(v2 - v1) > max_vel_change * 1.1) {
-            my_violations += abs(v2 - v1) / max_vel_change;
-        }
-    }
-    
-    // Store violations for reduction
-    physics_violations[idx] = my_violations;
-    barrier();
-    
-    // Parallel reduction to find best trajectory
-    for (uint stride = 32; stride > 0; stride >>= 1) {
-        if (idx < stride) {
-            if (physics_violations[idx + stride] < physics_violations[idx]) {
-                physics_violations[idx] = physics_violations[idx + stride];
-                // Copy trajectory data if this one is better
-                // ... (trajectory copying logic)
-            }
-        }
-        barrier();
-    }
-    
-    // Thread 0 outputs the best trajectory
-    if (idx == 0) {
-        output.physics_valid = (physics_violations[0] < 0.1) ? 1.0 : 0.0;
-    }
-}
-
-uint generate_multi_angle_trajectory(float variant) {
-    // Generate waypoints with velocity profiles
-    uint wp_count = 0;
-    
-    // Determine if flip-burn needed based on physics
-    float direct_velocity = calculate_direct_velocity();
-    float turn_radius = direct_velocity * direct_velocity / torpedo_state.orientation_params.z;
-    
-    if (turn_radius > target_distance * 0.15) {
-        // Generate flip-burn trajectory
-        wp_count = generate_flip_burn_waypoints(variant);
-    } else {
-        // Generate curved trajectory
-        wp_count = generate_curved_waypoints(variant);
-    }
-    
-    return wp_count;
-}
-```
-
-**What NOT to do**: 
-- Don't ignore physics constraints in GPU calculations
-- Don't generate trajectories without velocity profiles
-- Don't skip validation to save GPU cycles
 
 ### **ProportionalNavigation.gd** (Component)
 **Why**: PN naturally creates smooth curves through waypoints, now with velocity matching
 
-Layer 2 guidance enhanced for velocity targets:
+Layer 2 guidance for precise waypoint following:
+
 ```gdscript
 class_name ProportionalNavigation
 extends Node
 
-# Core parameters from manual tuning
+# Core parameters from ManualTuningParameters
 var navigation_constant_N: float = 3.0
 var velocity_gain: float = 0.001
 var velocity_anticipation: float = 0.5
@@ -980,6 +725,24 @@ var last_los_angle: float = 0.0
 var first_frame: bool = true
 var last_thrust: float = 0.5
 var thrust_ramp_start_time: float = 0.0
+
+func _ready():
+    # Load parameters from tuning singleton
+    update_parameters_from_tuning()
+    
+    # Listen for parameter changes during tuning
+    if ManualTuningParameters.has_signal("parameters_changed"):
+        ManualTuningParameters.parameters_changed.connect(update_parameters_from_tuning)
+
+func update_parameters_from_tuning():
+    var params = ManualTuningParameters.get_layer2_parameters()
+    navigation_constant_N = params.get("navigation_constant_N", navigation_constant_N)
+    velocity_gain = params.get("velocity_gain", velocity_gain)
+    velocity_anticipation = params.get("velocity_anticipation", velocity_anticipation)
+    rotation_thrust_penalty = params.get("rotation_thrust_penalty", rotation_thrust_penalty)
+    thrust_smoothing = params.get("thrust_smoothing", thrust_smoothing)
+    position_tolerance = params.get("position_tolerance", position_tolerance)
+    velocity_tolerance = params.get("velocity_tolerance", velocity_tolerance)
 
 func calculate_guidance(torpedo_pos: Vector2, torpedo_vel: Vector2, 
                        torpedo_orientation: float, torpedo_max_acceleration: float,
@@ -1029,7 +792,6 @@ func calculate_guidance(torpedo_pos: Vector2, torpedo_vel: Vector2,
         
         # Anticipate needed velocity changes
         if abs(speed_change_needed) > 1000.0 and time_to_waypoint < 5.0:
-            # Big velocity change coming up - start adjusting now
             var anticipation_factor = (1.0 - time_to_waypoint / 5.0) * velocity_anticipation
             target_speed = lerp(target_speed, next_speed, anticipation_factor)
             speed_error = target_speed - current_speed
@@ -1049,932 +811,637 @@ func calculate_guidance(torpedo_pos: Vector2, torpedo_vel: Vector2,
     # Apply thrust smoothing
     thrust = smooth_thrust_change(thrust)
     
-    # Natural alignment emerges from proper velocity management
-    # No alignment weights needed!
-    
     return {
         "turn_rate": clamp(pn_turn_rate, -torpedo_max_rotation, torpedo_max_rotation),
-        "thrust": clamp(thrust, 0.2, 1.0)  # Never go below 20% thrust
+        "thrust": clamp(thrust, 0.2, 1.0)
     }
-
-func calculate_thrust_for_velocity(speed_error: float, maneuver_type: String, 
-                                  thrust_limit: float, max_acceleration: float) -> float:
-    """Calculate thrust to achieve velocity target"""
-    
-    # Base thrust from velocity error
-    var base_thrust = 0.5 + speed_error * velocity_gain
-    
-    # Maneuver-specific adjustments
-    match maneuver_type:
-        "burn":
-            # Always maximum thrust during burns
-            base_thrust = 1.0
-        "curve":
-            # Moderate thrust during curves
-            base_thrust = clamp(base_thrust, 0.3, 0.8)
-        "terminal":
-            # Maximum thrust for impact
-            base_thrust = 1.0
-        _:
-            # Normal cruise
-            base_thrust = clamp(base_thrust, 0.2, 1.0)
-    
-    # Apply waypoint thrust limit
-    return base_thrust * thrust_limit
-
-func smooth_thrust_change(target_thrust: float) -> float:
-    """Smooth thrust changes over time"""
-    if abs(target_thrust - last_thrust) > 0.1:
-        # Start new ramp
-        thrust_ramp_start_time = Time.get_ticks_msec() / 1000.0
-    
-    var ramp_progress = (Time.get_ticks_msec() / 1000.0 - thrust_ramp_start_time) / thrust_smoothing
-    ramp_progress = clamp(ramp_progress, 0.0, 1.0)
-    
-    var smoothed_thrust = lerp(last_thrust, target_thrust, ramp_progress)
-    last_thrust = smoothed_thrust
-    
-    return smoothed_thrust
 ```
-
-**Key Features**:
-- Tracks both position AND velocity targets
-- Anticipates upcoming velocity changes
-- Natural handling of flip maneuvers
-- Thrust modulation based on rotation (can't thrust efficiently while turning hard)
-- NO alignment weights - proper velocity creates proper alignment
-
-**What NOT to do**: 
-- Don't add alignment weights back in
-- Don't make Layer 2 decide when to flip-burn
-- Don't ignore waypoint thrust limits
-- Don't try to match velocity exactly - close enough is fine
 
 ### **TorpedoVisualizer.gd** (Scene-wide Overlay)
 **Why**: Visual debugging shows both trajectory planning and velocity management quality
 
-**Core Components** (enhanced from v6.1):
+Event-based visualization system:
 
-**Torpedo Trails** (unchanged)
-- Single Line2D per torpedo
-- Fixed width (2 pixels)
-- Color: Cyan (#00FFFF) for all torpedoes
-- Shows exact path taken by torpedo center
-- Persists until next torpedo volley launches
-
-**Waypoint Markers** (enhanced with type colors)
-- Circle shapes (8 pixel radius)
-- Color coding by maneuver type:
-  - White (#FFFFFF): Cruise waypoints
-  - Green (#00FF00): Boost/acceleration waypoints
-  - Yellow (#FFFF00): Flip maneuver waypoints
-  - Red (#FF0000): Burn (deceleration) waypoints
-  - Blue (#0080FF): Curve approach waypoints
-  - Magenta (#FF00FF): Terminal waypoints
-  - Gray (#808080): Passed waypoints
-- When waypoints update (1-3 Hz):
-  - All waypoints briefly flash white (#FFFFFF) for 200ms
-  - Flash intensity proportional to velocity error
-- Final waypoint (target) always visible with pulsing animation
-
-**Velocity Indicators** (NEW)
-- Small velocity vector at each waypoint
-- Length proportional to velocity_target (log scale)
-- Color indicates velocity error:
-  - Green: Within tolerance
-  - Yellow: 500-1000 m/s error
-  - Red: >1000 m/s error
-- Angle shows expected heading at waypoint
-
-**Rendering Details**:
 ```gdscript
-func update_waypoint_markers(torpedo: Node2D):
-    # Validate torpedo first
-    if not is_instance_valid(torpedo):
+extends Node2D
+class_name TorpedoVisualizer
+
+# Visual elements pools
+var waypoint_pool: Array = []
+var velocity_indicator_pool: Array = []
+var trail_lines: Dictionary = {}  # torpedo_id -> Line2D
+
+# Visual settings
+var waypoint_colors = {
+    "cruise": Color.WHITE,
+    "boost": Color.GREEN,
+    "flip": Color.YELLOW,
+    "burn": Color.RED,
+    "curve": Color(0.5, 0.5, 1.0),
+    "terminal": Color.MAGENTA
+}
+
+func _ready():
+    # Create object pools
+    for i in range(1000):  # Support many waypoints
+        var marker = ColorRect.new()
+        marker.size = Vector2(16, 16)
+        marker.visible = false
+        waypoint_pool.append(marker)
+        add_child(marker)
+    
+    # Listen to BatchMPCManager events
+    var batch_manager = get_node("/root/BatchMPCManager")
+    batch_manager.waypoints_updated.connect(_on_waypoints_updated)
+    batch_manager.batch_update_started.connect(_on_batch_started)
+
+func _on_waypoints_updated(torpedo_id: String, waypoints: Array):
+    # Find torpedo
+    var torpedo = find_torpedo_by_id(torpedo_id)
+    if not torpedo:
         return
     
-    var markers = waypoint_markers.get(torpedo.torpedo_id, [])
+    # Update waypoint markers
+    update_waypoint_markers(torpedo, waypoints)
     
-    # Return old markers to pool
-    for marker in markers:
-        if is_instance_valid(marker):
-            marker.visible = false
-            waypoint_pool.append(marker)
-    markers.clear()
-    
-    # Get markers from pool for new waypoints
-    for i in range(torpedo.waypoints.size()):
-        if waypoint_pool.is_empty():
-            break
-        
-        var marker = waypoint_pool.pop_back()
-        var waypoint = torpedo.waypoints[i]
-        
-        # Color based on maneuver type
-        var color = get_waypoint_color(waypoint.maneuver_type, i, torpedo)
-        
-        marker.color = color
-        marker.global_position = waypoint.position - Vector2(8, 8)
-        marker.visible = true
-        markers.append(marker)
-        
-        # Add velocity indicator
-        if velocity_indicator_pool.size() > 0:
-            var vel_indicator = velocity_indicator_pool.pop_back()
-            setup_velocity_indicator(vel_indicator, waypoint, torpedo)
-    
-    waypoint_markers[torpedo.torpedo_id] = markers
-    
-    # Flash based on velocity error magnitude
-    var max_velocity_error = calculate_max_velocity_error(torpedo)
-    flash_waypoints(markers, max_velocity_error)
+    # Flash waypoints to indicate update
+    flash_waypoints(torpedo_id)
 
-func get_waypoint_color(maneuver_type: String, index: int, torpedo: Node2D) -> Color:
-    # Check if passed
-    if index < torpedo.current_waypoint_index:
-        return Color.GRAY
-    
-    # Current waypoint (special handling)
-    if index == torpedo.current_waypoint_index:
-        return Color.GREEN  # Always green when active
-    
-    # Future waypoints by type
-    match maneuver_type:
-        "cruise": return Color.WHITE
-        "boost": return Color.GREEN
-        "flip": return Color.YELLOW
-        "burn": return Color.RED
-        "curve": return Color(0.5, 0.5, 1.0)  # Light blue
-        "terminal": return Color.MAGENTA
-        _: return Color.CYAN  # Fallback
+func _on_batch_started():
+    # Could show a subtle indicator that update is happening
+    pass
 
-func setup_velocity_indicator(indicator: Line2D, waypoint: Waypoint, torpedo: Node2D):
-    # Calculate velocity vector length (log scale for visibility)
-    var vel_magnitude = log(waypoint.velocity_target / 100.0) * 10.0
-    var vel_direction = calculate_expected_direction(waypoint, torpedo)
+func _process(_delta):
+    # Update trails based on torpedo positions
+    var torpedoes = get_tree().get_nodes_in_group("torpedoes")
     
-    # Set up line
-    indicator.clear_points()
-    indicator.add_point(waypoint.position)
-    indicator.add_point(waypoint.position + vel_direction * vel_magnitude)
-    
-    # Color by velocity error
-    var current_velocity = torpedo.velocity_mps.length()
-    var velocity_error = abs(waypoint.velocity_target - current_velocity)
-    
-    if velocity_error < waypoint.velocity_tolerance:
-        indicator.default_color = Color.GREEN
-    elif velocity_error < 1000.0:
-        indicator.default_color = Color.YELLOW
+    for torpedo in torpedoes:
+        if not is_instance_valid(torpedo):
+            continue
+            
+        var torpedo_id = torpedo.get("torpedo_id")
+        if not torpedo_id:
+            continue
+        
+        # Update trail
+        if not trail_lines.has(torpedo_id):
+            create_trail_for_torpedo(torpedo_id)
+        
+        var trail = trail_lines[torpedo_id]
+        if trail and is_instance_valid(trail):
+            trail.add_point(torpedo.global_position)
+            
+            # Limit trail length
+            if trail.get_point_count() > 500:
+                trail.remove_point(0)
+            
+            # Update trail color based on torpedo's quality score
+            if torpedo.has_method("get_trail_quality"):
+                var quality = torpedo.get_trail_quality()
+                trail.default_color = get_quality_color(quality)
+
+func get_quality_color(quality: float) -> Color:
+    if quality > 0.9:
+        return Color.GREEN
+    elif quality > 0.7:
+        return Color.YELLOW
+    elif quality > 0.5:
+        return Color.ORANGE
     else:
-        indicator.default_color = Color.RED
-    
-    indicator.width = 1.0
-    indicator.visible = true
+        return Color.RED
+
+func flash_waypoints(torpedo_id: String):
+    # Brief white flash to show update
+    # Implementation depends on your visual style
+    pass
 ```
 
-**Trail Management** (unchanged):
-- Each torpedo gets one continuous line
-- Line drawn from launch position through current position
-- All trails cleared when new volley launches
+### **ManualTuningParameters.gd** (Autoload Singleton)
+**Why**: Central location for all tuning parameters accessible by all systems
 
-**Implementation Notes**:
-- Pure observer - reads torpedo state, never modifies
-- Efficient pooling of visual elements
-- Increased marker pool size to handle double waypoints
-- Velocity indicators are optional (can be toggled)
-
-**What NOT to do**: 
-- Don't draw predicted paths
-- Don't show physics calculations
-- Don't clutter with too many indicators
-- Don't make performance-heavy
-
-### **TorpedoLauncher.gd**
-**Why**: Must understand trajectory physics requirements when spawning torpedoes
-
-Updates for physics-aware launching:
 ```gdscript
-func fire_torpedo(target: Node2D, count: int = 8):
-    # Pre-calculate if trajectories will need flip-burn
-    var distance_to_target = global_position.distance_to(target.global_position)
-    var physics_analysis = analyze_trajectory_requirements(target, distance_to_target)
-    
-    match torpedo_mode:
-        TorpedoMode.MULTI_ANGLE:
-            fire_multi_angle_volley(target, count, physics_analysis)
-        TorpedoMode.SIMULTANEOUS:
-            fire_simultaneous_volley(target, count, physics_analysis)
-        _:
-            fire_standard_volley(target, count)
+extends Node
 
-func analyze_trajectory_requirements(target: Node2D, distance: float) -> Dictionary:
-    """Pre-flight physics analysis"""
-    var analysis = {
-        "needs_flip_burn": false,
-        "estimated_flight_time": 0.0,
-        "max_achievable_angle": 0.0,
-        "recommended_acceleration_profile": {}
+# Layer 1 Parameters (Trajectory Shaping)
+var layer1_params = {
+    "universal": {
+        "waypoint_density_threshold": 0.2,
+        "max_waypoints": 100
+    },
+    "straight": {
+        "lateral_separation": 0.1,
+        "convergence_delay": 0.8,
+        "initial_boost_duration": 0.15
+    },
+    "multi_angle": {
+        "flip_burn_threshold": 1.2,
+        "deceleration_target": 2000.0,
+        "arc_distance": 0.3,
+        "arc_start": 0.1,
+        "arc_peak": 0.5,
+        "final_approach": 0.8
+    },
+    "simultaneous": {
+        "flip_burn_threshold": 1.5,
+        "deceleration_target": 3000.0,
+        "fan_out_rate": 1.0,
+        "fan_duration": 0.25,
+        "converge_start": 0.7,
+        "converge_aggression": 1.0
     }
-    
-    # Calculate arrival velocity if constant acceleration
-    var distance_meters = distance * WorldSettings.meters_per_pixel
-    var arrival_velocity = sqrt(2 * 150 * 9.81 * distance_meters)
-    var turn_radius = (arrival_velocity * arrival_velocity) / (150 * 9.81)
-    
-    # For multi-angle, check if 90° approach is possible
-    if torpedo_mode == TorpedoMode.MULTI_ANGLE:
-        var required_arc_distance = distance_meters * 0.3
-        if turn_radius > required_arc_distance:
-            analysis.needs_flip_burn = true
-            analysis.estimated_flight_time = calculate_flip_burn_time(distance_meters)
-        else:
-            analysis.estimated_flight_time = calculate_direct_time(distance_meters)
-    
-    return analysis
+}
 
-func fire_simultaneous_volley(target: Node2D, count: int, physics_analysis: Dictionary):
-    var impact_time = calculate_simultaneous_impact_time(target, count, physics_analysis)
-    var angle_spacing = deg_to_rad(160.0) / float(count - 1) if count > 1 else 0
-    var start_angle = -deg_to_rad(80.0)
+# Layer 2 Parameters (Execution Control)
+var layer2_params = {
+    "navigation_constant_N": 3.0,
+    "velocity_gain": 0.001,
+    "velocity_anticipation": 0.5,
+    "rotation_thrust_penalty": 0.5,
+    "thrust_smoothing": 0.5,
+    "position_tolerance": 100.0,
+    "velocity_tolerance": 500.0
+}
+
+signal parameters_changed(layer: int, param_name: String, value: float)
+
+func get_parameter(path: String, default = null):
+    # Handle nested parameters like "multi_angle.arc_distance"
+    var parts = path.split(".")
+    var current = layer1_params
     
-    for i in range(count):
-        var torpedo = create_torpedo(SmartTorpedo)
-        torpedo.target = target
-        
-        var assigned_angle = start_angle + angle_spacing * i
-        var extreme_angle = abs(assigned_angle) > deg_to_rad(60)
-        
-        torpedo.set_flight_plan("simultaneous", {
-            "assigned_angle": assigned_angle,
-            "impact_time": impact_time,
-            "torpedo_index": i,
-            "total_torpedoes": count,
-            "requires_flip_burn": extreme_angle,  # Pre-calculated physics hint
-            "physics_analysis": physics_analysis
-        })
-        launch_torpedo(torpedo)
+    for i in range(parts.size() - 1):
+        if parts[i] in current:
+            current = current[parts[i]]
+        else:
+            return default
+    
+    return current.get(parts[-1], default)
+
+func set_parameter(layer: int, param_name: String, value: float):
+    if layer == 1:
+        # Handle nested structure for layer 1
+        # Implementation depends on UI structure
+        pass
+    else:
+        layer2_params[param_name] = value
+    
+    emit_signal("parameters_changed", layer, param_name, value)
+
+func get_layer2_parameters() -> Dictionary:
+    return layer2_params.duplicate()
+
+func get_current_parameters() -> Dictionary:
+    # Return all parameters for TrajectoryPlanner
+    return {
+        "layer1": layer1_params.duplicate(true),
+        "layer2": layer2_params.duplicate()
+    }
 ```
 
-## Tuning System v8 - Complete Manual Control
+## Tuning System v9 - Time Dilation with Real-Time Feedback
 
 ### Overview
-A two-layer manual tuning system with visual preview, where Layer 1 shapes trajectories and Layer 2 controls execution quality. Both layers use manual sliders with real-time feedback through a pause-able preview mode.
+A manual tuning system with time dilation control, where Layer 1 shapes trajectories and Layer 2 controls execution quality. All parameters are adjusted through manual sliders with real-time visual feedback.
 
-### Core Principles
-- **No auto-tuning complexity** - All manual sliders
-- **Preview mode** - Pause at launch to see/adjust waypoints before commitment
-- **Physics drives complexity** - Waypoint density based on velocity changes
-- **Visual clarity** - Waypoint types shown by color
-- **Parameter persistence** - Save and load tuned values
+### Core Features
+- **Time Dilation Control**: 0.1x to 4.0x game speed
+- **Real-Time Updates**: Waypoints update at 1-3Hz real-world time regardless of game speed
+- **Visual Feedback**: Colored sliders and torpedo trails indicate performance
+- **No Preview Mode**: Everything runs normally, just slower/faster
+
+### Time Dilation Implementation
+
+```gdscript
+# In ManualTuningPanel.gd
+@onready var time_scale_slider: HSlider = $TimeScaleSlider
+@onready var time_scale_label: Label = $TimeScaleLabel
+
+func _ready():
+    time_scale_slider.min_value = -2.0  # 0.1x speed
+    time_scale_slider.max_value = 2.0   # 4.0x speed
+    time_scale_slider.value = 0.0      # 1.0x speed
+    time_scale_slider.value_changed.connect(_on_time_scale_changed)
+
+func _on_time_scale_changed(value: float):
+    # Exponential scale for intuitive control
+    var time_scale = pow(2.0, value)
+    Engine.time_scale = time_scale
+    
+    # Update label
+    if time_scale < 1.0:
+        time_scale_label.text = "Speed: %.1fx (Slow)" % time_scale
+    elif time_scale > 1.0:
+        time_scale_label.text = "Speed: %.1fx (Fast)" % time_scale
+    else:
+        time_scale_label.text = "Speed: 1.0x (Normal)"
+    
+    # Notify BatchMPCManager to use real-time updates
+    var batch_manager = get_node("/root/BatchMPCManager")
+    batch_manager.use_real_time_updates = true
+```
 
 ### Layer 1 - Trajectory Shaping (Manual)
 
-Layer 1 parameters control the overall shape and strategy of the torpedo's path. These are set through manual sliders in preview mode.
+Layer 1 parameters control the overall shape and strategy of the torpedo's path.
 
-#### Universal Parameters (All Trajectory Types)
-```gdscript
-var universal_params = {
-    "waypoint_density_threshold": 0.2,  # 0.1-0.5 (velocity change % that triggers subdivision)
-    "max_waypoints": 100               # 50-200 (performance limit)
-}
-```
+#### Parameter Sliders with Performance Indicators
 
-#### Straight Trajectory Parameters
 ```gdscript
-var straight_params = {
-    "lateral_separation": 0.1,      # 0.0-0.5 (% of ship width between port/starboard)
-    "convergence_delay": 0.8,       # 0.5-0.95 (% of flight time before paths merge)
-    "initial_boost_duration": 0.15  # 0.1-0.3 (% of flight time at max thrust)
-}
-```
-
-#### Multi-Angle Trajectory Parameters
-```gdscript
-var multi_angle_params = {
-    "flip_burn_threshold": 1.2,     # 0.8-2.0 (multiplier on physics limit)
-    "deceleration_target": 2000,    # 1000-5000 m/s (final velocity after burn)
-    "arc_distance": 0.3,            # 0.2-0.5 (lateral offset as % of distance)
-    "arc_start": 0.1,               # 0.05-0.2 (% of flight time)
-    "arc_peak": 0.5,                # 0.3-0.7 (% of flight time)  
-    "final_approach": 0.8           # 0.7-0.9 (% of flight time)
-}
-```
-
-#### Simultaneous Impact Parameters
-```gdscript
-var simultaneous_params = {
-    "flip_burn_threshold": 1.5,     # 0.8-2.0 (multiplier on physics limit)
-    "deceleration_target": 3000,    # 1500-6000 m/s (final velocity after burn)
-    "fan_out_rate": 1.0,            # 0.5-2.0 (aggressiveness of initial spread)
-    "fan_duration": 0.25,           # 0.15-0.4 (% of impact time)
-    "converge_start": 0.7,          # 0.6-0.85 (% of impact time)
-    "converge_aggression": 1.0      # 0.5-1.5 (how hard to turn back)
-}
+# In ManualTuningPanel.gd
+class SliderControl:
+    var slider: HSlider
+    var label: Label
+    var background: ColorRect
+    var param_name: String
+    var performance_score: float = 1.0
+    
+    func update_performance_color():
+        var color: Color
+        if performance_score > 0.95:
+            color = Color.GREEN
+        elif performance_score > 0.85:
+            color = Color.YELLOW
+        elif performance_score > 0.70:
+            color = Color.ORANGE
+        else:
+            color = Color.RED
+        
+        background.color = color.darkened(0.7)
 ```
 
 ### Layer 2 - Execution Control (Manual)
 
-Layer 2 parameters control how well the torpedo follows the waypoints generated by Layer 1.
+Layer 2 parameters are monitored in real-time with colored feedback:
 
 ```gdscript
-var execution_params = {
-    "navigation_constant_N": 3.0,      # 2.0-5.0 (PN tracking aggressiveness)
-    "velocity_gain": 0.001,            # 0.0005-0.003 (thrust response to velocity error)
-    "velocity_anticipation": 0.5,      # 0.0-1.0 (look-ahead to next waypoint)
-    "rotation_thrust_penalty": 0.5,    # 0.0-1.0 (efficiency loss while turning)
-    "thrust_smoothing": 0.5,           # 0.1-1.0 seconds (0→100% thrust time)
-    "position_tolerance": 100.0,       # 50-200 meters
-    "velocity_tolerance": 500.0        # 200-1000 m/s
-}
-```
-
-### Preview Mode Implementation
-
-#### New Component: `TrajectoryPreviewMode.gd`
-```gdscript
-class_name TrajectoryPreviewMode
-extends Node
-
-# Preview state
-var preview_active: bool = false
-var preview_trajectories: Array = []
-var preview_enabled: bool = true  # Can be toggled in settings
-
-# References
-var trajectory_planner: TrajectoryPlanner
-var manual_tuning_panel: ManualTuningPanel
-var torpedo_visualizer: TorpedoVisualizer
-
-func _ready():
-    # Listen for MPC tuning mode
-    GameMode.mode_changed.connect(_on_mode_changed)
+func update_layer2_feedback():
+    # Get current performance metrics from torpedoes
+    var metrics = collect_torpedo_metrics()
     
-    # Find required components
-    trajectory_planner = get_node("/root/TrajectoryPlanner")
-    torpedo_visualizer = get_tree().get_first_node_in_group("torpedo_visualizers")
-
-func _on_mode_changed(new_mode: GameMode.Mode):
-    if new_mode == GameMode.Mode.MPC_TUNING and preview_enabled:
-        # Auto-pause before torpedo launch
-        get_tree().paused = true
-        preview_active = true
-        generate_preview_waypoints()
-        show_tuning_panel()
-
-func generate_preview_waypoints():
-    """Generate waypoints for all planned torpedoes without spawning them"""
-    
-    # Get launch configuration
-    var player_ship = get_tree().get_first_node_in_group("player_ships")
-    var enemy_ship = get_tree().get_first_node_in_group("enemy_ships")
-    var launcher = player_ship.get_node("TorpedoLauncher")
-    
-    if not launcher or not enemy_ship:
-        return
-    
-    # Clear old previews
-    preview_trajectories.clear()
-    torpedo_visualizer.clear_all_waypoints()
-    
-    # Generate waypoints for each torpedo that would be launched
-    var torpedo_count = 8  # Standard volley
-    var trajectory_type = launcher.get_trajectory_mode_name()
-    
-    for i in range(torpedo_count):
-        var launch_position = calculate_launch_position(launcher, i)
-        var launch_velocity = player_ship.get_velocity_mps()
+    # Update slider colors based on performance
+    for param_name in layer2_sliders:
+        var slider_control = layer2_sliders[param_name]
         
-        # Create mock torpedo state
-        var torpedo_state = {
-            "position": launch_position,
-            "velocity": launch_velocity,
-            "orientation": player_ship.rotation,
-            "trajectory_type": trajectory_type,
-            "index": i,
-            "total_count": torpedo_count
-        }
+        match param_name:
+            "navigation_constant_N":
+                slider_control.performance_score = 1.0 - metrics.avg_position_error / 1000.0
+            "velocity_gain":
+                slider_control.performance_score = 1.0 - metrics.avg_velocity_error / 5000.0
+            "velocity_anticipation":
+                slider_control.performance_score = metrics.anticipation_quality
+            "rotation_thrust_penalty":
+                slider_control.performance_score = metrics.rotation_efficiency
+            "thrust_smoothing":
+                slider_control.performance_score = metrics.control_smoothness
         
-        # Generate waypoints using current Layer 1 parameters
-        var waypoints = trajectory_planner.generate_preview_waypoints(
-            torpedo_state,
-            enemy_ship,
-            get_current_layer1_params()
-        )
-        
-        preview_trajectories.append(waypoints)
-        
-        # Visualize immediately
-        torpedo_visualizer.show_preview_waypoints(waypoints, i)
+        slider_control.update_performance_color()
 
-func on_slider_changed(param_name: String, value: float):
-    """Called when any Layer 1 slider changes"""
+func collect_torpedo_metrics() -> Dictionary:
+    var metrics = {
+        "avg_position_error": 0.0,
+        "avg_velocity_error": 0.0,
+        "anticipation_quality": 0.0,
+        "rotation_efficiency": 0.0,
+        "control_smoothness": 0.0
+    }
     
-    # Update the parameter
-    update_trajectory_parameter(param_name, value)
+    var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+    var valid_count = 0
     
-    # Regenerate all preview trajectories
-    generate_preview_waypoints()
-
-func confirm_and_launch():
-    """User is happy with trajectories - launch for real"""
-    
-    preview_active = false
-    get_tree().paused = false
-    
-    # Hide preview waypoints
-    torpedo_visualizer.hide_preview_waypoints()
-    
-    # Lock in Layer 1 parameters
-    trajectory_planner.lock_parameters(get_current_layer1_params())
-    
-    # Hide tuning panel Layer 1 sliders, show Layer 2 sliders
-    manual_tuning_panel.switch_to_layer2()
-    
-    # Trigger actual torpedo launch
-    var player_ship = get_tree().get_first_node_in_group("player_ships")
-    player_ship.fire_torpedoes_at_enemy()
-```
-
-### Manual Tuning Panel Updates
-
-Extend `ManualTuningPanel.gd` to support both layers:
-
-```gdscript
-class_name ManualTuningPanel
-extends Control
-
-enum TuningLayer { LAYER1, LAYER2 }
-var current_layer: TuningLayer = TuningLayer.LAYER1
-
-# Slider containers
-@onready var layer1_container: VBoxContainer = $Layer1Sliders
-@onready var layer2_container: VBoxContainer = $Layer2Sliders
-@onready var confirm_button: Button = $ConfirmButton
-
-# Stored sliders for easy access
-var layer1_sliders: Dictionary = {}
-var layer2_sliders: Dictionary = {}
-
-func _ready():
-    create_layer1_sliders()
-    create_layer2_sliders()
-    
-    # Start with Layer 1 visible
-    layer1_container.visible = true
-    layer2_container.visible = false
-    confirm_button.visible = true
-    
-    confirm_button.pressed.connect(_on_confirm_pressed)
-
-func create_layer1_sliders():
-    var trajectory_type = get_current_trajectory_type()
-    
-    # Universal sliders
-    add_layer1_slider("Waypoint Density", 0.1, 0.5, 0.2, "waypoint_density_threshold")
-    
-    match trajectory_type:
-        "straight":
-            add_layer1_slider("Lateral Separation", 0.0, 0.5, 0.1, "lateral_separation")
-            add_layer1_slider("Convergence Delay", 0.5, 0.95, 0.8, "convergence_delay")
-            add_layer1_slider("Initial Boost", 0.1, 0.3, 0.15, "initial_boost_duration")
+    for torpedo in torpedoes:
+        if not is_instance_valid(torpedo) or torpedo.get("marked_for_death"):
+            continue
             
-        "multi_angle":
-            add_layer1_slider("Flip-Burn Threshold", 0.8, 2.0, 1.2, "flip_burn_threshold")
-            add_layer1_slider("Deceleration Target (m/s)", 1000, 5000, 2000, "deceleration_target")
-            add_layer1_slider("Arc Distance", 0.2, 0.5, 0.3, "arc_distance")
-            add_layer1_slider("Arc Start", 0.05, 0.2, 0.1, "arc_start")
-            add_layer1_slider("Arc Peak", 0.3, 0.7, 0.5, "arc_peak")
-            add_layer1_slider("Final Approach", 0.7, 0.9, 0.8, "final_approach")
-            
-        "simultaneous":
-            add_layer1_slider("Flip-Burn Threshold", 0.8, 2.0, 1.5, "flip_burn_threshold")
-            add_layer1_slider("Deceleration Target (m/s)", 1500, 6000, 3000, "deceleration_target")
-            add_layer1_slider("Fan-Out Rate", 0.5, 2.0, 1.0, "fan_out_rate")
-            add_layer1_slider("Fan Duration", 0.15, 0.4, 0.25, "fan_duration")
-            add_layer1_slider("Converge Start", 0.6, 0.85, 0.7, "converge_start")
-            add_layer1_slider("Converge Aggression", 0.5, 1.5, 1.0, "converge_aggression")
-
-func create_layer2_sliders():
-    add_layer2_slider("Navigation Constant N", 2.0, 5.0, 3.0, "navigation_constant_N")
-    add_layer2_slider("Velocity Gain", 0.0005, 0.003, 0.001, "velocity_gain")
-    add_layer2_slider("Velocity Anticipation", 0.0, 1.0, 0.5, "velocity_anticipation")
-    add_layer2_slider("Rotation Thrust Penalty", 0.0, 1.0, 0.5, "rotation_thrust_penalty")
-    add_layer2_slider("Thrust Smoothing (s)", 0.1, 1.0, 0.5, "thrust_smoothing")
-    add_layer2_slider("Position Tolerance (m)", 50, 200, 100, "position_tolerance")
-    add_layer2_slider("Velocity Tolerance (m/s)", 200, 1000, 500, "velocity_tolerance")
-
-func add_layer1_slider(label: String, min_val: float, max_val: float, default: float, param_name: String):
-    var slider = create_slider_with_label(label, min_val, max_val, default)
-    layer1_sliders[param_name] = slider
-    layer1_container.add_child(slider.container)
+        # Collect metrics from each torpedo
+        if torpedo.has_method("get_performance_metrics"):
+            var t_metrics = torpedo.get_performance_metrics()
+            metrics.avg_position_error += t_metrics.position_error
+            metrics.avg_velocity_error += t_metrics.velocity_error
+            metrics.anticipation_quality += t_metrics.anticipation_score
+            metrics.rotation_efficiency += t_metrics.rotation_efficiency
+            metrics.control_smoothness += t_metrics.smoothness
+            valid_count += 1
     
-    slider.slider.value_changed.connect(func(value):
-        # Notify preview system
-        get_tree().call_group("preview_systems", "on_slider_changed", param_name, value)
-    )
-
-func add_layer2_slider(label: String, min_val: float, max_val: float, default: float, param_name: String):
-    var slider = create_slider_with_label(label, min_val, max_val, default)
-    layer2_sliders[param_name] = slider
-    layer2_container.add_child(slider.container)
+    # Average the metrics
+    if valid_count > 0:
+        for key in metrics:
+            metrics[key] /= valid_count
     
-    slider.slider.value_changed.connect(func(value):
-        # Update ProportionalNavigation parameters in real-time
-        ProportionalNavigation.set(param_name, value)
-    )
-
-func switch_to_layer2():
-    current_layer = TuningLayer.LAYER2
-    layer1_container.visible = false
-    layer2_container.visible = true
-    confirm_button.visible = false  # No confirmation needed for Layer 2
-
-func _on_confirm_pressed():
-    # Notify preview system to launch
-    get_tree().call_group("preview_systems", "confirm_and_launch")
+    return metrics
 ```
 
-### Waypoint Visualization Updates
+### End-of-Cycle Statistics
 
-Update waypoint colors to show maneuver types:
+When a tuning cycle completes (all torpedoes reach targets or timeout):
 
 ```gdscript
-# In TorpedoVisualizer.gd
-
-enum WaypointType {
-    CRUISE,     # White - Standard flight
-    BOOST,      # Green - Acceleration phase
-    FLIP,       # Yellow - Rotation maneuver  
-    BURN,       # Red - Deceleration phase
-    CURVE,      # Blue - Arc maneuver
-    TERMINAL    # Magenta - Final approach
-}
-
-func get_waypoint_color_for_type(type: String) -> Color:
-    match type:
-        "cruise": return Color.WHITE
-        "boost": return Color.GREEN
-        "flip": return Color.YELLOW
-        "burn": return Color.RED
-        "curve": return Color(0.5, 0.5, 1.0)  # Light blue
-        "terminal": return Color.MAGENTA
-        _: return Color.GRAY
+func print_cycle_statistics():
+    print("\n=== TUNING CYCLE RESULTS ===")
+    print("Trajectory Type: %s" % current_trajectory_type)
+    print("Hit Rate: %d/%d (%.1f%%)" % [hits, total_fired, hit_percentage])
+    print("\nAccuracy Metrics:")
+    print("  Avg Impact Angle Error: %.1f°" % avg_angle_error)
+    print("  Avg Velocity Match Error: %.1f m/s" % avg_velocity_error)
+    print("  Avg Impact Distance: %.1f m" % avg_impact_distance)
+    
+    if current_trajectory_type == "simultaneous":
+        print("\nSimultaneous Impact Metrics:")
+        print("  Time Spread: %.2f seconds" % time_spread)
+        print("  Angle Coverage: %.1f°" % angle_coverage)
+    
+    print("\nControl Quality:")
+    print("  Avg Smoothness Score: %.2f" % avg_smoothness)
+    print("  Avg Alignment Quality: %.2f" % avg_alignment)
+    print("  Total Control Effort: %.1f" % total_control_effort)
+    
+    print("\nGPU Performance:")
+    print("  Avg Update Time: %.1f ms" % avg_gpu_time)
+    print("  Peak Update Time: %.1f ms" % peak_gpu_time)
+    print("================================\n")
 ```
 
-### Waypoint Density Algorithm
+# V9 MPC Implementation Guide
 
-In TrajectoryPlanner.gd:
-
-```gdscript
-func apply_adaptive_waypoint_density(waypoints: Array) -> Array:
-    """Subdivide waypoints based on velocity changes"""
-    if waypoints.size() < 2:
-        return waypoints
-    
-    var densified = []
-    densified.append(waypoints[0])
-    
-    # Get density threshold from manual tuning
-    var threshold = trajectory_params.get("waypoint_density_threshold", 0.2)
-    
-    for i in range(1, waypoints.size()):
-        var wp1 = waypoints[i-1]
-        var wp2 = waypoints[i]
-        
-        # Check velocity change magnitude
-        var vel_change = abs(wp2.velocity_target - wp1.velocity_target) / max(wp1.velocity_target, 100.0)
-        
-        # Check direction change
-        var direction_change = 0.0
-        if wp1.velocity_target > 100 and wp2.velocity_target > 100:
-            var dir1 = calculate_velocity_direction(wp1)
-            var dir2 = calculate_velocity_direction(wp2)
-            direction_change = abs(dir1.angle_to(dir2))
-        
-        # Determine if subdivision needed
-        var needs_subdivision = vel_change > threshold or direction_change > deg_to_rad(30)
-        
-        if needs_subdivision:
-            # Calculate number of intermediate waypoints needed
-            var subdivisions = max(
-                ceil(vel_change / threshold),
-                ceil(direction_change / deg_to_rad(30))
-            )
-            subdivisions = min(subdivisions, 5)  # Cap at 5 intermediate waypoints
-            
-            # Add intermediate waypoints
-            for j in range(1, subdivisions):
-                var t = float(j) / subdivisions
-                var mid_waypoint = interpolate_waypoints(wp1, wp2, t)
-                densified.append(mid_waypoint)
-        
-        densified.append(wp2)
-    
-    # Ensure we don't exceed max waypoints
-    var max_waypoints = trajectory_params.get("max_waypoints", 100)
-    if densified.size() > max_waypoints:
-        # Intelligently reduce by removing least important waypoints
-        densified = reduce_waypoint_count(densified, max_waypoints)
-    
-    return densified
-```
-
-### Parameter Clarifications
-
-**Flip-burn threshold**: 
-- 1.0 = Flip exactly when physics says turn is impossible
-- 0.8 = Flip when turn radius exceeds 80% of safe limit (conservative)
-- 1.5 = Try to curve until turn radius is 150% of limit (aggressive)
-
-**Deceleration target**: 
-- Absolute velocity in m/s after deceleration burn
-- Lower = Tighter curves possible but more time vulnerable
-- Higher = Gentler curves only but less vulnerable time
-
-**Rotation thrust penalty**: 
-- Applied during normal flight when turning to track waypoints
-- NOT applied during flip-burn (always 0 thrust during flip)
-- 0.5 = 50% thrust efficiency when at max rotation rate
-
-### Benefits of This System
-
-1. **Immediate Visual Feedback** - See trajectory shape before committing
-2. **Physics Understanding** - Watch how parameters affect flip-burn triggers
-3. **No Black Box** - Every parameter has clear visual effect
-4. **Engagement Scaling** - Percentage-based parameters work at any distance
-5. **Reusability** - Save successful parameter sets for similar scenarios
-
-## Data Flow (Updated with Tuning Preview)
-
-### Launch Sequence with Preview
-1. **Player enters MPC Tuning Mode**
-2. **Game auto-pauses before torpedo spawn**
-3. **Preview Mode activates**:
-   - Layer 1 generates waypoints for all 8 torpedoes
-   - Waypoints displayed with color-coding
-   - Manual tuning panel shows Layer 1 sliders
-4. **Player adjusts Layer 1 sliders**:
-   - Waypoints regenerate in real-time
-   - Density adjusts based on velocity changes
-   - Flip-burn triggers update visually
-5. **Player confirms trajectory shapes**
-6. **Game unpauses, torpedoes spawn**
-7. **Layer 2 tuning begins**:
-   - Manual panel switches to Layer 2 sliders
-   - Adjust while torpedoes fly
-8. **Torpedo follows waypoints** with Layer 2 guidance
-
-### Runtime Updates (Dynamic Rate)
-- **TrajectoryPlanner** recalculates at 1-3 Hz based on time-to-impact
-- **Update triggers**:
-  - Timer based on time-to-impact (1-3 Hz)
-  - Physics violation detection (immediate)
-  - Major target velocity change (immediate)
-- **Preserves** current waypoint and next 2 waypoints
-- **Updates** all subsequent waypoints with smooth velocity transitions
-- **Validates** physics on every update
-- If trajectory becomes impossible, replans with flip-burn
-
-## Key Improvements from v6.1
-
-- **Physics-First Design** - Turn radius calculations drive all decisions
-- **Velocity Profiles** - Each waypoint has position + velocity + maneuver type
-- **Flip-and-Burn** - Core maneuver for impossible trajectories, not special case
-- **Natural Alignment** - Emerges from proper velocity management
-- **No Alignment Weights** - Removed entire competing objective system
-- **Smart Layer 1** - Full physics simulation and validation
-- **Simple Layer 2** - Just tracks waypoints and matches velocities
-- **Complete Validation** - Every trajectory tested for physics feasibility
-- **Manual Tuning** - Direct control over both trajectory shape and execution
-- **Visual Preview** - See and adjust trajectories before committing
-
-## Critical Implementation Notes
-
-**DO NOT**:
-- Add alignment weights anywhere
-- Let torpedoes fly faster than physics allows for their trajectory
-- Generate more than one flip-burn per approach (two absolute maximum)
-- Let Layer 2 make strategic decisions
-- Update waypoints the torpedo is about to reach
-- Skip physics validation to save computation
-- Use auto-tuning when manual control gives better understanding
-
-**ALWAYS**:
-- Check turn radius before planning trajectories
-- Validate physics on every trajectory update
-- Use flip-burn when turn radius exceeds safe limits
-- Let Layer 1 handle all replanning decisions
-- Smooth velocity transitions between waypoints
-- Trust that proper velocity creates proper alignment
-- Show waypoint types through color coding
-- Save successful manual tunes for reuse
-
-The ideal result: Torpedoes that navigate like expert Expanse pilots, using flip-and-burn when physics demands it, achieving "impossible" approach angles through intelligent velocity management, all while maintaining nose-forward flight for minimum PDC vulnerability. No magic, no arbitrary limits, just physics.
-
-## Version 8 Implementation Guide
-
-This section provides step-by-step instructions for implementing the v8 refactor. Each step can be completed independently, allowing work to continue across multiple chat sessions.
-
-### Prerequisites
+## Prerequisites
+- GPU compute support is mandatory - no CPU fallback
 - Back up your entire project before starting
-- Ensure you have Godot 4.x with GPU compute support
-- Have the v8 plan document available for reference
+- Ensure Godot 4.x with Vulkan renderer
+- Have V9 plan document available for reference
 
-### Step 1: File Cleanup and Preparation
+## Step 1: File Cleanup and Test Removal
 
-**1.1 Delete obsolete files:**
+**1.1 Delete test files:**
 ```
-- Scripts/Systems/BatchMPCManager.gd
+- Scripts/Systems/TestComputeShader.gd
+- Shaders/test_compute.glsl
+- Shaders/test_compute_shader.glsl
+- Shaders/test_compute.glsl.import
+- Shaders/test_compute_shader.glsl.import
+```
+
+**1.2 Remove test references:**
+- Open WorldRoot.tscn
+- Delete GPUTest node
+- Remove any autoload references to test scripts
+
+**1.3 Delete obsolete MPC files:**
+```
+- Scripts/Systems/BatchMPCManager.gd (old version)
 - Scripts/Systems/GPUBatchCompute.gd
 - Scripts/Systems/MPCController.gd
 - Scripts/Systems/MPCTuner.gd
 - Scripts/Systems/MPCTuningObserver.gd
 - Shaders/mpc_trajectory_batch.glsl
+- Shaders/mpc_trajectory_batch.glsl.import
 ```
 
-**1.2 Create backup copies of files to be heavily modified:**
+**1.4 Verify deletion:**
+- Search project for any remaining references to deleted files
+- Check that no scripts have imports of deleted classes
+
+## Step 2: Create Core Architecture
+
+**2.1 Create ManualTuningParameters singleton:**
+- Location: `Scripts/Systems/ManualTuningParameters.gd`
+- Copy implementation from V9 plan lines 1098-1195
+- Add to Project Settings → Autoload:
+  - Name: ManualTuningParameters
+  - Path: res://Scripts/Systems/ManualTuningParameters.gd
+  - Enable: ✓
+
+**2.2 Create new BatchMPCManager (pull-based):**
+- Location: `Scripts/Systems/BatchMPCManager.gd`
+- Key implementation points:
+  ```gdscript
+  # Timer-based pulling (not torpedo-initiated)
+  var update_timer: float = 0.0
+  var update_interval: float = 0.016  # 60 FPS base
+  
+  # Pull-based cycle
+  func execute_batch_update():
+      var torpedo_states = collect_and_validate_torpedo_states()
+      var gpu_results = trajectory_planner.generate_waypoints_batch(torpedo_states)
+      apply_batch_results(gpu_results, torpedo_states)
+  ```
+
+**2.3 Create TrajectoryPlanner (GPU-only):**
+- Location: `Scripts/Systems/TrajectoryPlanner.gd`
+- Critical: NO CPU fallback code
+- Initialize GPU in `_ready()`:
+  ```gdscript
+  func _ready():
+      initialize_gpu_compute()
+      if not gpu_available:
+          push_error("GPU Compute Required - This game requires GPU compute shaders")
+          get_tree().quit()
+  ```
+
+## Step 3: Create GPU Compute Shader
+
+**3.1 Create trajectory planning shader:**
+- Location: `Shaders/trajectory_planning_v9.glsl`
+- Structure:
+  ```glsl
+  #[compute]
+  #version 450
+  
+  layout(local_size_x = 64) in;
+  
+  // Waypoint generation with physics validation
+  // Flip-burn detection and planning
+  // Velocity profile generation
+  ```
+
+**3.2 Implement physics validation in shader:**
+- Turn radius calculations
+- Velocity feasibility checks
+- Waypoint spacing validation
+
+## Step 4: Refactor Torpedo System
+
+**4.1 Rename and refactor TorpedoMPC.gd:**
+```bash
+1. Rename file: TorpedoMPC.gd → SmartTorpedo.gd
+2. Update class_name to SmartTorpedo
+3. Remove all direct MPC controller references
+4. Add waypoint application method:
 ```
-- Scripts/Entities/Weapons/TorpedoMPC.gd → TorpedoMPC_backup.gd
-- Scripts/Systems/ProportionalNavigation.gd → ProportionalNavigation_backup.gd
-- Scripts/Systems/TrajectoryPlanner.gd → TrajectoryPlanner_backup.gd
+```gdscript
+func apply_waypoint_update(new_waypoints: Array, protected_count: int):
+    # Preserve current and next N waypoints
+    # Apply new waypoints from GPU
 ```
 
-**1.3 Check for unused variables in existing files:**
-- Open each file that references deleted systems
-- Search for variables like `batch_manager`, `mpc_controller`, `template_buffer`
-- Comment them out with `# UNUSED v8:` prefix for now
-
-### Step 2: Create New Base Architecture
-
-**2.1 Create TorpedoBase.gd:**
-- Location: `Scripts/Entities/Weapons/TorpedoBase.gd`
-- Copy the Waypoint class definition from the v8 plan
-- Implement core physics and launch system (keep lateral launch unchanged)
-- Add waypoint velocity matching logic
-- Ensure all exported variables have defaults
-
-**2.2 Create StandardTorpedo.gd:**
-- Location: `Scripts/Entities/Weapons/StandardTorpedo.gd`
-- Extends TorpedoBase
-- Implement simple waypoint generation
-- Add velocity management for extreme ranges
-- Test with a single torpedo launch
-
-**2.3 Rename and refactor TorpedoMPC.gd to SmartTorpedo.gd:**
-- Rename file to `SmartTorpedo.gd`
-- Remove all MPC controller references
-- Remove batch system integration
-- Add flip-burn trajectory generation
-- Add multi-angle and simultaneous methods from v8 plan
-
-**2.4 Update scene files:**
-- Open `Scenes/TorpedoMPC.tscn`
+**4.2 Update TorpedoMPC.tscn:**
 - Change script reference to SmartTorpedo.gd
-- Save as `Scenes/SmartTorpedo.tscn`
-- Update any prefab references in TorpedoLauncher
+- Save as SmartTorpedo.tscn
+- Update TorpedoLauncher prefab references
 
-### Step 3: Implement Layer 1 (TrajectoryPlanner)
+**4.3 Create/Update TorpedoBase.gd:**
+- Add enhanced waypoint class with velocity profiles
+- Add trail quality calculation
+- Ensure NO direct BatchMPCManager calls
 
-**3.1 Refactor TrajectoryPlanner.gd:**
-- Remove all template evolution code
-- Add manual parameter storage
-- Implement flip-burn evaluation with threshold
-- Add waypoint density algorithm
-- Implement physics validation
+## Step 5: Create Layer 2 Guidance
 
-**3.2 Create new GPU shader:**
-- Location: `Shaders/trajectory_planning.glsl`
-- Copy shader code from v8 plan
-- Add maneuver type constants
-- Implement parallel physics validation
-- Test with simple trajectory first
+**5.1 Create ProportionalNavigation.gd:**
+- Location: `Scripts/Systems/ProportionalNavigation.gd`
+- This is a NEW file - implement from V9 plan
+- Key features:
+  ```gdscript
+  # Velocity matching
+  var velocity_gain: float = 0.001
+  var velocity_anticipation: float = 0.5
+  
+  # Special maneuver handling
+  if current_waypoint.maneuver_type == "flip":
+      return {"turn_rate": max_rotation, "thrust": 0.0}
+  ```
 
-**3.3 Add tuning parameter management:**
-- Create `get_tuned_parameters()` method
-- Add parameter storage/loading
-- Connect to future UI system
+**5.2 Connect to ManualTuningParameters:**
+```gdscript
+func _ready():
+    ManualTuningParameters.parameters_changed.connect(update_parameters_from_tuning)
+```
 
-### Step 4: Implement Layer 2 (ProportionalNavigation)
+## Step 6: Implement Tuning UI
 
-**4.1 Update ProportionalNavigation.gd:**
-- Add velocity matching parameters
-- Remove old alignment code
-- Add flip maneuver handling
-- Implement thrust smoothing
-- Add anticipatory velocity control
-
-**4.2 Remove conflicting systems:**
-- Search for "alignment_weight" globally
-- Remove all alignment-related calculations
-- Remove template selection logic
-- Ensure no competing control objectives
-
-### Step 5: Create Tuning System UI
-
-**5.1 Create ManualTuningPanel.gd:**
+**6.1 Create ManualTuningPanel.gd:**
 - Location: `Scripts/UI/ManualTuningPanel.gd`
-- Create slider generation methods
-- Add Layer 1 and Layer 2 containers
-- Implement parameter binding
-- Add save/load functionality
+- Time scale slider implementation:
+  ```gdscript
+  func _on_time_scale_changed(value: float):
+      var time_scale = pow(2.0, value)  # Exponential scale
+      Engine.time_scale = time_scale
+      
+      # Notify BatchMPCManager for real-time updates
+      var batch_manager = get_node("/root/BatchMPCManager")
+      batch_manager.use_real_time_updates = true
+  ```
 
-**5.2 Create TrajectoryPreviewMode.gd:**
-- Location: `Scripts/Systems/TrajectoryPreviewMode.gd`
-- Implement preview waypoint generation
-- Add pause/unpause logic
-- Connect to tuning panel
-- Handle mode transitions
+**6.2 Create Layer 1 sliders:**
+- Waypoint density threshold
+- Flip-burn threshold
+- Deceleration target
+- Arc parameters (for multi-angle)
+- Fan parameters (for simultaneous)
 
-**5.3 Update ModeSelector:**
-- Add preview mode initialization
-- Ensure proper mode transitions
-- Connect to new tuning system
+**6.3 Create Layer 2 sliders with performance colors:**
+- Navigation constant N
+- Velocity gain
+- Velocity anticipation
+- Rotation thrust penalty
+- Position/velocity tolerances
 
-### Step 6: Update Visualization
+## Step 7: Update Event-Based Visualization
 
-**6.1 Update TorpedoVisualizer.gd:**
-- Add waypoint type colors
-- Implement velocity indicators
-- Add preview waypoint display
-- Update flash behavior for velocity errors
+**7.1 Convert TorpedoVisualizer to events:**
+```gdscript
+func _ready():
+    var batch_manager = get_node("/root/BatchMPCManager")
+    batch_manager.waypoints_updated.connect(_on_waypoints_updated)
+    batch_manager.batch_update_started.connect(_on_batch_started)
+```
 
-**6.2 Create waypoint color mapping:**
-- Define WaypointType enum
-- Map maneuver types to colors
-- Add to visualization logic
+**7.2 Implement waypoint coloring by type:**
+```gdscript
+var waypoint_colors = {
+    "cruise": Color.WHITE,
+    "boost": Color.GREEN,
+    "flip": Color.YELLOW,
+    "burn": Color.RED,
+    "curve": Color(0.5, 0.5, 1.0),
+    "terminal": Color.MAGENTA
+}
+```
 
-### Step 7: Integration and Testing
+**7.3 Add trail quality visualization:**
+- Color trails based on torpedo performance
+- Green = excellent, Yellow = good, Orange = needs work, Red = poor
 
-**7.1 Update TorpedoLauncher.gd:**
-- Add physics pre-analysis
-- Update volley methods for new torpedo types
-- Ensure proper parameter passing
-- Test each trajectory type
+## Step 8: Update Game Mode Integration
 
-**7.2 Update GameMode and battle flow:**
-- Ensure MPC_TUNING mode works with preview
-- Test mode transitions
-- Verify pause/unpause behavior
+**8.1 Update GameMode singleton:**
+- Remove FPS locking for MPC tuning (now handled by time dilation)
+- Ensure proper cleanup when switching modes
 
-**7.3 Scene updates needed:**
-- Add ManualTuningPanel to UI layer
-- Ensure TrajectoryPlanner is autoloaded
-- Update torpedo prefabs
-- Test preview visualization
+**8.2 Update ModeSelector:**
+- Remove preview mode logic
+- Ensure time dilation is properly initialized
 
-### Step 8: Final Cleanup and Validation
+## Step 9: Integration and Validation
 
-**8.1 Remove all unused variables:**
-- Search for variables marked with `# UNUSED v8:`
-- Delete them permanently
-- Check for orphaned imports
-- Run Godot's script analyzer
+**9.1 Verify singleton setup:**
+- ManualTuningParameters in autoload
+- BatchMPCManager in autoload
+- TrajectoryPlanner in autoload
 
-**8.2 Validate physics calculations:**
-- Test flip-burn triggers at different ranges
-- Verify waypoint density adaptation
-- Check velocity profile smoothness
-- Ensure no impossible trajectories
+**9.2 Verify data flow:**
+```
+Timer (1-3Hz) → BatchMPCManager → TrajectoryPlanner → GPU
+                        ↓
+               Apply to Torpedoes ← Results
+                        ↓
+                ProportionalNavigation
+```
 
-**8.3 Performance validation:**
-- Profile GPU shader performance
-- Check waypoint generation time
-- Verify 60 FPS maintained
-- Test with maximum torpedo count
+**9.3 Test event connections:**
+- Run with debug prints in event handlers
+- Verify waypoint updates trigger visualization
+- Check parameter changes update guidance
 
-### Completion Checklist
+## Step 10: Performance Validation
 
-After each step, verify:
-- [ ] No script errors in Godot console
-- [ ] Game runs without crashes
-- [ ] Deleted files are truly gone
-- [ ] No references to removed systems
-- [ ] New features work as intended
-- [ ] Physics behavior matches v8 plan
-- [ ] UI elements appear correctly
-- [ ] Saved parameters persist
+**10.1 GPU performance checks:**
+```gdscript
+# In TrajectoryPlanner
+if compute_time > 10.0:  # Log slow computations
+    print("Trajectory planning took %.1f ms" % compute_time)
+```
 
-### Troubleshooting Common Issues
+**10.2 Verify update rates:**
+- 1Hz at >15s to impact
+- 2Hz at 10-15s to impact
+- 3Hz at <10s to impact
 
-**"Node not found" errors:**
-- Check scene tree paths
-- Verify autoload order
-- Use `get_node_or_null()` with validation
+**10.3 Test time dilation:**
+- 0.1x speed: Waypoints update at real-time rate
+- 4.0x speed: Physics remain stable
 
-**Physics violations:**
-- Check unit conversions (meters vs pixels)
-- Verify turn radius calculations
-- Ensure proper frame-rate independence
+## Troubleshooting Common Issues
 
-**GPU shader not working:**
-- Check shader compilation errors
-- Verify binding points
-- Test with CPU fallback first
+**"GPU compute not available" error:**
+- Verify Vulkan renderer in Project Settings
+- Check GPU drivers are updated
+- Ensure compute shader support in GPU
 
-**Waypoints not appearing:**
-- Check visualization layer order
-- Verify color assignments
-- Ensure proper validation in visualizer
+**Waypoints not updating:**
+- Check BatchMPCManager timer is using real_delta during time dilation
+- Verify event connections with debug prints
+- Check zero-trust validation isn't rejecting valid torpedoes
 
-This implementation can be paused at any step. When resuming, start by running the game and checking for errors, then continue from the last completed step.
+**Circular dependency errors:**
+- Torpedoes should NEVER call BatchMPCManager
+- TrajectoryPlanner should NEVER access torpedoes directly
+- All communication through events
+
+**Time dilation not working:**
+- Verify `use_real_time_updates` is set in BatchMPCManager
+- Check `effective_delta = delta / Engine.time_scale`
+- Ensure physics process uses standard delta
+
+## Completion Checklist
+
+After implementation, verify:
+- [ ] All test files deleted
+- [ ] No references to old MPC system
+- [ ] GPU compute initializes successfully
+- [ ] Pull-based updates working at correct rates
+- [ ] Waypoints include velocity profiles
+- [ ] ProportionalNavigation matches velocities
+- [ ] Time dilation works (0.1x to 4.0x)
+- [ ] Trail colors reflect quality
+- [ ] Slider colors update in real-time
+- [ ] No circular dependencies
+- [ ] Events flow unidirectionally
+- [ ] 60 FPS maintained with 8 torpedoes
