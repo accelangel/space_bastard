@@ -266,8 +266,12 @@ func _launch_single_torpedo(launch_data: Dictionary):
 	get_tree().root.add_child(torpedo)
 	torpedo.global_position = parent_ship.global_position + side_offset + tube_offset
 	
-	#if debug_enabled:
-		#print("Launched torpedo %d/%d: %s" % [current_volley_count, launch_queue.size() + current_volley_count, torpedo.torpedo_id])
+	if DebugConfig.should_log("torpedo_init"):
+		print("[Launcher] Spawned torpedo %s at %s targeting %s" % [
+			torpedo.torpedo_id if "torpedo_id" in torpedo else "unknown",
+			torpedo.global_position,
+			target.name
+		])
 
 func on_tube_reloaded(tube_id: String):
 	if tube_id.begins_with("port"):

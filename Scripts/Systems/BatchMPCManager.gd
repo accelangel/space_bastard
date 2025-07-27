@@ -25,8 +25,11 @@ var use_real_time_updates: bool = true  # For tuning mode
 func _ready():
 	trajectory_planner = get_node("/root/TrajectoryPlannerSystem")
 	set_process(true)
+	print("Debug to see if read() is being called in MatchMPCManager.gd")
 
 func _process(delta):
+	if DebugConfig.should_log("mpc_batch_updates") and int(update_timer * 10) % 10 == 0:
+		print("[BatchMPC] Update timer: %.2f / %.2f" % [update_timer, current_update_interval])
 	# Use real-world time for updates during time dilation
 	var effective_delta = delta
 	if use_real_time_updates and Engine.time_scale != 1.0:
@@ -44,6 +47,9 @@ func execute_batch_update():
 	
 	# Collect all valid torpedo states (with zero-trust validation)
 	var torpedo_states = collect_and_validate_torpedo_states()
+	
+	if DebugConfig.should_log("mpc_batch_updates"):
+		print("[BatchMPC] Executing batch update - found %d torpedoes" % torpedo_states.size())
 	
 	if torpedo_states.is_empty():
 		emit_signal("batch_update_completed", 0)
@@ -144,6 +150,8 @@ func get_target_velocity(torpedo: Node2D) -> Vector2:
 	return Vector2.ZERO
 
 func apply_batch_results(gpu_results: Array, torpedo_states: Array):
+	if DebugConfig.should_log("mpc_batch_updates"):
+		print("[BatchMPC] Applied waypoints to %d torpedoes" % gpu_results.size())
 	# Protected waypoint count (current + next 2)
 	var protected_count = 3
 	

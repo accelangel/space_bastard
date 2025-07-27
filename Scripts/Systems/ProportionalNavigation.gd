@@ -127,6 +127,14 @@ func calculate_guidance(torpedo_pos: Vector2, torpedo_vel: Vector2,
 	if control_changes.size() > 50:
 		control_changes.pop_front()
 	
+	# DEBUG - Fixed to use actual variable names
+	if DebugConfig.should_log("proportional_nav") and abs(thrust - last_thrust) > 0.1:
+		print("[PN] Thrust: %.2f, Turn: %.1f deg/s, Waypoint: %s" % [
+			thrust,
+			rad_to_deg(pn_turn_rate),
+			current_waypoint.maneuver_type
+		])
+	
 	return {
 		"turn_rate": clamp(pn_turn_rate, -torpedo_max_rotation, torpedo_max_rotation),
 		"thrust": clamp(thrust, 0.2, 1.0)

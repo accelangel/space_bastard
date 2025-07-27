@@ -103,6 +103,22 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
+	# Add at top of _physics_process after the marked_for_death check
+	if DebugConfig.should_log("waypoint_system") and Engine.get_physics_frames() % 60 == 0:
+		var current_thrust = 0.0
+		if proportional_nav and proportional_nav.has("last_thrust"):
+			current_thrust = proportional_nav.last_thrust
+	
+		print("[Torpedo %s] Waypoint %d/%d, Vel: %.1f m/s, Thrust: %.2f" % [
+			torpedo_id.substr(0, 10),
+			current_waypoint_index,
+			waypoints.size(),
+			velocity_mps.length(),
+			current_thrust
+		])
+	
+	
+	
 	# Update guidance if we have waypoints
 	if waypoints.size() > 0 and current_waypoint_index < waypoints.size():
 		var current_wp = waypoints[current_waypoint_index]

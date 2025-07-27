@@ -15,8 +15,12 @@ var categories = {
 	"cache_performance": false, # Cache hit/miss spam
 	"trajectory_details": false, # Individual torpedo paths
 	
-	"rotation_clamping": false  # Silences the clamping warnings
-
+	"rotation_clamping": false,  # Silences the clamping warnings
+	
+	"mpc_batch_updates": true,    # BatchMPC update cycles
+	"torpedo_init": true,         # Torpedo spawning/initialization
+	"waypoint_system": true,      # Waypoint generation and following
+	"proportional_nav": true      # Guidance calculations
 }
 
 func should_log(category: String) -> bool:

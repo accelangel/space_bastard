@@ -27,7 +27,7 @@ func _ready():
 		add_child(marker)
 	
 	# Listen to BatchMPCManager events
-	var batch_manager = get_node("/root/BatchMPCManager")
+	var batch_manager = get_node("/root/BatchMPC")
 	if batch_manager:
 		batch_manager.waypoints_updated.connect(_on_waypoints_updated)
 		batch_manager.batch_update_started.connect(_on_batch_started)

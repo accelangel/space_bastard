@@ -81,7 +81,7 @@ func _on_time_scale_changed(value: float):
 		time_scale_label.text = "Speed: 1.0x (Normal)"
 	
 	# Notify BatchMPCManager
-	var batch_manager = get_node_or_null("/root/BatchMPCManager")
+	var batch_manager = get_node_or_null("/root/BatchMPC")
 	if batch_manager:
 		batch_manager.use_real_time_updates = true
 

@@ -9,16 +9,28 @@ var launch_side: int = 1
 func _ready():
 	super._ready()
 	
-	# Generate initial waypoints based on flight plan
-	match flight_plan_type:
-		"straight":
-			generate_initial_straight_waypoints()
-		"multi_angle":
-			generate_initial_multi_angle_waypoints()
-		"simultaneous":
-			generate_initial_simultaneous_waypoints()
+	# TEMPORARY - always use straight waypoints until others are implemented
+	generate_initial_straight_waypoints()
+	
+	if DebugConfig.should_log("torpedo_init"):
+		print("[SmartTorpedo] Initialized with flight plan: %s, target: %s" % [
+			flight_plan_type, 
+			String(target_node.name) if target_node else "NO TARGET"
+		])
+	
+	## Generate initial waypoints based on flight plan
+	#match flight_plan_type:
+		#"straight":
+			#generate_initial_straight_waypoints()
+		#"multi_angle":
+			#generate_initial_multi_angle_waypoints()
+		#"simultaneous":
+			#generate_initial_simultaneous_waypoints()
 	
 	# BatchMPCManager will update our waypoints via pull system
+	
+	if DebugConfig.should_log("waypoint_system"):
+		print("[SmartTorpedo] Generated %d initial waypoints" % waypoints.size())
 
 func generate_initial_straight_waypoints():
 	# Called once at launch - BatchMPCManager will update later

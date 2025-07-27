@@ -3,7 +3,7 @@ extends Area2D
 class_name EnemyShip
 
 # Ship properties
-@export var acceleration_gs: float = 0.0
+@export var acceleration_gs: float = 1.0
 @export var rotation_speed: float = 2.0
 @export var faction: String = "hostile"
 
@@ -29,7 +29,7 @@ var pdc_systems: Array = []
 # Test movement
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(0, 1)
-var test_gs: float = 0.0
+var test_gs: float = 1.0
 
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
