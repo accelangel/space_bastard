@@ -11,7 +11,7 @@ class Waypoint extends RefCounted:
 	var thrust_limit: float = 1.0            # 0.0-1.0, allows fine control per segment
 	var max_acceleration: float = 490.5      # For validation
 	
-	func should_accept(torpedo_pos: Vector2, torpedo_vel: float) -> bool:
+	func should_accept(torpedo_pos: Vector2, torpedo_vel: float, torpedo_velocity_vec: Vector2) -> bool:
 		var pos_error = position.distance_to(torpedo_pos) * WorldSettings.meters_per_pixel
 		var vel_error = abs(velocity_target - torpedo_vel)
 		
@@ -19,15 +19,21 @@ class Waypoint extends RefCounted:
 		if pos_error < 500.0:  # 500m acceptance radius
 			return true
 			
-		# Also accept if we're close in velocity
-		if vel_error < velocity_tolerance:
+		# Also accept if we're close in velocity and moving toward waypointty
+		if vel_error < velocity_tolerance and is_moving_toward_waypoint(torpedo_pos, position, torpedo_velocity_vec):
 			return true
 			
 		return false
 	
-	func is_moving_toward_waypoint(torpedo_pos: Vector2, waypoint_pos: Vector2) -> bool:
-		# Implementation would check if velocity vector points toward waypoint
-		return true  # Placeholder
+	func is_moving_toward_waypoint(torpedo_pos: Vector2, waypoint_pos: Vector2, torpedo_vel: Vector2) -> bool:
+		# Check if velocity vector points toward waypoint
+		var to_waypoint = waypoint_pos - torpedo_pos
+		if to_waypoint.length() < 0.1:
+			return true  # Already at waypoint
+		
+		var velocity_dot = torpedo_vel.normalized().dot(to_waypoint.normalized())
+		return velocity_dot > 0.5  # Moving generally toward waypoint (within 60 degrees)
+	
 
 # Identity
 @export var torpedo_id: String = ""
@@ -257,3 +263,32 @@ func set_target(target: Node2D):
 func set_flight_plan(plan_type: String, plan_data: Dictionary = {}):
 	flight_plan_type = plan_type
 	flight_plan_data = plan_data
+
+func get_performance_metrics() -> Dictionary:
+	# Get metrics from ProportionalNavigation if available
+	if proportional_nav and proportional_nav.has_method("get_performance_metrics"):
+		var nav_metrics = proportional_nav.get_performance_metrics()
+		
+		# Add torpedo-specific metrics
+		nav_metrics["alignment_score"] = alignment_score
+		nav_metrics["velocity_score"] = velocity_score
+		nav_metrics["path_score"] = path_score
+		nav_metrics["trail_quality"] = trail_quality
+		
+		return nav_metrics
+	
+	# Fallback metrics if no PN data
+	return {
+		"position_error": 100.0,
+		"velocity_error": 500.0,
+		"smoothness": smoothness_score,
+		"anticipation_score": 0.5,
+		"rotation_efficiency": alignment_score,
+		"alignment_score": alignment_score,
+		"velocity_score": velocity_score,
+		"path_score": path_score,
+		"trail_quality": trail_quality
+	}
+
+func get_trail_quality() -> float:
+	return trail_quality

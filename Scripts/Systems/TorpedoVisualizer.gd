@@ -60,19 +60,56 @@ func update_waypoint_markers(torpedo: Node2D, waypoints: Array):
 	for marker in waypoint_pool:
 		marker.visible = false
 	
+	# Get current waypoint index from torpedo if available
+	var current_waypoint_index = torpedo.get("current_waypoint_index") if torpedo.has("current_waypoint_index") else -1
+	
 	# Show markers for waypoints
 	for i in range(min(waypoints.size(), waypoint_pool.size())):
 		var waypoint = waypoints[i]
 		var marker = waypoint_pool[i]
 		
-		marker.position = waypoint.position
+		# Position marker at waypoint position
+		marker.global_position = waypoint.position
 		marker.color = waypoint_colors.get(waypoint.maneuver_type, Color.WHITE)
+		
+		# Highlight current waypoint
+		if i == current_waypoint_index:
+			marker.modulate = Color(1.5, 1.5, 1.5)  # Brighter
+			marker.size = Vector2(20, 20)  # Larger
+		else:
+			marker.modulate = Color.WHITE
+			marker.size = Vector2(16, 16)
+		
 		marker.visible = true
+		
+		# Scale based on camera zoom for visibility
+		var camera = get_viewport().get_camera_2d()
+		if camera:
+			var zoom_scale = 1.0 / camera.zoom.x
+			marker.size = marker.size * zoom_scale
 
 func flash_waypoints(torpedo_id: String):
-	# Brief white flash to show update
-	# Implementation depends on your visual style
-	pass
+	# Find waypoint markers for this torpedo and flash them
+	var flash_duration = 0.3
+	var flash_color = Color.WHITE
+	
+	# Get the torpedo's waypoint markers (first N markers where N is waypoint count)
+	var torpedo = find_torpedo_by_id(torpedo_id)
+	if not torpedo:
+		return
+		
+	var waypoint_count = torpedo.waypoints.size() if torpedo.has("waypoints") else 0
+	
+	# Create flash animation
+	for i in range(min(waypoint_count, waypoint_pool.size())):
+		var marker = waypoint_pool[i]
+		if marker.visible:
+			var original_color = marker.color
+			marker.color = flash_color
+			
+			# Tween back to original color
+			var tween = create_tween()
+			tween.tween_property(marker, "color", original_color, flash_duration)
 
 func _process(_delta):
 	# Update trails based on torpedo positions

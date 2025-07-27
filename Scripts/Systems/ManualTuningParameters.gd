@@ -59,8 +59,14 @@ func get_parameter(path: String, default = null):
 func set_parameter(layer: int, param_name: String, value: float):
 	if layer == 1:
 		# Handle nested structure for layer 1
-		# Implementation depends on UI structure
-		pass
+		var parts = param_name.split(".")
+		if parts.size() == 2:
+			var category = parts[0]
+			var param = parts[1]
+			if category in layer1_params and param in layer1_params[category]:
+				layer1_params[category][param] = value
+		elif parts.size() == 1 and parts[0] in layer1_params.universal:
+			layer1_params.universal[parts[0]] = value
 	else:
 		layer2_params[param_name] = value
 	

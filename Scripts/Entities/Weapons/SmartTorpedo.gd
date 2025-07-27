@@ -67,13 +67,17 @@ func generate_velocity_managed_waypoints(distance: float, to_target: Vector2):
 
 func generate_simple_waypoints(distance: float, to_target: Vector2):
 	# Simple approach for close targets
+	var direction = to_target.normalized()
+	
 	for i in range(3):
 		var t = float(i) / 2.0
 		var waypoint = Waypoint.new()
-		waypoint.position = global_position + to_target * t
+		# Use the actual distance parameter!
+		waypoint.position = global_position + direction * (distance * t)
 		waypoint.velocity_target = 2000.0
 		waypoint.maneuver_type = "cruise"
 		waypoint.thrust_limit = 1.0
+		waypoint.max_acceleration = max_acceleration
 		waypoints.append(waypoint)
 
 func generate_initial_multi_angle_waypoints():
