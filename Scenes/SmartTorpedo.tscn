@@ -1,18 +1,18 @@
 [gd_scene load_steps=7 format=3 uid="uid://b1g2rdjl7ixmy"]
 
-[ext_resource type="Script" path="res://Scripts/Entities/Weapons/TorpedoMPC.gd" id="1_yykjs"]
-[ext_resource type="Texture2D" uid="uid://cy7ccql58dstn" path="res://Art/AnimatedTorpedo.png" id="2_35u1h"]
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/SmartTorpedo.gd" id="1_tqjea"]
+[ext_resource type="Texture2D" uid="uid://cy7ccql58dstn" path="res://Art/AnimatedTorpedo.png" id="2_7rw27"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_a800a"]
 radius = 5.0
 height = 42.0
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_nyo5r"]
-atlas = ExtResource("2_35u1h")
+atlas = ExtResource("2_7rw27")
 region = Rect2(0, 0, 240, 848)
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_7amtq"]
-atlas = ExtResource("2_35u1h")
+atlas = ExtResource("2_7rw27")
 region = Rect2(240, 0, 240, 848)
 
 [sub_resource type="SpriteFrames" id="SpriteFrames_ioos4"]
@@ -29,8 +29,8 @@ animations = [{
 "speed": 5.0
 }]
 
-[node name="TorpedoMPC" type="Area2D" groups=["combat_entities", "torpedoes"]]
-script = ExtResource("1_yykjs")
+[node name="SmartTorpedo" type="Area2D" groups=["combat_entities", "torpedoes"]]
+script = ExtResource("1_tqjea")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 rotation = 1.5708

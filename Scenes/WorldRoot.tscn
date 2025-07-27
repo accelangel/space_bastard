@@ -9,7 +9,7 @@
 [ext_resource type="PackedScene" uid="uid://bm7h0d3d32r42" path="res://Scenes/ModeSelector.tscn" id="7_dsscj"]
 [ext_resource type="Script" path="res://Scripts/UI/PiPCamera.gd" id="7_uajus"]
 [ext_resource type="Script" path="res://Scripts/UI/GridSizeLabel.gd" id="9_2gyfj"]
-[ext_resource type="Script" path="res://Scripts/Systems/TestComputeShader.gd" id="10_poj3p"]
+[ext_resource type="Script" path="res://Scripts/Systems/TorpedoVisualizer.gd" id="10_ls8xr"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -95,5 +95,5 @@ offset_right = 40.0
 offset_bottom = 40.0
 script = ExtResource("9_2gyfj")
 
-[node name="GPUTest" type="Node" parent="."]
-script = ExtResource("10_poj3p")
+[node name="TorpedoVisualizer" type="Node2D" parent="."]
+script = ExtResource("10_ls8xr")

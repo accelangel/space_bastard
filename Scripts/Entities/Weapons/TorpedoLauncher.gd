@@ -28,7 +28,7 @@ var reload_timers: Dictionary = {}  # "port_0", "starboard_1" -> float
 
 # References
 var parent_ship: Node2D
-var torpedo_scene = preload("res://Scenes/TorpedoMPC.tscn")
+var torpedo_scene = preload("res://Scenes/SmartTorpedo.tscn")
 
 # Launch sequence
 var launch_queue: Array = []
