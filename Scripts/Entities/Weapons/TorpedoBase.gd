@@ -165,20 +165,43 @@ func apply_control(control: Dictionary, delta: float):
 	velocity_mps += acceleration * delta
 
 func apply_waypoint_update(new_waypoints: Array, protected_count: int):
-	# Preserve current and next N waypoints
-	var preserved = []
-	for i in range(min(protected_count, waypoints.size() - current_waypoint_index)):
-		preserved.append(waypoints[current_waypoint_index + i])
+	# Don't update if we haven't started yet
+	if current_waypoint_index == 0 and waypoints.size() < 3:
+		# First update - just replace everything
+		waypoints.clear()
+		for wp in new_waypoints:
+			waypoints.append(wp)
+		return
 	
-	# Clear old waypoints
+	# Preserve current and next N waypoints that we're actively flying through
+	var preserved = []
+	var preserve_up_to = min(current_waypoint_index + protected_count, waypoints.size())
+	
+	for i in range(current_waypoint_index, preserve_up_to):
+		if i < waypoints.size():
+			preserved.append(waypoints[i])
+	
+	# Clear and rebuild waypoint list
 	waypoints.clear()
 	
 	# Add preserved waypoints first
 	waypoints.append_array(preserved)
 	
-	# Add new waypoints
-	for wp in new_waypoints:
-		waypoints.append(wp)
+	# Only add new waypoints if we have room after preserved ones
+	# This prevents waypoint 0 from being regenerated at torpedo position
+	if waypoints.size() < protected_count:
+		# We've consumed most waypoints, accept the new trajectory
+		for wp in new_waypoints:
+			waypoints.append(wp)
+	else:
+		# We still have protected waypoints, only add future waypoints
+		# Skip the first few new waypoints as they overlap with protected ones
+		var skip_count = min(3, new_waypoints.size())
+		for i in range(skip_count, new_waypoints.size()):
+			waypoints.append(new_waypoints[i])
+	
+	# Reset index to 0 since we removed consumed waypoints
+	current_waypoint_index = 0
 
 func create_trail():
 	trail_line = Line2D.new()

@@ -117,7 +117,7 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 	var flight_plan_data = PackedFloat32Array()
 	
 	for state in torpedo_states:
-		# Torpedo state (8 floats)
+		# Torpedo state (12 floats now - added continuation info)
 		input_data.append(state.position.x)
 		input_data.append(state.position.y)
 		input_data.append(state.velocity.x)
@@ -127,11 +127,11 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 		input_data.append(state.max_acceleration)
 		input_data.append(state.max_rotation_rate)
 		
-		# Target state (4 floats)
-		input_data.append(state.target_position.x)
-		input_data.append(state.target_position.y)
-		input_data.append(state.target_velocity.x)
-		input_data.append(state.target_velocity.y)
+		# NEW: Continuation point (4 floats)
+		input_data.append(state.continuation_position.x)
+		input_data.append(state.continuation_position.y)
+		input_data.append(state.continuation_velocity)
+		input_data.append(float(state.current_waypoint_index))
 		
 		# Flight plan (4 floats)
 		var plan_type = 0
@@ -181,7 +181,7 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 	params_data.append(0.0) # padding
 	
 	# Create GPU buffers
-	var input_size = (12 + 4) * batch_size * 4  # bytes
+	var input_size = (16 + 4) * batch_size * 4  # bytes (was 12+4, now 16+4 for continuation data)
 	input_buffer = rd.storage_buffer_create(input_size, input_data.to_byte_array() + flight_plan_data.to_byte_array())
 	
 	params_buffer = rd.storage_buffer_create(params_data.size() * 4, params_data.to_byte_array())

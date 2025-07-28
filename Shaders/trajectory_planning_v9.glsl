@@ -32,6 +32,9 @@ struct TorpedoData {
     float max_rotation_rate;
     vec2 target_position;
     vec2 target_velocity;
+    vec2 continuation_position;    // NEW
+    float continuation_velocity;    // NEW
+    float current_waypoint_index;   // NEW
     uint flight_plan_type;
     float flight_plan_param1;
     float flight_plan_param2;
@@ -134,16 +137,25 @@ void write_waypoint(uint idx, Waypoint wp) {
 
 // Main trajectory generation functions
 void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    vec2 to_target = torpedo.target_position - torpedo.position;
+    // NEW: Calculate from continuation point if torpedo has progressed
+    vec2 start_position = torpedo.position;
+    float start_velocity = length(torpedo.velocity);
+    
+    if (torpedo.current_waypoint_index > 0.5) {  // Has valid continuation point
+        start_position = torpedo.continuation_position;
+        start_velocity = torpedo.continuation_velocity;
+    }
+    
+    // Now calculate trajectory from the start position
+    vec2 to_target = torpedo.target_position - start_position;
     float distance = length(to_target);
     float distance_meters = distance * params_buffer.params.meters_per_pixel;
     vec2 direction = normalize(to_target);
     
-    float current_speed = length(torpedo.velocity);
     float lateral_offset = distance * params_buffer.params.straight_lateral_separation;
     
     // Determine if flip-burn is needed
-    bool use_flip_burn = needs_flip_burn(current_speed, 2000.0, distance_meters, torpedo.max_acceleration);
+    bool use_flip_burn = needs_flip_burn(start_velocity, 2000.0, distance_meters, torpedo.max_acceleration);
     
     uint waypoint_base = torpedo_idx * MAX_WAYPOINTS;
     uint waypoint_count = 0;
@@ -152,8 +164,8 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     if (lateral_offset > 10.0) {
         Waypoint wp;
         vec2 lateral = vec2(-direction.y, direction.x) * lateral_offset;
-        wp.position = torpedo.position + to_target * 0.1 + lateral;
-        wp.velocity_target = min(current_speed + 5000.0, 20000.0);
+        wp.position = start_position + to_target * 0.1 + lateral;
+        wp.velocity_target = min(start_velocity + 5000.0, 20000.0);
         wp.velocity_tolerance = 1000.0;
         wp.maneuver_type = MANEUVER_BOOST;
         wp.thrust_limit = 1.0;
@@ -163,7 +175,7 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     if (use_flip_burn) {
         // Acceleration phase
         Waypoint accel_wp;
-        accel_wp.position = torpedo.position + to_target * 0.3;
+        accel_wp.position = start_position + to_target * 0.3;
         accel_wp.velocity_target = 50000.0;  // Max speed
         accel_wp.velocity_tolerance = 5000.0;
         accel_wp.maneuver_type = MANEUVER_BOOST;
@@ -172,7 +184,7 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
         
         // Flip point
         Waypoint flip_wp;
-        flip_wp.position = torpedo.position + to_target * 0.5;
+        flip_wp.position = start_position + to_target * 0.5;
         flip_wp.velocity_target = 40000.0;
         flip_wp.velocity_tolerance = 5000.0;
         flip_wp.maneuver_type = MANEUVER_FLIP;
@@ -181,7 +193,7 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
         
         // Deceleration phase
         Waypoint decel_wp;
-        decel_wp.position = torpedo.position + to_target * 0.7;
+        decel_wp.position = start_position + to_target * 0.7;
         decel_wp.velocity_target = 5000.0;
         decel_wp.velocity_tolerance = 1000.0;
         decel_wp.maneuver_type = MANEUVER_BURN;
@@ -190,7 +202,7 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     } else {
         // Simple acceleration to cruise
         Waypoint cruise_wp;
-        cruise_wp.position = torpedo.position + to_target * 0.5;
+        cruise_wp.position = start_position + to_target * 0.5;
         cruise_wp.velocity_target = 10000.0;
         cruise_wp.velocity_tolerance = 2000.0;
         cruise_wp.maneuver_type = MANEUVER_CRUISE;
@@ -201,7 +213,7 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     // Convergence delay point
     float convergence_t = params_buffer.params.straight_convergence_delay;
     Waypoint converge_wp;
-    converge_wp.position = torpedo.position + to_target * convergence_t;
+    converge_wp.position = start_position + to_target * convergence_t;
     converge_wp.velocity_target = 3000.0;
     converge_wp.velocity_tolerance = 500.0;
     converge_wp.maneuver_type = MANEUVER_CURVE;
@@ -226,13 +238,21 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
 }
 
 void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    vec2 to_target = torpedo.target_position - torpedo.position;
+    // NEW: Use continuation point if available
+    vec2 start_position = torpedo.position;
+    float start_velocity = length(torpedo.velocity);
+    
+    if (torpedo.current_waypoint_index > 0.5) {
+        start_position = torpedo.continuation_position;
+        start_velocity = torpedo.continuation_velocity;
+    }
+    
+    vec2 to_target = torpedo.target_position - start_position;
     float distance = length(to_target);
     float distance_meters = distance * params_buffer.params.meters_per_pixel;
     vec2 direction = normalize(to_target);
     
     float approach_side = torpedo.flight_plan_param1;  // -1 or 1
-    float current_speed = length(torpedo.velocity);
     
     uint waypoint_base = torpedo_idx * MAX_WAYPOINTS;
     uint waypoint_count = 0;
@@ -243,15 +263,15 @@ void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     
     // Arc start point
     float arc_start_t = params_buffer.params.multi_arc_start;
-    vec2 arc_center = torpedo.position + to_target * arc_start_t + perpendicular * arc_radius;
+    vec2 arc_center = start_position + to_target * arc_start_t + perpendicular * arc_radius;
     
     // Check if we need flip-burn based on velocity
-    bool use_flip_burn = current_speed > params_buffer.params.multi_flip_burn_threshold * 10000.0;
+    bool use_flip_burn = start_velocity > params_buffer.params.multi_flip_burn_threshold * 10000.0;
     
     if (use_flip_burn) {
         // Deceleration waypoint first
         Waypoint decel_wp;
-        decel_wp.position = torpedo.position + direction * distance * 0.2;
+        decel_wp.position = start_position + direction * distance * 0.2;
         decel_wp.velocity_target = params_buffer.params.multi_deceleration_target;
         decel_wp.velocity_tolerance = 1000.0;
         decel_wp.maneuver_type = MANEUVER_BURN;
@@ -285,7 +305,7 @@ void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     // Final approach
     float final_approach_t = params_buffer.params.multi_final_approach;
     Waypoint approach_wp;
-    approach_wp.position = torpedo.position + to_target * final_approach_t;
+    approach_wp.position = start_position + to_target * final_approach_t;
     approach_wp.velocity_target = 3000.0;
     approach_wp.velocity_tolerance = 500.0;
     approach_wp.maneuver_type = MANEUVER_CURVE;
@@ -310,14 +330,22 @@ void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
 }
 
 void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    vec2 to_target = torpedo.target_position - torpedo.position;
+    // NEW: Use continuation point if available
+    vec2 start_position = torpedo.position;
+    float start_velocity = length(torpedo.velocity);
+    
+    if (torpedo.current_waypoint_index > 0.5) {
+        start_position = torpedo.continuation_position;
+        start_velocity = torpedo.continuation_velocity;
+    }
+    
+    vec2 to_target = torpedo.target_position - start_position;
     float distance = length(to_target);
     float distance_meters = distance * params_buffer.params.meters_per_pixel;
     vec2 direction = normalize(to_target);
     
     float impact_time = torpedo.flight_plan_param2;
     float impact_angle = torpedo.flight_plan_param3;
-    float current_speed = length(torpedo.velocity);
     
     uint waypoint_base = torpedo_idx * MAX_WAYPOINTS;
     uint waypoint_count = 0;
@@ -332,7 +360,7 @@ void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     float fan_distance = distance * params_buffer.params.sim_fan_duration;
     
     Waypoint fan_wp;
-    fan_wp.position = torpedo.position + fan_direction * fan_distance;
+    fan_wp.position = start_position + fan_direction * fan_distance;
     fan_wp.velocity_target = needs_extreme_speed ? 50000.0 : 20000.0;
     fan_wp.velocity_tolerance = 5000.0;
     fan_wp.maneuver_type = MANEUVER_BOOST;
@@ -340,10 +368,10 @@ void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     write_waypoint(waypoint_base + waypoint_count++, fan_wp);
     
     // Check if flip-burn needed
-    if (current_speed > params_buffer.params.sim_flip_burn_threshold * 10000.0 || needs_extreme_speed) {
+    if (start_velocity > params_buffer.params.sim_flip_burn_threshold * 10000.0 || needs_extreme_speed) {
         // Flip maneuver
         Waypoint flip_wp;
-        flip_wp.position = torpedo.position + to_target * 0.4;
+        flip_wp.position = start_position + to_target * 0.4;
         flip_wp.velocity_target = 30000.0;
         flip_wp.velocity_tolerance = 5000.0;
         flip_wp.maneuver_type = MANEUVER_FLIP;
@@ -352,7 +380,7 @@ void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
         
         // Deceleration
         Waypoint decel_wp;
-        decel_wp.position = torpedo.position + to_target * 0.6;
+        decel_wp.position = start_position + to_target * 0.6;
         decel_wp.velocity_target = params_buffer.params.sim_deceleration_target;
         decel_wp.velocity_tolerance = 1000.0;
         decel_wp.maneuver_type = MANEUVER_BURN;
@@ -367,7 +395,7 @@ void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     vec2 converge_target = impact_position - impact_offset;
     
     Waypoint converge_wp;
-    converge_wp.position = torpedo.position + (converge_target - torpedo.position) * converge_start_t;
+    converge_wp.position = start_position + (converge_target - start_position) * converge_start_t;
     converge_wp.velocity_target = 5000.0;
     converge_wp.velocity_tolerance = 1000.0;
     converge_wp.maneuver_type = MANEUVER_CURVE;

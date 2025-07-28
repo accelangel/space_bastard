@@ -89,6 +89,20 @@ func collect_and_validate_torpedo_states() -> Array:
 		var vel = torpedo.get("velocity_mps")
 		if not vel or vel.length() > 1000000:  # Sanity check
 			continue
+		
+		# Get current waypoint information
+		var current_wp_index = torpedo.current_waypoint_index if "current_waypoint_index" in torpedo else 0
+		var waypoints = torpedo.waypoints if "waypoints" in torpedo else []
+		
+		# Find the continuation point (2-3 waypoints ahead)
+		var continuation_index = min(current_wp_index + 3, waypoints.size() - 1)
+		var continuation_position = pos  # Default to current position
+		var continuation_velocity = 2000.0  # Default velocity
+		
+		if continuation_index < waypoints.size() and waypoints.size() > 0:
+			var continuation_wp = waypoints[continuation_index]
+			continuation_position = continuation_wp.position
+			continuation_velocity = continuation_wp.velocity_target
 			
 		# Package state for GPU
 		var state = {
@@ -102,7 +116,11 @@ func collect_and_validate_torpedo_states() -> Array:
 			"target_position": get_target_position(torpedo),
 			"target_velocity": get_target_velocity(torpedo),
 			"flight_plan_type": torpedo.get("flight_plan_type"),
-			"flight_plan_data": torpedo.get("flight_plan_data")
+			"flight_plan_data": torpedo.get("flight_plan_data"),
+			# NEW: Add continuation point info
+			"current_waypoint_index": current_wp_index,
+			"continuation_position": continuation_position,
+			"continuation_velocity": continuation_velocity
 		}
 		
 		valid_states.append(state)
