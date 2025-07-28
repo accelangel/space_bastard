@@ -141,6 +141,15 @@ func collect_and_validate_torpedo_states() -> Array:
 			"continuation_velocity": continuation_velocity
 		}
 		
+		# DEBUG: What is the GPU actually receiving?
+		if DebugConfig.should_log("mpc_batch_updates"):
+			print("[BatchMPC] GPU Input for %s: current_pos=%s, continuation_pos=%s, wp_index=%d" % [
+				torpedo.torpedo_id.substr(0, 10),
+				pos,
+				continuation_position, 
+				current_wp_index
+			])
+		
 		valid_states.append(state)
 	
 	return valid_states
