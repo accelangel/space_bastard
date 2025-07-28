@@ -117,6 +117,13 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 	var flight_plan_data = PackedFloat32Array()
 	
 	for state in torpedo_states:
+		# DEBUG: Show exactly what we're sending to GPU
+		if DebugConfig.should_log("mpc_batch_updates"):
+			print("[GPU] Preparing data for torpedo %s:" % state.torpedo_id.substr(0, 10))
+			print("  - Will send position: %s" % state.position)
+			print("  - Will send continuation_position: %s" % state.continuation_position)
+			print("  - Will send current_waypoint_index: %d" % state.current_waypoint_index)
+		
 		# Basic torpedo state (8 floats)
 		input_data.append(state.position.x)
 		input_data.append(state.position.y)
@@ -268,6 +275,11 @@ func _read_gpu_results(batch_size: int) -> Array:
 				"maneuver_type": int(output_array[wp_idx + 4]),
 				"thrust_limit": output_array[wp_idx + 5]
 			})
+		
+		# DEBUG: Show what GPU actually returned
+		if DebugConfig.should_log("mpc_batch_updates") and torpedo_waypoints.size() > 0:
+			var first_wp = torpedo_waypoints[0]
+			print("[GPU] Torpedo %d returned first waypoint at: %s" % [i, first_wp.position])
 		
 		results.append(torpedo_waypoints)
 	
