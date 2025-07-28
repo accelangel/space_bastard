@@ -94,33 +94,18 @@ func collect_and_validate_torpedo_states() -> Array:
 		var current_wp_index = torpedo.current_waypoint_index if "current_waypoint_index" in torpedo else 0
 		var waypoints = torpedo.waypoints if "waypoints" in torpedo else []
 		
-		# Find the continuation point (2-3 waypoints ahead)
-		var continuation_index = min(current_wp_index + 3, waypoints.size() - 1)
-		var continuation_position = pos  # Default to current position
-		var continuation_velocity = 2000.0  # Default velocity
+		# PHASE 2 FIX: Calculate stable continuation point from target trajectory, not previous waypoints
+		var continuation_position = calculate_stable_continuation_point(torpedo)
+		var continuation_velocity = calculate_stable_continuation_velocity(torpedo)
 		
-		if continuation_index < waypoints.size() and waypoints.size() > 0 and continuation_index != current_wp_index:
-			var continuation_wp = waypoints[continuation_index]
-			continuation_position = continuation_wp.position
-			continuation_velocity = continuation_wp.velocity_target
-			
-			# DEBUG: Log continuation point calculation
-			if DebugConfig.should_log("waypoint_system"):
-				print("[BatchMPC] Torpedo %s: current_wp=%d, continuation_wp=%d, continuation_pos=%s, waypoint_count=%d" % [
-					torpedo.torpedo_id.substr(0, 10),
-					current_wp_index,
-					continuation_index,
-					continuation_position,
-					waypoints.size()
-				])
-		else:
-			# Log when we can't find a proper continuation point
-			if DebugConfig.should_log("waypoint_system"):
-				print("[BatchMPC] Torpedo %s: No valid continuation point! current_wp=%d, waypoint_count=%d" % [
-					torpedo.torpedo_id.substr(0, 10),
-					current_wp_index,
-					waypoints.size()
-				])
+		# DEBUG: Log continuation point calculation
+		if DebugConfig.should_log("waypoint_system"):
+			print("[BatchMPC] Torpedo %s: current_wp=%d, stable_continuation_pos=%s, waypoint_count=%d" % [
+				torpedo.torpedo_id.substr(0, 10),
+				current_wp_index,
+				continuation_position,
+				waypoints.size()
+			])
 		
 		# Package state for GPU
 		var state = {
@@ -135,7 +120,7 @@ func collect_and_validate_torpedo_states() -> Array:
 			"target_velocity": get_target_velocity(torpedo),
 			"flight_plan_type": torpedo.get("flight_plan_type"),
 			"flight_plan_data": torpedo.get("flight_plan_data"),
-			# Continuation point info
+			# PHASE 2 FIX: Use stable continuation point instead of waypoint feedback
 			"current_waypoint_index": current_wp_index,
 			"continuation_position": continuation_position,
 			"continuation_velocity": continuation_velocity
@@ -153,6 +138,50 @@ func collect_and_validate_torpedo_states() -> Array:
 		valid_states.append(state)
 	
 	return valid_states
+
+func calculate_stable_continuation_point(torpedo: Node2D) -> Vector2:
+	"""PHASE 2 FIX: Calculate continuation point based on target trajectory, not previous waypoints"""
+	var target = torpedo.get("target_node")
+	if not target or not is_instance_valid(target):
+		# Fallback: project ahead based on current velocity
+		var velocity_direction = torpedo.velocity_mps.normalized() if torpedo.velocity_mps.length() > 0.1 else Vector2.RIGHT
+		return torpedo.global_position + velocity_direction * 3000.0  # 3km ahead
+	
+	var to_target = target.global_position - torpedo.global_position
+	var distance = to_target.length()
+	var direction = to_target.normalized()
+	
+	# Project ahead based on current velocity and trajectory
+	var velocity_direction = torpedo.velocity_mps.normalized() if torpedo.velocity_mps.length() > 0.1 else direction
+	var speed = torpedo.velocity_mps.length()
+	
+	# Calculate stable planning point 3-5 seconds ahead
+	var planning_time = 3.0  # seconds
+	var planning_distance = max(speed * planning_time, 1000.0)  # At least 1km ahead
+	
+	# Blend velocity direction with target direction for smooth continuation
+	var blend_factor = clamp(distance / 10000.0, 0.3, 0.8)  # Closer to target = more target-focused
+	var continuation_direction = velocity_direction.lerp(direction, blend_factor).normalized()
+	
+	return torpedo.global_position + continuation_direction * planning_distance
+
+func calculate_stable_continuation_velocity(torpedo: Node2D) -> float:
+	"""PHASE 2 FIX: Calculate stable continuation velocity based on current state and target requirements"""
+	var current_speed = torpedo.velocity_mps.length()
+	var target = torpedo.get("target_node")
+	
+	if not target or not is_instance_valid(target):
+		return max(current_speed, 2000.0)  # Default 2 km/s minimum
+	
+	var distance_to_target = torpedo.global_position.distance_to(target.global_position) * WorldSettings.meters_per_pixel
+	
+	# For far targets, maintain higher speed
+	if distance_to_target > 50000.0:  # > 50km
+		return max(current_speed, 10000.0)  # 10 km/s
+	elif distance_to_target > 20000.0:  # > 20km
+		return max(current_speed, 5000.0)   # 5 km/s
+	else:
+		return max(current_speed, 2000.0)   # 2 km/s terminal
 
 func calculate_minimum_time_to_impact(torpedo_states: Array) -> float:
 	var min_time = INF

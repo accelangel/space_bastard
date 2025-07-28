@@ -15,14 +15,26 @@ class Waypoint extends RefCounted:
 		var pos_error = position.distance_to(torpedo_pos) * WorldSettings.meters_per_pixel
 		var vel_error = abs(velocity_target - torpedo_vel)
 		
-		# Position acceptance
-		if pos_error < 500.0:  # 500m acceptance radius
+		# PHASE 4 FIX: Improved acceptance logic for high-speed scenarios
+		# Position acceptance - larger radius for high speeds
+		var acceptance_radius = 500.0  # Base 500m
+		if torpedo_vel > 10000.0:  # High speed
+			acceptance_radius = 2000.0  # 2km for high speed
+		elif torpedo_vel > 5000.0:  # Medium speed
+			acceptance_radius = 1000.0  # 1km for medium speed
+		
+		if pos_error < acceptance_radius:
 			return true
-			
-		# Also accept if we're close in velocity and moving toward waypoint
-		if vel_error < velocity_tolerance and is_moving_toward_waypoint(torpedo_pos, position, torpedo_velocity_vec):
+		
+		# Velocity-based acceptance for high-speed passes
+		if torpedo_vel > 5000.0 and vel_error < velocity_tolerance:
+			if is_moving_toward_waypoint(torpedo_pos, position, torpedo_velocity_vec):
+				return true
+		
+		# PHASE 4 FIX: Overshoot protection - if we've passed the waypoint, accept it
+		if has_passed_waypoint(torpedo_pos, torpedo_velocity_vec):
 			return true
-			
+		
 		return false
 	
 	func is_moving_toward_waypoint(torpedo_pos: Vector2, waypoint_pos: Vector2, torpedo_vel: Vector2) -> bool:
@@ -32,7 +44,18 @@ class Waypoint extends RefCounted:
 			return true  # Already at waypoint
 		
 		var velocity_dot = torpedo_vel.normalized().dot(to_waypoint.normalized())
-		return velocity_dot > 0.5  # Moving generally toward waypoint (within 60 degrees)
+		return velocity_dot > 0.3  # Moving generally toward waypoint (within 70 degrees)
+	
+	func has_passed_waypoint(torpedo_pos: Vector2, torpedo_vel: Vector2) -> bool:
+		"""PHASE 4 FIX: Check if torpedo has overshot the waypoint"""
+		var to_waypoint = position - torpedo_pos
+		if to_waypoint.length() > 5000.0:  # Too far to have passed
+			return false
+		
+		var velocity_dot = torpedo_vel.dot(to_waypoint)
+		
+		# If velocity is pointing away from waypoint and we're close, we've passed it
+		return velocity_dot < 0 and to_waypoint.length() < 1000.0
 
 # Identity
 @export var torpedo_id: String = ""
@@ -84,8 +107,12 @@ var miss_detection_active: bool = false
 var last_distance_to_target: float = INF
 var getting_farther_count: int = 0
 
-# ADDED: Track if we've started moving
+# PHASE 3 FIX: Track if we've started moving
 var has_started_movement: bool = false
+
+# PHASE 3 FIX: Track waypoint establishment
+var waypoints_established: bool = false
+var initial_waypoint_set_time: float = 0.0
 
 func _ready():
 	# Generate ID if not provided
@@ -140,30 +167,17 @@ func _physics_process(delta):
 		# Apply control
 		apply_control(guidance, delta)
 		
-		# FIXED: Better waypoint acceptance logic
+		# PHASE 4 FIX: Enhanced waypoint acceptance logic
 		if current_wp.should_accept(global_position, velocity_mps.length(), velocity_mps):
 			# Special handling for first waypoint
 			if current_waypoint_index == 0 and not has_started_movement:
-				if velocity_mps.length() < 500.0:  # Wait until we're moving
-					# Don't advance yet
-					pass
-				else:
+				if velocity_mps.length() > 500.0:  # Wait until we're moving
 					has_started_movement = true
-					current_waypoint_index += 1
-					if DebugConfig.should_log("waypoint_system"):
-						print("[Torpedo %s] Started movement, advanced to waypoint 1/%d" % [
-							torpedo_id.substr(0, 10),
-							waypoints.size()
-						])
+					advance_waypoint("Started movement")
+				# Don't advance yet if still accelerating
 			else:
-				# For all other waypoints, just advance normally
-				current_waypoint_index += 1
-				if DebugConfig.should_log("waypoint_system"):
-					print("[Torpedo %s] Advanced to waypoint %d/%d" % [
-						torpedo_id.substr(0, 10),
-						current_waypoint_index,
-						waypoints.size()
-					])
+				# For all other waypoints, advance normally
+				advance_waypoint("Normal progression")
 	
 	# Update position
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
@@ -178,6 +192,17 @@ func _physics_process(delta):
 	# Check for miss detection
 	check_miss_detection(delta)
 
+func advance_waypoint(reason: String):
+	"""PHASE 4 FIX: Centralized waypoint advancement with logging"""
+	current_waypoint_index += 1
+	if DebugConfig.should_log("waypoint_system"):
+		print("[Torpedo %s] Advanced to waypoint %d/%d (%s)" % [
+			torpedo_id.substr(0, 10),
+			current_waypoint_index,
+			waypoints.size(),
+			reason
+		])
+
 func apply_control(control: Dictionary, delta: float):
 	# Update orientation
 	orientation += control.turn_rate * delta
@@ -189,53 +214,79 @@ func apply_control(control: Dictionary, delta: float):
 	velocity_mps += acceleration * delta
 
 func apply_waypoint_update(new_waypoints: Array, protected_count: int):
+	"""PHASE 3 FIX: Strict waypoint protection system"""
 	# Don't update if no waypoints
 	if new_waypoints.is_empty():
 		return
 	
-	# If we haven't started moving yet, just replace everything
-	if current_waypoint_index == 0 and velocity_mps.length() < 100.0:
+	# If we haven't started moving yet or this is the first waypoint set, just replace everything
+	if not has_started_movement or not waypoints_established:
 		waypoints.clear()
 		for wp in new_waypoints:
 			waypoints.append(wp)
+		waypoints_established = true
+		initial_waypoint_set_time = Time.get_ticks_msec() / 1000.0
 		return
 	
-	# Calculate how many waypoints to preserve ahead of current position
-	var preserve_count = min(protected_count, waypoints.size() - current_waypoint_index)
-	
-	# Build new waypoint list
-	var new_list = []
-	
-	# Keep current and next few waypoints that we're actively flying through
-	for i in range(preserve_count):
-		var idx = current_waypoint_index + i
-		if idx < waypoints.size():
-			new_list.append(waypoints[idx])
-	
-	# Add new waypoints that don't overlap with preserved ones
-	# Skip the first few new waypoints as they would overlap with our protected area
-	var skip_count = max(0, preserve_count - 1)  # -1 for some overlap
-	for i in range(skip_count, new_waypoints.size()):
-		new_list.append(new_waypoints[i])
-	
-	# Update waypoints WITHOUT resetting index
-	waypoints = new_list
-	# DO NOT RESET current_waypoint_index!
-	# Since we removed earlier waypoints, the current waypoint is now at index 0 in the new list
-	# But we don't reset the index counter - we'll adjust it based on how many we removed
-	
-	# Actually, we need to adjust the index since we removed earlier waypoints
-	# If we were at waypoint 5 and removed the first 5, we're now at waypoint 0 in the new array
-	# But we keep track that we've actually progressed
-	
-	if DebugConfig.should_log("waypoint_system"):
-		print("[Torpedo %s] Updated waypoints: preserved %d, added %d new, total %d, index stays at %d" % [
-			torpedo_id.substr(0, 10),
-			preserve_count,
-			new_waypoints.size() - skip_count,
-			waypoints.size(),
-			current_waypoint_index
-		])
+	# PHASE 3 FIX: STRICT protection - never update waypoints 0-2 once torpedo is in flight
+	if current_waypoint_index < 3:
+		# Only allow updates to waypoints beyond current + protected_count
+		var update_start_index = max(current_waypoint_index + protected_count, 3)
+		
+		# Preserve all waypoints up to update_start_index
+		var preserved = []
+		for i in range(min(update_start_index, waypoints.size())):
+			preserved.append(waypoints[i])
+		
+		# Add new waypoints only beyond the protected zone
+		var new_waypoints_to_add = []
+		var skip_count = max(0, update_start_index - current_waypoint_index)
+		for i in range(skip_count, new_waypoints.size()):
+			if i < new_waypoints.size():
+				new_waypoints_to_add.append(new_waypoints[i])
+		
+		# Combine preserved + new
+		preserved.append_array(new_waypoints_to_add)
+		waypoints = preserved
+		
+		if DebugConfig.should_log("waypoint_system"):
+			print("[Torpedo %s] PROTECTED update: preserved %d, added %d new, total %d, index %d" % [
+				torpedo_id.substr(0, 10),
+				update_start_index,
+				new_waypoints_to_add.size(),
+				waypoints.size(),
+				current_waypoint_index
+			])
+	else:
+		# Past the protection zone, can update more freely
+		# Calculate how many waypoints to preserve ahead of current position
+		var preserve_count = min(protected_count, waypoints.size() - current_waypoint_index)
+		
+		# Build new waypoint list
+		var new_list = []
+		
+		# Keep current and next few waypoints that we're actively flying through
+		for i in range(preserve_count):
+			var idx = current_waypoint_index + i
+			if idx < waypoints.size():
+				new_list.append(waypoints[idx])
+		
+		# Add new waypoints that don't overlap with preserved ones
+		var skip_count = max(0, preserve_count - 1)
+		for i in range(skip_count, new_waypoints.size()):
+			new_list.append(new_waypoints[i])
+		
+		# Update waypoints WITHOUT resetting index
+		waypoints = new_list
+		
+		if DebugConfig.should_log("waypoint_system"):
+			print("[Torpedo %s] NORMAL update: preserved %d, added %d new, total %d, index %d" % [
+				torpedo_id.substr(0, 10),
+				preserve_count,
+				new_waypoints.size() - skip_count,
+				waypoints.size(),
+				current_waypoint_index
+			])
 
 func create_trail():
 	trail_line = Line2D.new()

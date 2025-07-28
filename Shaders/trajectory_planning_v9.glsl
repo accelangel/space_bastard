@@ -137,17 +137,18 @@ void write_waypoint(uint idx, Waypoint wp) {
 
 // Main trajectory generation functions
 void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    // NEW: Calculate from continuation point if torpedo has progressed
-    vec2 start_position = torpedo.position;
-    float start_velocity = length(torpedo.velocity);
+    // PHASE 1 FIX: Always use continuation position for consistent trajectory planning
+    vec2 start_position = torpedo.continuation_position;
+    float start_velocity = torpedo.continuation_velocity;
     
-    // Check if we should use continuation point (index >= 1 means we've started moving)
-    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
-        start_position = torpedo.continuation_position;
-        start_velocity = torpedo.continuation_velocity;
+    // Sanity check - if continuation position is impossibly far, use torpedo position
+    float continuation_distance = distance(torpedo.position, torpedo.continuation_position);
+    if (continuation_distance > 100000.0) {  // 100km sanity limit
+        start_position = torpedo.position;
+        start_velocity = length(torpedo.velocity);
     }
     
-    // Now calculate trajectory from the start position
+    // Now calculate trajectory from the stable start position
     vec2 to_target = torpedo.target_position - start_position;
     float distance = length(to_target);
     float distance_meters = distance * params_buffer.params.meters_per_pixel;
@@ -239,13 +240,15 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
 }
 
 void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    // NEW: Use continuation point if available
-    vec2 start_position = torpedo.position;
-    float start_velocity = length(torpedo.velocity);
+    // PHASE 1 FIX: Always use continuation position for consistent trajectory planning
+    vec2 start_position = torpedo.continuation_position;
+    float start_velocity = torpedo.continuation_velocity;
     
-    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
-        start_position = torpedo.continuation_position;
-        start_velocity = torpedo.continuation_velocity;
+    // Sanity check - if continuation position is impossibly far, use torpedo position
+    float continuation_distance = distance(torpedo.position, torpedo.continuation_position);
+    if (continuation_distance > 100000.0) {  // 100km sanity limit
+        start_position = torpedo.position;
+        start_velocity = length(torpedo.velocity);
     }
     
     vec2 to_target = torpedo.target_position - start_position;
@@ -331,13 +334,15 @@ void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
 }
 
 void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
-    // NEW: Use continuation point if available
-    vec2 start_position = torpedo.position;
-    float start_velocity = length(torpedo.velocity);
+    // PHASE 1 FIX: Always use continuation position for consistent trajectory planning
+    vec2 start_position = torpedo.continuation_position;
+    float start_velocity = torpedo.continuation_velocity;
     
-    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
-        start_position = torpedo.continuation_position;
-        start_velocity = torpedo.continuation_velocity;
+    // Sanity check - if continuation position is impossibly far, use torpedo position
+    float continuation_distance = distance(torpedo.position, torpedo.continuation_position);
+    if (continuation_distance > 100000.0) {  // 100km sanity limit
+        start_position = torpedo.position;
+        start_velocity = length(torpedo.velocity);
     }
     
     vec2 to_target = torpedo.target_position - start_position;
