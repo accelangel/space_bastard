@@ -117,6 +117,12 @@ func _draw():
 			
 			# Highlight current waypoint
 			if i == current_idx:
+				# DEBUG: Show exactly which waypoint we're highlighting (THROTTLED to once every 2 seconds)
+				if DebugConfig.should_log("waypoint_system") and Engine.get_process_frames() % 120 == 0:
+					print("[Visualizer] Drawing CURRENT waypoint %d for %s at %s (torpedo at %s)" % [
+						i, torpedo_data.torpedo_id.substr(0, 10), wp.world_position, torpedo.global_position
+					])
+				
 				radius *= 1.5  # 50% bigger
 				color = color.lightened(0.3)  # Brighter
 				width *= 1.5
