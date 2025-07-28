@@ -141,7 +141,8 @@ void generate_straight_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     vec2 start_position = torpedo.position;
     float start_velocity = length(torpedo.velocity);
     
-    if (torpedo.current_waypoint_index > 0.5) {  // Has valid continuation point
+    // Check if we should use continuation point (index >= 1 means we've started moving)
+    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
         start_position = torpedo.continuation_position;
         start_velocity = torpedo.continuation_velocity;
     }
@@ -242,7 +243,7 @@ void generate_multi_angle_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     vec2 start_position = torpedo.position;
     float start_velocity = length(torpedo.velocity);
     
-    if (torpedo.current_waypoint_index > 0.5) {
+    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
         start_position = torpedo.continuation_position;
         start_velocity = torpedo.continuation_velocity;
     }
@@ -334,7 +335,7 @@ void generate_simultaneous_waypoints(uint torpedo_idx, TorpedoData torpedo) {
     vec2 start_position = torpedo.position;
     float start_velocity = length(torpedo.velocity);
     
-    if (torpedo.current_waypoint_index > 0.5) {
+    if (torpedo.current_waypoint_index >= 1.0) {  // FIXED: Changed from > 0.5
         start_position = torpedo.continuation_position;
         start_velocity = torpedo.continuation_velocity;
     }

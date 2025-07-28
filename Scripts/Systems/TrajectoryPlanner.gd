@@ -112,12 +112,12 @@ func generate_waypoints_batch(torpedo_states: Array) -> Array:
 func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 	var batch_size = torpedo_states.size()
 	
-	# Prepare input data (torpedo states + targets + flight plans)
+	# Prepare input data - FIXED DATA ALIGNMENT
 	var input_data = PackedFloat32Array()
 	var flight_plan_data = PackedFloat32Array()
 	
 	for state in torpedo_states:
-		# Torpedo state (12 floats now - added continuation info)
+		# Basic torpedo state (8 floats)
 		input_data.append(state.position.x)
 		input_data.append(state.position.y)
 		input_data.append(state.velocity.x)
@@ -127,7 +127,13 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 		input_data.append(state.max_acceleration)
 		input_data.append(state.max_rotation_rate)
 		
-		# NEW: Continuation point (4 floats)
+		# Target state (4 floats) - THIS WAS MISSING!
+		input_data.append(state.target_position.x)
+		input_data.append(state.target_position.y)
+		input_data.append(state.target_velocity.x)
+		input_data.append(state.target_velocity.y)
+		
+		# Continuation point (4 floats)
 		input_data.append(state.continuation_position.x)
 		input_data.append(state.continuation_position.y)
 		input_data.append(state.continuation_velocity)
@@ -180,10 +186,15 @@ func _create_gpu_buffers(torpedo_states: Array, params: Dictionary):
 	params_data.append(0.0) # padding
 	params_data.append(0.0) # padding
 	
-	# Create GPU buffers
-	var input_size = (16 + 4) * batch_size * 4  # bytes (was 12+4, now 16+4 for continuation data)
-	input_buffer = rd.storage_buffer_create(input_size, input_data.to_byte_array() + flight_plan_data.to_byte_array())
+	# Create GPU buffers - FIXED SIZE CALCULATION
+	# 16 floats for torpedo data (including target) + 4 floats for flight plan = 20 floats total
+	var input_size = (16 + 4) * batch_size * 4  # bytes
 	
+	# Combine input and flight plan data
+	var combined_data = input_data.to_byte_array()
+	combined_data.append_array(flight_plan_data.to_byte_array())
+	
+	input_buffer = rd.storage_buffer_create(input_size, combined_data)
 	params_buffer = rd.storage_buffer_create(params_data.size() * 4, params_data.to_byte_array())
 	
 	# Output buffer for waypoints
@@ -391,7 +402,7 @@ func generate_emergency_waypoints(torpedo_state: Dictionary) -> Array:
 	var waypoints = []
 	var to_target = torpedo_state.target_position - torpedo_state.position
 	var distance = to_target.length()
-	var distance_meters = distance * WorldSettings.meters_per_pixel  # Use this!
+	var distance_meters = distance * WorldSettings.meters_per_pixel
 	
 	# Simple straight line with velocity management
 	var current_speed = torpedo_state.velocity.length()

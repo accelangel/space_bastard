@@ -99,11 +99,29 @@ func collect_and_validate_torpedo_states() -> Array:
 		var continuation_position = pos  # Default to current position
 		var continuation_velocity = 2000.0  # Default velocity
 		
-		if continuation_index < waypoints.size() and waypoints.size() > 0:
+		if continuation_index < waypoints.size() and waypoints.size() > 0 and continuation_index != current_wp_index:
 			var continuation_wp = waypoints[continuation_index]
 			continuation_position = continuation_wp.position
 			continuation_velocity = continuation_wp.velocity_target
 			
+			# DEBUG: Log continuation point calculation
+			if DebugConfig.should_log("waypoint_system"):
+				print("[BatchMPC] Torpedo %s: current_wp=%d, continuation_wp=%d, continuation_pos=%s, waypoint_count=%d" % [
+					torpedo.torpedo_id.substr(0, 10),
+					current_wp_index,
+					continuation_index,
+					continuation_position,
+					waypoints.size()
+				])
+		else:
+			# Log when we can't find a proper continuation point
+			if DebugConfig.should_log("waypoint_system"):
+				print("[BatchMPC] Torpedo %s: No valid continuation point! current_wp=%d, waypoint_count=%d" % [
+					torpedo.torpedo_id.substr(0, 10),
+					current_wp_index,
+					waypoints.size()
+				])
+		
 		# Package state for GPU
 		var state = {
 			"torpedo_ref": torpedo,
@@ -117,7 +135,7 @@ func collect_and_validate_torpedo_states() -> Array:
 			"target_velocity": get_target_velocity(torpedo),
 			"flight_plan_type": torpedo.get("flight_plan_type"),
 			"flight_plan_data": torpedo.get("flight_plan_data"),
-			# NEW: Add continuation point info
+			# Continuation point info
 			"current_waypoint_index": current_wp_index,
 			"continuation_position": continuation_position,
 			"continuation_velocity": continuation_velocity
@@ -168,6 +186,7 @@ func get_target_velocity(torpedo: Node2D) -> Vector2:
 func apply_batch_results(gpu_results: Array, torpedo_states: Array):
 	if DebugConfig.should_log("mpc_batch_updates"):
 		print("[BatchMPC] Applied waypoints to %d torpedoes" % gpu_results.size())
+		
 	# Protected waypoint count (current + next 2)
 	var protected_count = 3
 	
