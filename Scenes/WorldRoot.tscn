@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://iolvmgmbu42d"]
+[gd_scene load_steps=10 format=3 uid="uid://iolvmgmbu42d"]
 
 [ext_resource type="Script" path="res://Scripts/Systems/GameCamera.gd" id="1_at0gn"]
 [ext_resource type="Script" path="res://Scripts/UI/GridOverlay.gd" id="1_bm7um"]
@@ -9,8 +9,6 @@
 [ext_resource type="PackedScene" uid="uid://bm7h0d3d32r42" path="res://Scenes/ModeSelector.tscn" id="7_dsscj"]
 [ext_resource type="Script" path="res://Scripts/UI/PiPCamera.gd" id="7_uajus"]
 [ext_resource type="Script" path="res://Scripts/UI/GridSizeLabel.gd" id="9_2gyfj"]
-[ext_resource type="Script" path="res://Scripts/Systems/TorpedoVisualizer.gd" id="10_ls8xr"]
-[ext_resource type="PackedScene" uid="uid://bxh66hg84qbo4" path="res://Scenes/ManualTuningPanel.tscn" id="10_w2wyv"]
 
 [node name="WorldRoot" type="Node2D"]
 
@@ -95,8 +93,3 @@ anchors_preset = 0
 offset_right = 40.0
 offset_bottom = 40.0
 script = ExtResource("9_2gyfj")
-
-[node name="ManualTuningPanel" parent="UILayer" instance=ExtResource("10_w2wyv")]
-
-[node name="TorpedoVisualizer" type="Node2D" parent="."]
-script = ExtResource("10_ls8xr")
