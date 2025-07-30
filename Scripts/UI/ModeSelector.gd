@@ -138,7 +138,35 @@ func start_mpc_tuning():
 	# Enable ship movement
 	enable_all_ship_movement()
 	
-	# MPCTuner will start automatically from mode signal
+	# Create and show the StandardTorpedoTuning UI
+	var tuning_ui_scene = load("res://Scenes/StandardTorpedoTuning.tscn")
+	if tuning_ui_scene:
+		var tuning_ui = tuning_ui_scene.instantiate()
+		tuning_ui.name = "StandardTorpedoTuningUI"
+		
+		# Add to UI layer if it exists, otherwise to root
+		var ui_layer = get_node_or_null("/root/WorldRoot/UILayer")
+		if ui_layer:
+			ui_layer.add_child(tuning_ui)
+		else:
+			get_tree().root.add_child(tuning_ui)
+		
+		# Start the tuning system
+		if tuning_ui.has_method("start_tuning"):
+			tuning_ui.start_tuning()
+		
+		print("StandardTorpedoTuning UI created and started")
+	else:
+		push_error("Failed to load StandardTorpedoTuning.tscn!")
+	
+	# Configure torpedo launchers for standard torpedoes
+	var launchers = get_tree().get_nodes_in_group("torpedo_launchers")
+	for launcher in launchers:
+		launcher.use_straight_trajectory = true
+		launcher.use_multi_angle_trajectory = false
+		launcher.use_simultaneous_impact = false
+		
+		print("Configured launcher for StandardTorpedo mode")
 
 func enable_all_ship_movement():
 	var ships = get_tree().get_nodes_in_group("ships")

@@ -1,0 +1,117 @@
+[gd_scene format=3 uid="uid://bwf1bsqr5jk4u"]
+
+[node name="StandardTorpedoTuning" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+offset_left = 10.0
+offset_top = 100.0
+offset_right = 410.0
+offset_bottom = 700.0
+mouse_filter = 1
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="HeaderPanel" type="PanelContainer" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/HeaderPanel"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 20
+
+[node name="AutoFireCheckBox" type="CheckBox" parent="VBoxContainer/HeaderPanel/HBoxContainer"]
+layout_mode = 2
+button_pressed = true
+text = "Auto-Fire Enabled"
+
+[node name="VSeparator" type="VSeparator" parent="VBoxContainer/HeaderPanel/HBoxContainer"]
+layout_mode = 2
+
+[node name="CycleLabel" type="Label" parent="VBoxContainer/HeaderPanel/HBoxContainer"]
+layout_mode = 2
+text = "Cycle: 0"
+
+[node name="VSeparator2" type="VSeparator" parent="VBoxContainer/HeaderPanel/HBoxContainer"]
+layout_mode = 2
+
+[node name="HitRateLabel" type="Label" parent="VBoxContainer/HeaderPanel/HBoxContainer"]
+layout_mode = 2
+text = "Hits: 0/0 (0.0%)"
+
+[node name="ParametersPanel" type="PanelContainer" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 120)
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/ParametersPanel"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/ParametersPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+text = "Navigation Constant:"
+
+[node name="NavConstantSlider" type="HSlider" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+min_value = 2.0
+max_value = 5.0
+step = 0.1
+value = 3.0
+
+[node name="NavValueLabel" type="Label" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer"]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+text = "3.00"
+
+[node name="HBoxContainer2" type="HBoxContainer" parent="VBoxContainer/ParametersPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="Label2" type="Label" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer2"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+text = "Terminal Deceleration:"
+
+[node name="TerminalDecelSlider" type="HSlider" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer2"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+min_value = 0.3
+max_value = 1.0
+step = 0.05
+value = 0.6
+
+[node name="DecelValueLabel" type="Label" parent="VBoxContainer/ParametersPanel/VBoxContainer/HBoxContainer2"]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+text = "0.60"
+
+[node name="StatusPanel" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/StatusPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="StatusLabel" type="Label" parent="VBoxContainer/StatusPanel/VBoxContainer"]
+layout_mode = 2
+text = "Status: Ready to fire"
+autowrap_mode = 2
+
+[node name="MetricsLabel" type="RichTextLabel" parent="VBoxContainer/StatusPanel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+bbcode_enabled = true
+fit_content = true
+scroll_following = true
