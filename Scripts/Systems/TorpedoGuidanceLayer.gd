@@ -7,7 +7,7 @@ var torpedo: StandardTorpedo
 # Guidance parameters
 @export var lead_time_factor: float = 0.8  # How much to lead the target (0-1)
 @export var terminal_phase_distance: float = 2000.0  # meters
-@export var terminal_deceleration_factor: float = 0.6
+@export var terminal_deceleration_factor: float = 0.8  # Still high thrust in terminal
 
 func configure(torpedo_ref: StandardTorpedo):
 	torpedo = torpedo_ref
@@ -17,7 +17,7 @@ func update_guidance(mission: TorpedoDataStructures.MissionDirective,
 	
 	var guidance = TorpedoDataStructures.GuidanceState.new()
 	
-	# No target = no guidance
+	# No target = no guidance (should never happen)
 	if not mission.target_node or not is_instance_valid(mission.target_node):
 		guidance.guidance_mode = "coast"
 		guidance.thrust_level = 0.0
@@ -49,17 +49,19 @@ func update_guidance(mission: TorpedoDataStructures.MissionDirective,
 	var distance_to_target = physics.position.distance_to(target_pos)
 	var distance_meters = distance_to_target * WorldSettings.meters_per_pixel
 	
+	# ALWAYS BURN HARD
 	if distance_meters < terminal_phase_distance:
 		guidance.guidance_mode = "terminal"
-		guidance.thrust_level = terminal_deceleration_factor
+		guidance.thrust_level = terminal_deceleration_factor  # Still 0.8, so 80% thrust
 	else:
 		guidance.guidance_mode = "accelerate"
-		guidance.thrust_level = 1.0
+		guidance.thrust_level = 1.0  # MAXIMUM BURN
 	
 	# Set desired state for control layer
 	guidance.desired_position = guidance.intercept_point
-	guidance.desired_velocity = (guidance.intercept_point - physics.position).normalized() * 2000.0  # Target velocity magnitude
-	guidance.desired_heading = (guidance.intercept_point - physics.position).angle() + PI/2  # Adjust for sprite orientation
+	# Set a ridiculously high target velocity - we want to go FAST
+	guidance.desired_velocity = (guidance.intercept_point - physics.position).normalized() * 100000.0  
+	guidance.desired_heading = (guidance.intercept_point - physics.position).angle()
 	
 	return guidance
 
@@ -73,8 +75,8 @@ func calculate_intercept_point(torpedo_pos: Vector2, torpedo_vel_mps: Vector2,
 	
 	# Initial time estimate based on current closing velocity
 	var closing_velocity = torpedo_vel_mps.length()
-	if closing_velocity < 100.0:  # Minimum assumed velocity
-		closing_velocity = 1000.0  # Assume we'll accelerate
+	if closing_velocity < 1000.0:  # If we're going slow
+		closing_velocity = 5000.0  # Assume we'll accelerate to at least 5 km/s
 	
 	var time_estimate = distance_meters / closing_velocity
 	

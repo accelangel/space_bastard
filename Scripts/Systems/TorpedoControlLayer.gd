@@ -42,22 +42,18 @@ func update_control(guidance: TorpedoDataStructures.GuidanceState,
 	var commanded_accel = navigation_constant * abs(closing_velocity) * los_rate
 	
 	# Convert commanded acceleration to rotation rate
-	# The commanded acceleration is perpendicular to velocity, so we need to rotate
-	# to achieve this acceleration with our thrust
 	var current_speed = physics.velocity.length() * WorldSettings.meters_per_pixel
 	var rotation_rate_from_pn = 0.0
 	
 	if current_speed > 10.0:  # Only apply PN if we're moving
-		# rotation_rate = commanded_lateral_acceleration / velocity
 		rotation_rate_from_pn = commanded_accel / current_speed
 		rotation_rate_from_pn = clamp(rotation_rate_from_pn, -max_rotation_rate, max_rotation_rate)
 	
-	# Also calculate direct pointing error for initial alignment
-	var velocity_angle = physics.velocity.angle() if physics.velocity.length() > 0 else physics.rotation - PI/2
-	var desired_rotation = los_angle + PI/2  # Adjust for sprite orientation
+	# Calculate direct pointing error for initial alignment
+	var desired_rotation = los_angle  # No PI/2 adjustment - sprite points right
 	var rotation_error = angle_difference(physics.rotation, desired_rotation)
 	
-	# Blend between direct pointing (for initial alignment) and PN (for interception)
+	# Blend between direct pointing and PN
 	var direct_rotation_rate = rotation_error * 5.0
 	direct_rotation_rate = clamp(direct_rotation_rate, -max_rotation_rate, max_rotation_rate)
 	
@@ -72,10 +68,11 @@ func update_control(guidance: TorpedoDataStructures.GuidanceState,
 	commands.rotation_rate = rotation_command
 	commands.desired_rotation = desired_rotation
 	
-	# Calculate alignment quality (0-1, where 1 is perfect alignment)
+	# Calculate alignment quality
 	var velocity_heading_error = 0.0
-	if physics.velocity.length() > 10.0:  # Only check if moving significantly
-		velocity_heading_error = abs(angle_difference(physics.rotation - PI/2, velocity_angle))
+	if physics.velocity.length() > 10.0:
+		var velocity_angle = physics.velocity.angle()
+		velocity_heading_error = abs(angle_difference(physics.rotation, velocity_angle))
 	
 	commands.alignment_quality = 1.0 - clamp(velocity_heading_error / PI, 0.0, 1.0)
 	

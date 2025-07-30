@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/PlayerShip.gd - Updated with Reset Functions
+# Scripts/Entities/Ships/PlayerShip.gd
 extends Area2D
 class_name PlayerShip
 
@@ -8,7 +8,7 @@ class_name PlayerShip
 @export var faction: String = "friendly"
 
 # Torpedo configuration
-@export var use_multi_angle_torpedoes: bool = true
+@export var use_multi_angle_torpedoes: bool = false
 @export var use_simultaneous_impact: bool = false
 
 # Movement
@@ -110,7 +110,7 @@ func get_torpedo_mode_name() -> String:
 	elif use_multi_angle_torpedoes:
 		return "Multi-Angle"
 	else:
-		return "Straight"
+		return "Standard"
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
@@ -176,15 +176,19 @@ func _input(event):
 	if event.is_action_pressed("ui_accept"):
 		print("[PlayerShip] SPACE key pressed")
 		print("  battle_timer_enabled: %s" % battle_timer_enabled)
-		print("  mpc_tuner exists: %s" % (mpc_tuner != null))
-		print("  is_tuning_active: %s" % (mpc_tuner.is_tuning_active() if mpc_tuner else "N/A"))
+		print("  GameMode: %s" % GameMode.get_mode_name())
 		
-		# Only allow manual torpedo fire if not in any mode
-		if not battle_timer_enabled and (!mpc_tuner or !mpc_tuner.is_tuning_active()):
+		# Block manual fire in MPC tuning mode
+		if GameMode.is_mpc_tuning_mode():
+			print("[PlayerShip] Manual fire blocked in MPC Tuning Mode")
+			return
+		
+		# Only allow manual torpedo fire if not in battle mode with timer
+		if not battle_timer_enabled:
 			print("[PlayerShip] Manual torpedo launch triggered")
 			fire_torpedoes_at_enemy()
 		else:
-			print("[PlayerShip] Torpedo launch blocked (in special mode)")
+			print("[PlayerShip] Torpedo launch blocked (battle timer active)")
 	
 	# Toggle torpedo type on T key
 	if event.is_action_pressed("ui_text_completion_query"):  # T key
@@ -197,7 +201,7 @@ func _input(event):
 		update_torpedo_launcher_settings()
 		print("Switched to Simultaneous Impact mode")
 		# Only fire if appropriate
-		if not battle_timer_enabled and (!mpc_tuner or !mpc_tuner.is_tuning_active()):
+		if not battle_timer_enabled and !GameMode.is_mpc_tuning_mode():
 			fire_torpedoes_at_enemy()
 
 func cycle_torpedo_mode():
@@ -223,8 +227,8 @@ func fire_torpedoes_at_enemy():
 		print("No torpedo launcher!")
 		return
 	
-	# Don't fire during tuning
-	if mpc_tuner and mpc_tuner.is_tuning_active():
+	# Block during MPC tuning mode
+	if GameMode.is_mpc_tuning_mode():
 		print("Cannot fire manually during MPC tuning")
 		return
 		

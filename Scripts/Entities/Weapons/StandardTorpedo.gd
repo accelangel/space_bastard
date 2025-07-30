@@ -30,22 +30,19 @@ var mission_layer: TorpedoMissionLayer
 var guidance_layer: TorpedoGuidanceLayer
 var control_layer: TorpedoControlLayer
 
-# Physics parameters
-@export var max_thrust_mps2: float = 500.0      # Maximum acceleration in m/s²
-@export var max_rotation_speed: float = 10.0     # rad/s
-@export var exhaust_velocity: float = 3000.0     # m/s for specific impulse
-@export var dry_mass: float = 50.0               # kg without fuel
-@export var fuel_mass: float = 50.0              # kg of fuel
-@export var burn_rate: float = 5.0               # kg/s fuel consumption at max thrust
+# Physics parameters - EXPANSE STYLE
+@export var max_thrust_mps2: float = 1470.0     # 150 G maximum acceleration
+@export var min_thrust_mps2: float = 294.0      # 30 G minimum acceleration
+@export var cruise_thrust_mps2: float = 980.0   # 100 G cruise acceleration
+@export var max_rotation_speed: float = 10.0    # rad/s
+@export var torpedo_mass: float = 100.0         # kg
 
 # Terminal phase parameters
 @export var terminal_phase_distance: float = 2000.0  # meters
-@export var terminal_deceleration_factor: float = 0.6  # Thrust reduction in terminal
+@export var terminal_deceleration_factor: float = 0.8  # Still high thrust in terminal
 
 # Current physics state
 var velocity_mps: Vector2 = Vector2.ZERO
-var current_fuel: float = 0.0
-var current_mass: float = 0.0
 
 # Trail visualization
 var trail_points: PackedVector2Array = []
@@ -60,27 +57,26 @@ var control_smoothness_accumulator: float = 0.0
 var smoothness_samples: int = 0
 
 # Debug
-@export var debug_enabled: bool = false
+@export var debug_enabled: bool = true
 
 # Signals for external systems to connect to
 signal hit_target(torpedo: StandardTorpedo, impact_data: TorpedoDataStructures.ImpactData)
 signal missed_target(torpedo: StandardTorpedo, miss_data: TorpedoDataStructures.MissData)
 signal timed_out(torpedo: StandardTorpedo)
 
+func _init():
+	# Initialize data structures IMMEDIATELY (before _ready)
+	mission_directive = TorpedoDataStructures.MissionDirective.new()
+	guidance_state = TorpedoDataStructures.GuidanceState.new()
+	control_commands = TorpedoDataStructures.ControlCommands.new()
+	physics_state = TorpedoDataStructures.TorpedoPhysicsState.new()
+
 func _ready():
 	# Generate unique ID
 	torpedo_id = "torpedo_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
 	launch_time = Time.get_ticks_msec() / 1000.0
 	
-	# Initialize data structures FIRST (before they can be used)
-	mission_directive = TorpedoDataStructures.MissionDirective.new()
-	guidance_state = TorpedoDataStructures.GuidanceState.new()
-	control_commands = TorpedoDataStructures.ControlCommands.new()
-	physics_state = TorpedoDataStructures.TorpedoPhysicsState.new()
-	
-	# Initialize physics
-	current_fuel = fuel_mass
-	current_mass = dry_mass + fuel_mass
+	# Initialize physics - NO FUEL BULLSHIT
 	launch_position = global_position
 	last_position = global_position
 	
@@ -115,7 +111,10 @@ func _ready():
 	get_tree().call_group("battle_observers", "on_entity_spawned", self, "torpedo")
 	
 	if debug_enabled:
-		print("[StandardTorpedo] %s launched" % torpedo_id)
+		var target_name = "none"
+		if mission_directive.target_node:
+			target_name = mission_directive.target_node.name
+		print("[StandardTorpedo] %s launched with target: %s" % [torpedo_id, target_name])
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
@@ -158,26 +157,31 @@ func update_physics_state():
 	physics_state.position = global_position
 	physics_state.velocity = velocity_mps / WorldSettings.meters_per_pixel
 	physics_state.rotation = rotation
-	physics_state.mass = current_mass
+	physics_state.mass = torpedo_mass
 
 func apply_control_commands(delta: float):
 	# Apply rotation
 	rotation += control_commands.rotation_rate * delta
 	
-	# Apply thrust if we have fuel
-	if current_fuel > 0 and control_commands.thrust_magnitude > 0:
-		var thrust_force = max_thrust_mps2 * control_commands.thrust_magnitude
-		var thrust_direction = Vector2.from_angle(rotation - PI/2)  # Adjust for sprite orientation
+	# ALWAYS APPLY THRUST - WE'RE IN THE EXPANSE BABY
+	if control_commands.thrust_magnitude > 0:
+		# Calculate thrust based on guidance mode
+		var thrust_force = cruise_thrust_mps2 * control_commands.thrust_magnitude
+		
+		# Clamp between min and max
+		thrust_force = clamp(thrust_force, min_thrust_mps2, max_thrust_mps2)
+		
+		var thrust_direction = Vector2.from_angle(rotation)
 		var acceleration = thrust_direction * thrust_force
 		
-		# Update velocity
+		# Update velocity - NO SPEED LIMIT (except c but we're not going that fast)
 		velocity_mps += acceleration * delta
 		
-		# Consume fuel
-		var fuel_consumed = burn_rate * control_commands.thrust_magnitude * delta
-		fuel_consumed = min(fuel_consumed, current_fuel)
-		current_fuel -= fuel_consumed
-		current_mass = dry_mass + current_fuel
+		# Debug output every second
+		if debug_enabled and Engine.get_physics_frames() % 60 == 0:
+			var speed_kms = velocity_mps.length() / 1000.0
+			print("[Torpedo %s] Speed: %.1f km/s, Accel: %.0f m/s² (%.1f G)" % 
+				  [torpedo_id, speed_kms, thrust_force, thrust_force / 9.81])
 
 func update_torpedo_physics(delta: float):
 	# Convert to pixels and update position
@@ -187,6 +191,8 @@ func update_torpedo_physics(delta: float):
 	# Check bounds
 	var half_size = WorldSettings.map_size_pixels / 2
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
+		if debug_enabled:
+			print("[StandardTorpedo] %s out of bounds at position %s" % [torpedo_id, global_position])
 		mark_for_destruction("out_of_bounds")
 
 func update_flight_phase():
@@ -202,16 +208,17 @@ func update_flight_phase():
 		"terminal":
 			flight_phase = "terminal"
 		"coast":
-			if current_fuel <= 0:
-				flight_phase = "coast"
+			flight_phase = "coast"  # Should never happen now
 	
 	if old_phase != flight_phase and debug_enabled:
 		print("[StandardTorpedo] %s phase changed: %s -> %s" % [torpedo_id, old_phase, flight_phase])
 
 func check_abort_conditions():
-	# Timeout check
+	# Timeout check - 5 minutes
 	var flight_time = (Time.get_ticks_msec() / 1000.0) - launch_time
-	if flight_time > 30.0:  # 30 second timeout
+	if flight_time > 300.0:  # 5 minutes
+		if debug_enabled:
+			print("[StandardTorpedo] %s timed out after %.1fs" % [torpedo_id, flight_time])
 		var miss_data = TorpedoDataStructures.MissData.new()
 		miss_data.miss_reason = "timeout"
 		miss_data.time_of_miss = Time.get_ticks_msec() / 1000.0
@@ -224,6 +231,8 @@ func check_abort_conditions():
 	
 	# Lost target check
 	if not mission_directive.target_node or not is_instance_valid(mission_directive.target_node):
+		if debug_enabled:
+			print("[StandardTorpedo] %s lost target at %.2fs" % [torpedo_id, flight_time])
 		var miss_data = TorpedoDataStructures.MissData.new()
 		miss_data.miss_reason = "lost_track"
 		miss_data.time_of_miss = Time.get_ticks_msec() / 1000.0
@@ -272,13 +281,15 @@ func _draw():
 			var alpha = float(i) / float(trail_points.size())
 			draw_line(start, end, Color(1, 0.5, 0, alpha), 2.0)
 	
-	# Draw velocity vector
+	# Draw velocity vector (GREEN)
 	var vel_end = velocity_mps.normalized() * 50.0 / WorldSettings.meters_per_pixel
-	draw_line(Vector2.ZERO, vel_end, Color.GREEN, 2.0)
+	draw_line(Vector2.ZERO, vel_end, Color.GREEN, 3.0)
+	draw_circle(vel_end, 3.0, Color.GREEN)
 	
-	# Draw heading
-	var heading_end = Vector2.from_angle(rotation - PI/2) * 40.0
+	# Draw heading (CYAN) - where torpedo is pointing
+	var heading_end = Vector2.from_angle(rotation) * 40.0
 	draw_line(Vector2.ZERO, heading_end, Color.CYAN, 2.0)
+	draw_circle(heading_end, 3.0, Color.CYAN)
 
 func _on_area_entered(area: Area2D):
 	if marked_for_death:
@@ -291,6 +302,9 @@ func _on_area_entered(area: Area2D):
 			return
 		
 		# Target hit!
+		if debug_enabled:
+			print("[StandardTorpedo] %s HIT target %s!" % [torpedo_id, area.name])
+		
 		var impact_data = TorpedoDataStructures.ImpactData.new()
 		impact_data.impact_position = global_position
 		impact_data.impact_velocity = velocity_mps
@@ -307,12 +321,12 @@ func angle_difference(a: float, b: float) -> float:
 
 # Public interface for launcher
 func set_target(target: Node2D):
+	# Initialize mission directive if not ready yet (called before _ready)
 	if not mission_directive:
-		push_error("StandardTorpedo: mission_directive is null in set_target!")
-		return
+		mission_directive = TorpedoDataStructures.MissionDirective.new()
 	mission_directive.target_node = target
 	mission_directive.mission_start_time = Time.get_ticks_msec() / 1000.0
-	mission_directive.mission_id = "%s_mission" % torpedo_id
+	mission_directive.mission_id = "%s_mission" % (torpedo_id if torpedo_id != "" else "pending")
 
 func set_launcher(launcher: Node2D):
 	if "entity_id" in launcher:
@@ -333,6 +347,9 @@ func mark_for_destruction(reason: String):
 	marked_for_death = true
 	is_alive = false
 	
+	if debug_enabled:
+		print("[StandardTorpedo] %s destroyed - reason: %s" % [torpedo_id, reason])
+	
 	# Disable physics
 	set_physics_process(false)
 	if has_node("CollisionShape2D"):
@@ -351,7 +368,7 @@ func get_velocity_mps() -> Vector2:
 func get_tuning_parameters() -> Dictionary:
 	return {
 		"navigation_constant": control_layer.navigation_constant if control_layer else 3.0,
-		"terminal_deceleration": guidance_layer.terminal_deceleration_factor if guidance_layer else 0.6
+		"terminal_deceleration": guidance_layer.terminal_deceleration_factor if guidance_layer else 0.8
 	}
 
 func set_tuning_parameters(params: Dictionary):

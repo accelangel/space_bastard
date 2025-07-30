@@ -16,7 +16,7 @@ var auto_fire_enabled: bool = true
 # Tuning parameters
 var current_parameters: Dictionary = {
 	"navigation_constant": 3.0,
-	"terminal_deceleration": 0.6
+	"terminal_deceleration": 0.8
 }
 
 # Metrics tracking
@@ -58,13 +58,6 @@ signal tuning_cycle_complete(metrics: TorpedoDataStructures.CycleMetrics)
 func _ready():
 	print("StandardTorpedoTuning _ready() called")
 	
-	# Only active in MPC tuning mode
-	if GameMode.current_mode != GameMode.Mode.MPC_TUNING:
-		print("StandardTorpedoTuning: Not in MPC tuning mode, hiding UI")
-		visible = false
-		set_process(false)
-		return
-	
 	# Find ships
 	find_ships()
 	
@@ -72,6 +65,7 @@ func _ready():
 	if auto_fire_checkbox:
 		auto_fire_checkbox.toggled.connect(_on_auto_fire_toggled)
 		auto_fire_checkbox.button_pressed = true
+		auto_fire_enabled = true
 	if nav_slider:
 		nav_slider.value_changed.connect(_on_nav_constant_changed)
 		nav_slider.value = current_parameters.navigation_constant
@@ -88,7 +82,14 @@ func _ready():
 	# Update UI
 	update_ui()
 	
-	print("StandardTorpedoTuning initialized successfully")
+	# Start processing immediately
+	set_process(true)
+	visible = true
+	
+	# Start in waiting state
+	current_state = TuningState.WAITING_TO_FIRE
+	
+	print("StandardTorpedoTuning initialized successfully - auto-fire enabled: %s" % auto_fire_enabled)
 
 func find_ships():
 	var player_ships = get_tree().get_nodes_in_group("player_ships")
@@ -106,9 +107,6 @@ func find_ships():
 		push_error("StandardTorpedoTuning: No enemy ship found!")
 
 func _process(_delta):
-	if not visible:
-		return
-	
 	# State machine
 	match current_state:
 		TuningState.WAITING_TO_FIRE:
@@ -135,6 +133,8 @@ func fire_test_torpedo():
 	if not player_ship.has_node("TorpedoLauncher"):
 		print("ERROR: Player ship has no torpedo launcher!")
 		return
+	
+	print("[StandardTorpedoTuning] Firing test torpedo cycle %d" % (total_cycles + 1))
 	
 	# Fire torpedo
 	var launcher = player_ship.get_node("TorpedoLauncher")
@@ -166,6 +166,77 @@ func fire_test_torpedo():
 			break
 	
 	update_ui()
+
+func update_live_torpedo_status():
+	if not active_torpedo or not status_label:
+		return
+	
+	var distance_to_target = 0.0
+	if enemy_ship:
+		distance_to_target = active_torpedo.global_position.distance_to(enemy_ship.global_position)
+		distance_to_target *= WorldSettings.meters_per_pixel
+	
+	var speed = active_torpedo.velocity_mps.length()
+	var phase = active_torpedo.flight_phase
+	var alignment = active_torpedo.control_commands.alignment_quality if active_torpedo.control_commands else 0.0
+	var flight_time = (Time.get_ticks_msec() / 1000.0) - active_torpedo.launch_time
+	
+	# Calculate current acceleration
+	var accel = active_torpedo.cruise_thrust_mps2
+	if active_torpedo.control_commands:
+		accel *= active_torpedo.control_commands.thrust_magnitude
+	
+	# Convert to Gs for display
+	var accel_gs = accel / 9.81
+	
+	# Calculate closing rate
+	var closing_rate = calculate_closing_rate()
+	
+	# Calculate time to impact
+	var tti = active_torpedo.guidance_state.time_to_impact if active_torpedo.guidance_state else INF
+	
+	# Multi-line status with proper formatting
+	var status_text = "Phase: %s | Flight Time: %.1fs\n" % [phase.capitalize(), flight_time]
+	status_text += "Speed: %s | Acceleration: %.0f G\n" % [format_speed(speed), accel_gs]
+	status_text += "Distance: %s | Time to Impact: %s\n" % [format_distance(distance_to_target), format_time(tti)]
+	status_text += "Alignment: %.2f | Closing Rate: %s" % [alignment, format_speed(closing_rate)]
+	
+	status_label.text = status_text
+
+func calculate_closing_rate() -> float:
+	if not active_torpedo or not enemy_ship:
+		return 0.0
+	
+	var to_target = enemy_ship.global_position - active_torpedo.global_position
+	var torpedo_vel_pixels = active_torpedo.velocity_mps / WorldSettings.meters_per_pixel
+	var target_vel_pixels = enemy_ship.get_velocity_mps() / WorldSettings.meters_per_pixel if enemy_ship.has_method("get_velocity_mps") else Vector2.ZERO
+	
+	var relative_vel = torpedo_vel_pixels - target_vel_pixels
+	return relative_vel.dot(to_target.normalized()) * WorldSettings.meters_per_pixel
+
+func format_speed(speed_mps: float) -> String:
+	if speed_mps < 1000:
+		return "%.0f m/s" % speed_mps
+	elif speed_mps < 1000000:
+		return "%.1f km/s" % (speed_mps / 1000.0)
+	else:
+		return "%.2f Mm/s" % (speed_mps / 1000000.0)
+
+func format_distance(distance_m: float) -> String:
+	if distance_m < 1000:
+		return "%.0f m" % distance_m
+	elif distance_m < 1000000:
+		return "%.1f km" % (distance_m / 1000.0)
+	else:
+		return "%.2f Mm" % (distance_m / 1000000.0)
+
+func format_time(seconds: float) -> String:
+	if seconds == INF:
+		return "∞"
+	elif seconds < 60:
+		return "%.1fs" % seconds
+	else:
+		return "%.1fm" % (seconds / 60.0)
 
 func _on_torpedo_hit(torpedo: StandardTorpedo, impact_data: TorpedoDataStructures.ImpactData):
 	if torpedo != active_torpedo:
@@ -217,9 +288,8 @@ func _on_torpedo_timeout(torpedo: StandardTorpedo):
 		
 		# Log torpedo state at timeout
 		var speed = torpedo.velocity_mps.length()
-		var fuel_percent = (torpedo.current_fuel / torpedo.fuel_mass) * 100.0
-		print("  Final state: Speed=%.0f m/s, Fuel=%.1f%%, Phase=%s" % 
-			  [speed, fuel_percent, torpedo.flight_phase])
+		print("  Final state: Speed=%s, Phase=%s" % 
+			  [format_speed(speed), torpedo.flight_phase])
 
 func _on_tuning_cycle_complete(metrics: TorpedoDataStructures.CycleMetrics):
 	# Track performance trends and evolution
@@ -354,23 +424,6 @@ func update_ui():
 	# Update recent metrics display
 	update_metrics_display()
 
-func update_live_torpedo_status():
-	if not active_torpedo or not status_label:
-		return
-	
-	var distance_to_target = 0.0
-	if enemy_ship:
-		distance_to_target = active_torpedo.global_position.distance_to(enemy_ship.global_position)
-		distance_to_target *= WorldSettings.meters_per_pixel
-	
-	var speed = active_torpedo.velocity_mps.length()
-	var phase = active_torpedo.flight_phase
-	var alignment = active_torpedo.control_commands.alignment_quality if active_torpedo.control_commands else 0.0
-	
-	status_label.text = "Phase: %s | Speed: %.0f m/s | Distance: %.0fm | Alignment: %.2f" % [
-		phase.capitalize(), speed, distance_to_target, alignment
-	]
-
 func update_metrics_display():
 	if not metrics_label:
 		return
@@ -388,7 +441,7 @@ func update_metrics_display():
 		if m.hit_result:
 			text += "alignment: %.2f, smoothness: %.2f\n" % [m.terminal_alignment, m.control_smoothness]
 		else:
-			text += "miss by: %.0fm\n" % m.miss_distance
+			text += "miss by: %s\n" % format_distance(m.miss_distance)
 	
 	# Add best parameters info if we have enough data
 	if total_cycles >= 10:

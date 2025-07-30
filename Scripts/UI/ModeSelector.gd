@@ -144,16 +144,19 @@ func start_mpc_tuning():
 		var tuning_ui = tuning_ui_scene.instantiate()
 		tuning_ui.name = "StandardTorpedoTuningUI"
 		
+		# Position near bottom middle of window
+		var window_size = get_window().size
+		tuning_ui.position = Vector2(
+			(window_size.x - 400) / 2,  # Center horizontally (assuming 400px width)
+			window_size.y - 620  # Near bottom (assuming 600px height + 20px margin)
+		)
+		
 		# Add to UI layer if it exists, otherwise to root
 		var ui_layer = get_node_or_null("/root/WorldRoot/UILayer")
 		if ui_layer:
 			ui_layer.add_child(tuning_ui)
 		else:
 			get_tree().root.add_child(tuning_ui)
-		
-		# Start the tuning system
-		if tuning_ui.has_method("start_tuning"):
-			tuning_ui.start_tuning()
 		
 		print("StandardTorpedoTuning UI created and started")
 	else:
