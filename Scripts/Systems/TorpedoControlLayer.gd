@@ -13,6 +13,9 @@ var torpedo: StandardTorpedo
 var last_rotation_command: float = 0.0
 var rotation_rate_filter: float = 0.1  # Low-pass filter constant
 
+# Add this class variable at the top of TorpedoControlLayer
+var last_logged_phase: String = ""
+
 func configure(torpedo_ref: StandardTorpedo):
 	torpedo = torpedo_ref
 
@@ -75,6 +78,11 @@ func update_control(guidance: TorpedoDataStructures.GuidanceState,
 		velocity_heading_error = abs(angle_difference(physics.rotation, velocity_angle))
 	
 	commands.alignment_quality = 1.0 - clamp(velocity_heading_error / PI, 0.0, 1.0)
+	
+	if DebugConfig.should_log("mpc_tuning") and torpedo.flight_phase != last_logged_phase:
+		last_logged_phase = torpedo.flight_phase
+		print("[Control] PN guidance at phase %s:" % torpedo.flight_phase)
+		print("  Rotation error: %.1f deg, Closing velocity: %.1f m/s" % [rad_to_deg(rotation_error), closing_velocity])
 	
 	return commands
 

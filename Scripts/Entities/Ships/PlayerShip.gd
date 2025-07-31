@@ -3,7 +3,7 @@ extends Area2D
 class_name PlayerShip
 
 # Ship properties
-@export var acceleration_gs: float = 0.05
+@export var acceleration_gs: float = 0.0
 @export var rotation_speed: float = 2.0
 @export var faction: String = "friendly"
 
@@ -33,7 +33,7 @@ var marked_for_death: bool = false
 # Test movement
 var test_acceleration: bool = true
 var test_direction: Vector2 = Vector2(1, -1).normalized()
-var test_gs: float = 1.0
+var test_gs: float = 0.0
 
 # Auto battle system
 var auto_battle_started: bool = false

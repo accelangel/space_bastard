@@ -12,6 +12,7 @@ enum TuningState {
 
 var current_state: TuningState = TuningState.WAITING_TO_FIRE
 var auto_fire_enabled: bool = true
+var can_fire: bool = false  # Add this flag
 
 # Tuning parameters
 var current_parameters: Dictionary = {
@@ -88,6 +89,7 @@ func _ready():
 	
 	# Start in waiting state
 	current_state = TuningState.WAITING_TO_FIRE
+	can_fire = true  # Allow first fire
 	
 	print("StandardTorpedoTuning initialized successfully - auto-fire enabled: %s" % auto_fire_enabled)
 
@@ -110,12 +112,13 @@ func _process(_delta):
 	# State machine
 	match current_state:
 		TuningState.WAITING_TO_FIRE:
-			if auto_fire_enabled:
+			if auto_fire_enabled and can_fire:
+				can_fire = false  # Prevent multiple fires
 				fire_test_torpedo()
 		
 		TuningState.TORPEDO_IN_FLIGHT:
-			if active_torpedo:
-				update_live_torpedo_status()
+			# Update the display continuously while torpedo is in flight
+			update_metrics_display()
 		
 		TuningState.ANALYZING_RESULTS:
 			# Analysis happens in event handlers
@@ -134,74 +137,59 @@ func fire_test_torpedo():
 		print("ERROR: Player ship has no torpedo launcher!")
 		return
 	
+	# Only increment cycle when we're actually about to fire
 	print("[StandardTorpedoTuning] Firing test torpedo cycle %d" % (total_cycles + 1))
 	
 	# Fire torpedo
 	var launcher = player_ship.get_node("TorpedoLauncher")
 	launcher.fire_torpedo(enemy_ship, 1)  # Fire single torpedo
 	
-	current_state = TuningState.TORPEDO_IN_FLIGHT
+	# NOW increment the counter
 	total_cycles += 1
 	current_cycle = total_cycles
 	
-	# Wait for torpedo to spawn and connect to it
-	await get_tree().process_frame
+	current_state = TuningState.TORPEDO_IN_FLIGHT
 	
-	# Find the torpedo that was just launched
+	# Wait for torpedo to spawn
+	await get_tree().create_timer(0.2).timeout  # Increased wait time
+	
+	# Find the torpedo that was just launched - look for the newest one
 	var torpedoes = get_tree().get_nodes_in_group("torpedoes")
+	var newest_torpedo = null
+	var newest_time = -1.0
+	
 	for torpedo in torpedoes:
 		if torpedo is StandardTorpedo and not torpedo.marked_for_death:
-			active_torpedo = torpedo
-			
-			# Apply current tuning parameters
-			torpedo.set_tuning_parameters(current_parameters)
-			
-			# Connect to torpedo signals using the corrected signal names
-			torpedo.hit_target.connect(_on_torpedo_hit)
-			torpedo.missed_target.connect(_on_torpedo_missed)
-			torpedo.timed_out.connect(_on_torpedo_timeout)
-			
-			if DebugConfig.should_log("mpc_tuning"):
-				print("[Tuning] Cycle %d: Torpedo %s launched" % [current_cycle, torpedo.torpedo_id])
-			break
+			if torpedo.launch_time > newest_time:
+				newest_time = torpedo.launch_time
+				newest_torpedo = torpedo
+	
+	if newest_torpedo:
+		active_torpedo = newest_torpedo
+		
+		# Apply current tuning parameters
+		active_torpedo.set_tuning_parameters(current_parameters)
+		
+		# Connect to torpedo signals using the corrected signal names
+		if not active_torpedo.hit_target.is_connected(_on_torpedo_hit):
+			active_torpedo.hit_target.connect(_on_torpedo_hit)
+		if not active_torpedo.missed_target.is_connected(_on_torpedo_missed):
+			active_torpedo.missed_target.connect(_on_torpedo_missed)
+		if not active_torpedo.timed_out.is_connected(_on_torpedo_timeout):
+			active_torpedo.timed_out.connect(_on_torpedo_timeout)
+		
+		if DebugConfig.should_log("mpc_tuning"):
+			print("[Tuning] Cycle %d: Torpedo %s launched" % [current_cycle, active_torpedo.torpedo_id])
+	else:
+		print("ERROR: Could not find newly launched torpedo!")
+		# Decrement the cycle counter since we didn't actually get a torpedo
+		total_cycles -= 1
+		current_cycle = total_cycles
+		
+		current_state = TuningState.RESETTING_SCENARIO
+		reset_ships()
 	
 	update_ui()
-
-func update_live_torpedo_status():
-	if not active_torpedo or not status_label:
-		return
-	
-	var distance_to_target = 0.0
-	if enemy_ship:
-		distance_to_target = active_torpedo.global_position.distance_to(enemy_ship.global_position)
-		distance_to_target *= WorldSettings.meters_per_pixel
-	
-	var speed = active_torpedo.velocity_mps.length()
-	var phase = active_torpedo.flight_phase
-	var alignment = active_torpedo.control_commands.alignment_quality if active_torpedo.control_commands else 0.0
-	var flight_time = (Time.get_ticks_msec() / 1000.0) - active_torpedo.launch_time
-	
-	# Calculate current acceleration
-	var accel = active_torpedo.cruise_thrust_mps2
-	if active_torpedo.control_commands:
-		accel *= active_torpedo.control_commands.thrust_magnitude
-	
-	# Convert to Gs for display
-	var accel_gs = accel / 9.81
-	
-	# Calculate closing rate
-	var closing_rate = calculate_closing_rate()
-	
-	# Calculate time to impact
-	var tti = active_torpedo.guidance_state.time_to_impact if active_torpedo.guidance_state else INF
-	
-	# Multi-line status with proper formatting
-	var status_text = "Phase: %s | Flight Time: %.1fs\n" % [phase.capitalize(), flight_time]
-	status_text += "Speed: %s | Acceleration: %.0f G\n" % [format_speed(speed), accel_gs]
-	status_text += "Distance: %s | Time to Impact: %s\n" % [format_distance(distance_to_target), format_time(tti)]
-	status_text += "Alignment: %.2f | Closing Rate: %s" % [alignment, format_speed(closing_rate)]
-	
-	status_label.text = status_text
 
 func calculate_closing_rate() -> float:
 	if not active_torpedo or not enemy_ship:
@@ -383,10 +371,11 @@ func reset_ships():
 		if launcher.has_method("reset_all_tubes"):
 			launcher.reset_all_tubes()
 	
-	# Small delay before next cycle
-	await get_tree().create_timer(0.5).timeout
+	# Wait longer to ensure everything is ready
+	await get_tree().create_timer(1.0).timeout  # Increased from 0.5
 	
 	current_state = TuningState.WAITING_TO_FIRE
+	can_fire = true  # Re-enable firing
 	update_ui()
 
 func update_ui():
@@ -421,27 +410,64 @@ func update_ui():
 			TuningState.RESETTING_SCENARIO:
 				status_label.text = "Status: Resetting scenario"
 	
-	# Update recent metrics display
+	# Update metrics display
 	update_metrics_display()
 
 func update_metrics_display():
 	if not metrics_label:
 		return
 	
-	var text = "[b]Recent Results:[/b]\n"
+	var text = ""
 	
-	# Show recent results with best parameters highlighted
+	# FIRST: Show live torpedo status if one is active
+	if active_torpedo and current_state == TuningState.TORPEDO_IN_FLIGHT and is_instance_valid(active_torpedo):
+		text += "[b]Live Torpedo Status:[/b]\n"
+		
+		var distance_to_target = 0.0
+		if enemy_ship and is_instance_valid(enemy_ship):
+			distance_to_target = active_torpedo.global_position.distance_to(enemy_ship.global_position)
+			distance_to_target *= WorldSettings.meters_per_pixel
+		
+		var speed = active_torpedo.velocity_mps.length()
+		var phase = active_torpedo.flight_phase
+		var alignment = active_torpedo.control_commands.alignment_quality if active_torpedo.control_commands else 0.0
+		var flight_time = (Time.get_ticks_msec() / 1000.0) - active_torpedo.launch_time
+		
+		# Calculate current acceleration
+		var accel = active_torpedo.cruise_thrust_mps2
+		if active_torpedo.control_commands:
+			accel *= active_torpedo.control_commands.thrust_magnitude
+		var accel_gs = accel / 9.81
+		
+		# Calculate closing rate
+		var closing_rate = calculate_closing_rate()
+		
+		# Calculate time to impact
+		var tti = active_torpedo.guidance_state.time_to_impact if active_torpedo.guidance_state else INF
+		
+		text += "Phase: %s | Flight Time: %.1fs\n" % [phase.capitalize(), flight_time]
+		text += "Speed: %s | Acceleration: %.0f G\n" % [format_speed(speed), accel_gs]
+		text += "Distance: %s | Time to Impact: %s\n" % [format_distance(distance_to_target), format_time(tti)]
+		text += "Alignment: %.2f | Closing Rate: %s\n" % [alignment, format_speed(closing_rate)]
+		text += "\n"  # Space between live stats and history
+	
+	# SECOND: Show recent cycle results
+	text += "[b]Recent Results:[/b]\n"
+	
+	# Show recent results with correct cycle numbering
 	for i in range(recent_metrics.size() - 1, max(recent_metrics.size() - 6, -1), -1):
 		var m = recent_metrics[i]
-		var result = "HIT" if m.hit_result else "MISS"
-		var color = "green" if m.hit_result else "red"
-		
-		text += "[color=%s]%s[/color] - %.1fs flight, " % [color, result]
+		# The first metric is from cycle 1, second from cycle 2, etc.
+		var cycle_num = i + 1
 		
 		if m.hit_result:
-			text += "alignment: %.2f, smoothness: %.2f\n" % [m.terminal_alignment, m.control_smoothness]
+			text += "Cycle %d: [color=green]HIT[/color] - %.1fs flight, alignment: %.2f\n" % [
+				cycle_num, m.flight_time, m.terminal_alignment
+			]
 		else:
-			text += "miss by: %s\n" % format_distance(m.miss_distance)
+			text += "Cycle %d: [color=red]MISS[/color] - %.1fs flight, closest: %s\n" % [
+				cycle_num, m.flight_time, format_distance(m.miss_distance)
+			]
 	
 	# Add best parameters info if we have enough data
 	if total_cycles >= 10:
@@ -452,7 +478,8 @@ func update_metrics_display():
 			best_parameters.terminal_deceleration
 		]
 	
-	metrics_label.bbcode_text = text
+	metrics_label.clear()
+	metrics_label.append_text(text)
 
 # UI callbacks
 func _on_auto_fire_toggled(pressed: bool):
@@ -475,6 +502,7 @@ func start_tuning():
 	visible = true
 	set_process(true)
 	current_state = TuningState.WAITING_TO_FIRE
+	can_fire = true
 	print("StandardTorpedoTuning: Tuning started")
 
 func stop_tuning():

@@ -144,12 +144,19 @@ func start_mpc_tuning():
 		var tuning_ui = tuning_ui_scene.instantiate()
 		tuning_ui.name = "StandardTorpedoTuningUI"
 		
-		# Position near bottom middle of window
+		# Position on middle-left, avoiding PiP camera
+		var pip_height = 250  # Height of PiP camera
+		var pip_margin = 20   # Extra margin
 		var window_size = get_window().size
+		
 		tuning_ui.position = Vector2(
-			(window_size.x - 400) / 2,  # Center horizontally (assuming 400px width)
-			window_size.y - 620  # Near bottom (assuming 600px height + 20px margin)
+			20,  # Left margin
+			(window_size.y / 2) - 300  # Middle of screen minus half the UI height
 		)
+		
+		# Make sure it's below the PiP camera if they overlap
+		if tuning_ui.position.y < pip_height + pip_margin:
+			tuning_ui.position.y = pip_height + pip_margin
 		
 		# Add to UI layer if it exists, otherwise to root
 		var ui_layer = get_node_or_null("/root/WorldRoot/UILayer")

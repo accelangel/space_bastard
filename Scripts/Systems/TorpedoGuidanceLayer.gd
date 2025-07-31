@@ -62,11 +62,21 @@ func update_guidance(mission: TorpedoDataStructures.MissionDirective,
 	# Set a ridiculously high target velocity - we want to go FAST
 	guidance.desired_velocity = (guidance.intercept_point - physics.position).normalized() * 100000.0  
 	guidance.desired_heading = (guidance.intercept_point - physics.position).angle()
+	if DebugConfig.should_log("mpc_tuning") and Engine.get_physics_frames() % 300 == 0:  # Every 5 seconds
+		var to_target_direct = target_pos - physics.position
+		print("[Guidance] 5s update: Direct to target: %.1f km, Time to impact: %.1fs" % [
+			to_target_direct.length() * WorldSettings.meters_per_pixel / 1000.0,
+			guidance.time_to_impact
+		])
 	
 	return guidance
 
 func calculate_intercept_point(torpedo_pos: Vector2, torpedo_vel_mps: Vector2, 
 							  target_pos: Vector2, target_vel_mps: Vector2) -> Dictionary:
+	
+	# Debug: Check if we're predicting movement for a stationary target
+	if target_vel_mps.length() < 1.0 and lead_time_factor > 0:
+		print("[Guidance] WARNING: Applying lead time (%.2f) to nearly stationary target!" % lead_time_factor)
 	
 	# Simple linear intercept prediction
 	var to_target = target_pos - torpedo_pos
@@ -91,6 +101,15 @@ func calculate_intercept_point(torpedo_pos: Vector2, torpedo_vel_mps: Vector2,
 	
 	# Final intercept point
 	var intercept_point = target_pos + (target_vel_mps / WorldSettings.meters_per_pixel) * time_estimate * lead_time_factor
+	
+	if DebugConfig.should_log("mpc_tuning") and torpedo.flight_phase == "launch":  # Only log once at launch
+		print("[Guidance] Initial intercept calculation:")
+		print("  Target pos: %s (%.1f km from torpedo)" % [target_pos, distance_meters/1000.0])
+		print("  Target vel: %s m/s" % target_vel_mps)
+		print("  Lead time factor: %.2f" % lead_time_factor)
+		print("  Time estimate: %.2fs" % time_estimate)
+		print("  Predicted movement: %s pixels" % ((target_vel_mps / WorldSettings.meters_per_pixel) * time_estimate * lead_time_factor))
+		print("  Final intercept point: %s" % intercept_point)
 	
 	return {
 		"intercept_point": intercept_point,

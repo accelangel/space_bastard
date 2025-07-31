@@ -56,8 +56,12 @@ var last_position: Vector2 = Vector2.ZERO
 var control_smoothness_accumulator: float = 0.0
 var smoothness_samples: int = 0
 
+# Distance tracking
+var closest_approach_distance: float = INF
+
 # Debug
 @export var debug_enabled: bool = true
+var last_logged_phase: String = ""
 
 # Signals for external systems to connect to
 signal hit_target(torpedo: StandardTorpedo, impact_data: TorpedoDataStructures.ImpactData)
@@ -120,6 +124,14 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
+	# Track closest approach distance to target
+	if mission_directive.target_node and is_instance_valid(mission_directive.target_node):
+		var current_distance = global_position.distance_to(mission_directive.target_node.global_position) * WorldSettings.meters_per_pixel
+		if current_distance < closest_approach_distance:
+			closest_approach_distance = current_distance
+			if DebugConfig.should_log("mpc_tuning") and int(current_distance/1000) != int(closest_approach_distance/1000):  # Log every km closer
+				print("[Torpedo %s] New closest approach: %.1f km" % [torpedo_id, current_distance/1000.0])
+	
 	# Update layer timers
 	mission_timer += delta
 	guidance_timer += delta
@@ -177,11 +189,12 @@ func apply_control_commands(delta: float):
 		# Update velocity - NO SPEED LIMIT (except c but we're not going that fast)
 		velocity_mps += acceleration * delta
 		
-		# Debug output every second
-		if debug_enabled and Engine.get_physics_frames() % 60 == 0:
+		# Debug output only on phase changes
+		if debug_enabled and flight_phase != last_logged_phase:
 			var speed_kms = velocity_mps.length() / 1000.0
-			print("[Torpedo %s] Speed: %.1f km/s, Accel: %.0f m/s² (%.1f G)" % 
-				  [torpedo_id, speed_kms, thrust_force, thrust_force / 9.81])
+			print("[Torpedo %s] Phase: %s, Speed: %.1f km/s, Accel: %.0f m/s² (%.1f G)" % 
+				  [torpedo_id, flight_phase, speed_kms, thrust_force, thrust_force / 9.81])
+			last_logged_phase = flight_phase
 
 func update_torpedo_physics(delta: float):
 	# Convert to pixels and update position
@@ -193,6 +206,15 @@ func update_torpedo_physics(delta: float):
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
 		if debug_enabled:
 			print("[StandardTorpedo] %s out of bounds at position %s" % [torpedo_id, global_position])
+		
+		# Create miss data before destruction
+		var miss_data = TorpedoDataStructures.MissData.new()
+		miss_data.miss_reason = "out_of_bounds"
+		miss_data.closest_approach_position = global_position
+		miss_data.time_of_miss = Time.get_ticks_msec() / 1000.0
+		miss_data.closest_approach_distance = closest_approach_distance
+		
+		emit_signal("missed_target", self, miss_data)
 		mark_for_destruction("out_of_bounds")
 
 func update_flight_phase():
@@ -222,8 +244,7 @@ func check_abort_conditions():
 		var miss_data = TorpedoDataStructures.MissData.new()
 		miss_data.miss_reason = "timeout"
 		miss_data.time_of_miss = Time.get_ticks_msec() / 1000.0
-		if mission_directive.target_node and is_instance_valid(mission_directive.target_node):
-			miss_data.closest_approach_distance = global_position.distance_to(mission_directive.target_node.global_position) * WorldSettings.meters_per_pixel
+		miss_data.closest_approach_distance = closest_approach_distance
 		emit_signal("timed_out", self)
 		emit_signal("missed_target", self, miss_data)
 		mark_for_destruction("timeout")
@@ -236,8 +257,9 @@ func check_abort_conditions():
 		var miss_data = TorpedoDataStructures.MissData.new()
 		miss_data.miss_reason = "lost_track"
 		miss_data.time_of_miss = Time.get_ticks_msec() / 1000.0
+		miss_data.closest_approach_distance = closest_approach_distance
 		emit_signal("missed_target", self, miss_data)
-		mark_for_destruction("lost_target")
+		mark_for_destruction("lost_track")
 
 func update_trail():
 	trail_points.append(global_position)
@@ -270,26 +292,8 @@ func get_control_smoothness() -> float:
 	return 1.0 - clamp(avg_rotation_rate / max_rotation_speed, 0.0, 1.0)
 
 func _draw():
-	if not debug_enabled:
-		return
-	
-	# Draw trail
-	if trail_points.size() > 1:
-		for i in range(1, trail_points.size()):
-			var start = trail_points[i-1] - global_position
-			var end = trail_points[i] - global_position
-			var alpha = float(i) / float(trail_points.size())
-			draw_line(start, end, Color(1, 0.5, 0, alpha), 2.0)
-	
-	# Draw velocity vector (GREEN)
-	var vel_end = velocity_mps.normalized() * 50.0 / WorldSettings.meters_per_pixel
-	draw_line(Vector2.ZERO, vel_end, Color.GREEN, 3.0)
-	draw_circle(vel_end, 3.0, Color.GREEN)
-	
-	# Draw heading (CYAN) - where torpedo is pointing
-	var heading_end = Vector2.from_angle(rotation) * 40.0
-	draw_line(Vector2.ZERO, heading_end, Color.CYAN, 2.0)
-	draw_circle(heading_end, 3.0, Color.CYAN)
+	# Disable debug drawing entirely
+	return
 
 func _on_area_entered(area: Area2D):
 	if marked_for_death:

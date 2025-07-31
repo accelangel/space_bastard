@@ -12,7 +12,7 @@ class_name TorpedoLauncher
 @export var auto_volley: bool = false  # MUST BE FALSE - manual fire only
 
 # Fixed launcher parameters
-const TORPEDOES_PER_VOLLEY: int = 2  # ALWAYS 2
+const TORPEDOES_PER_VOLLEY: int = 1  # ALWAYS 2
 const TUBES_PER_SIDE: int = 2  # 4 port, 4 starboard
 const TUBE_SPACING: float = 30.0  # pixels between tubes
 const LATERAL_OFFSET: float = 60.0  # pixels from ship center to tubes
