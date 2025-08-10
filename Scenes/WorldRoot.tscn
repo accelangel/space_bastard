@@ -60,6 +60,7 @@ pip_size = Vector2(250, 250)
 [node name="SubViewport" type="SubViewport" parent="UILayer/PlayerPiP"]
 handle_input_locally = false
 size = Vector2i(250, 250)
+render_target_update_mode = 4
 
 [node name="EnemyPiP" type="SubViewportContainer" parent="UILayer"]
 offset_right = 250.0
