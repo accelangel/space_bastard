@@ -133,7 +133,8 @@ func find_target_ship():
 		target_ship = ships[0]
 		print("PiP Camera (%s): Found target ship at %s" % [target_ship_type, target_ship.global_position])
 	else:
-		print("PiP Camera (%s): No ship found!" % target_ship_type)
+		#print("PiP Camera (%s): No ship found!" % target_ship_type)
+		return
 
 func _physics_process(delta):
 	if not camera:

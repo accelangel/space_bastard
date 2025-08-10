@@ -19,10 +19,6 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
 DebugConfig="*res://Scripts/Systems/DebugConfig.gd"
 
-[debug]
-
-settings/stdout/print_fps=true
-
 [display]
 
 window/size/viewport_width=1920

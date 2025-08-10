@@ -37,8 +37,7 @@ z_index = 10
 scale = Vector2(0.05, 0.05)
 sprite_frames = SubResource("SpriteFrames_i2lyk")
 
-[node name="CollisionShape2D" type="CollisionShape2D" parent="AnimatedSprite2D"]
-scale = Vector2(20, 20)
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("CapsuleShape2D_1iiyw")
 
 [node name="TrajectoryLine" type="Line2D" parent="."]
