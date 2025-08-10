@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - CLEANED VERSION
+# Scripts/Entities/Weapons/PDCBullet.gd - SIMPLIFIED VERSION
 extends Area2D
 class_name PDCBullet
 
@@ -44,9 +44,6 @@ func _ready():
 	# Set rotation to match velocity
 	if velocity.length() > 0:
 		rotation = velocity.angle() + 3*PI/2
-	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_entity_spawned", self, "pdc_bullet")
 
 func _physics_process(delta):
 	# Validate we're still alive
@@ -67,10 +64,6 @@ func _physics_process(delta):
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
 		mark_for_destruction("out_of_bounds")
 		return
-	
-	# Notify observers of position update (less frequently for performance)
-	if Engine.get_physics_frames() % 10 == 0:  # Every 10 frames
-		get_tree().call_group("battle_observers", "on_entity_moved", self, global_position)
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
@@ -84,9 +77,6 @@ func mark_for_destruction(reason: String):
 	set_physics_process(false)
 	if has_node("CollisionShape2D"):
 		$CollisionShape2D.disabled = true
-	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
 	
 	# Safe cleanup
 	queue_free()
@@ -119,8 +109,7 @@ func _on_area_entered(area: Area2D):
 		# Self destruct
 		mark_for_destruction("target_impact")
 		
-		# Notify observers of successful intercept
-		get_tree().call_group("battle_observers", "on_intercept", self, area, source_pdc_id)
+		print("PDC bullet %s intercepted torpedo %s" % [bullet_id, torpedo_id])
 
 func set_velocity(new_velocity: Vector2):
 	velocity = new_velocity

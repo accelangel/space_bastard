@@ -1,6 +1,9 @@
-# Scripts/Entities/Weapons/PDCSystem.gd - Mode-Aware Version
+# Scripts/Entities/Weapons/PDCSystem.gd - SIMPLIFIED VERSION
 extends Node2D
 class_name PDCSystem
+
+# Simple global toggle - edit this to enable/disable all PDCs
+@export var pdcs_globally_enabled: bool = true
 
 # Identity
 @export var pdc_id: String = ""
@@ -25,9 +28,6 @@ var emergency_slew: bool = false
 var is_alive: bool = true
 var marked_for_death: bool = false
 
-# Tuning support
-var enabled: bool = true  # Can be disabled during MPC tuning
-
 # References
 var parent_ship: Node2D
 var fire_control_manager: Node
@@ -39,9 +39,6 @@ var muzzle_point: Marker2D
 var bullet_scene: PackedScene = preload("res://Scenes/PDCBullet.tscn")
 
 func _ready():
-	# Subscribe to mode changes
-	GameMode.mode_changed.connect(_on_mode_changed)
-	
 	# Generate ID if not provided
 	if pdc_id == "":
 		pdc_id = "pdc_%d_%d" % [Time.get_ticks_msec(), get_instance_id()]
@@ -60,25 +57,7 @@ func _ready():
 	
 	set_idle_rotation()
 	
-	# Set initial state based on current mode
-	_configure_for_mode(GameMode.current_mode)
-	
 	print("PDC initialized: %s at position %s" % [pdc_id, mount_position])
-
-func _on_mode_changed(new_mode: GameMode.Mode):
-	_configure_for_mode(new_mode)
-
-func _configure_for_mode(mode: GameMode.Mode):
-	match mode:
-		GameMode.Mode.BATTLE:
-			enabled = true
-			print("PDC %s: Enabled for Battle Mode" % pdc_id)
-		GameMode.Mode.MPC_TUNING:
-			enabled = false
-			emergency_stop()
-			#print("PDC %s: Disabled for MPC Tuning Mode" % pdc_id)
-		_:
-			enabled = false
 
 func setup_sprite_references():
 	rotation_pivot = get_node_or_null("RotationPivot")
@@ -121,8 +100,8 @@ func is_valid_target(target: Node2D) -> bool:
 	return true
 
 func _physics_process(delta):
-	# CRITICAL: Check both enabled flag AND game mode
-	if not enabled or not GameMode.is_battle_mode():
+	# SIMPLE: Check global enable flag first
+	if not pdcs_globally_enabled:
 		if is_firing:
 			stop_firing()
 		if current_target:
@@ -216,36 +195,17 @@ func handle_firing(delta):
 		fire_timer = 0.0
 
 func set_target(new_target: Node2D):
-	# CRITICAL: Check enabled flag FIRST
-	if not enabled:
-		return
-	
 	# Extra validation before setting target
 	if new_target != null and not is_valid_target(new_target):
-		if DebugConfig.should_log("pdc_targeting"):
-			print("PDC %s: Attempted to set invalid target, ignoring" % pdc_id)
 		current_target = null
 		stop_firing()
 		return
 	
 	# Direct node reference, no IDs
 	if is_valid_target(new_target):
-		# Only print when actually changing targets
-		if current_target != new_target:
-			# Safe property access with validation
-			var old_name = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "none"
-			var new_name = new_target.get("torpedo_id") if new_target and is_instance_valid(new_target) else "unknown"
-			
-			if DebugConfig.should_log("pdc_targeting"):
-				print("PDC %s: Target validation SUCCESS (was %s)" % [pdc_id, old_name if old_name == "none" else "target_null"])
-				print("PDC %s: Engaging %s (was %s)" % [pdc_id, new_name, old_name])
-		
 		current_target = new_target
 		update_target_angle()
 	else:
-		if current_target:
-			if DebugConfig.should_log("pdc_targeting"):
-				print("PDC %s: Target validation FAILED - target_null" % pdc_id)
 		current_target = null
 		stop_firing()
 
@@ -286,10 +246,8 @@ func start_firing():
 	if not is_firing:
 		is_firing = true
 		var error = rad_to_deg(get_tracking_error())
-		# Safe property access
 		var target_id = current_target.get("torpedo_id") if current_target and is_instance_valid(current_target) else "unknown"
-		if DebugConfig.should_log("pdc_targeting"):
-			print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, target_id, error])
+		print("PDC %s: Weapons free on %s (AIMED, error: %.1f°)" % [pdc_id, target_id, error])
 
 func stop_firing():
 	if is_firing:
@@ -334,9 +292,6 @@ func fire_bullet():
 	var bullet_velocity_pixels = bullet_velocity / WorldSettings.meters_per_pixel
 	
 	bullet.set_velocity(bullet_velocity_pixels)
-	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_pdc_fired", self, current_target)
 
 func get_muzzle_world_position() -> Vector2:
 	if muzzle_point:
@@ -359,7 +314,6 @@ func angle_difference(from: float, to: float) -> float:
 	return diff
 
 func emergency_stop():
-	#print("PDC %s: EMERGENCY STOP" % pdc_id)
 	current_target = null
 	stop_firing()
 	emergency_slew = false

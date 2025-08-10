@@ -1,4 +1,4 @@
-# Scripts/Managers/FireControlManager.gd - Mode-Aware Version
+# Scripts/Managers/FireControlManager.gd - SIMPLIFIED VERSION
 extends Node2D
 class_name FireControlManager
 
@@ -27,12 +27,6 @@ var update_timer: float = 0.0
 @export var debug_enabled: bool = false
 
 func _ready():
-	# Subscribe to mode changes
-	GameMode.mode_changed.connect(_on_mode_changed)
-	
-	# Start with physics disabled
-	set_physics_process(false)
-	
 	parent_ship = get_parent()
 	
 	if parent_ship:
@@ -45,18 +39,7 @@ func _ready():
 	# Add to groups
 	add_to_group("fire_control_systems")
 	
-	print("FireControlManager initialized on %s - waiting for mode selection" % parent_ship.name)
-
-func _on_mode_changed(new_mode: GameMode.Mode):
-	var should_process = (new_mode == GameMode.Mode.BATTLE)
-	set_physics_process(should_process)
-	
-	if not should_process:
-		# Emergency stop all PDCs
-		emergency_stop_all()
-		print("FireControlManager disabled on %s" % parent_ship.name)
-	else:
-		print("FireControlManager enabled on %s" % parent_ship.name)
+	print("FireControlManager initialized on %s - Always Active" % parent_ship.name)
 
 func discover_pdcs():
 	for child in parent_ship.get_children():
@@ -80,11 +63,6 @@ func register_pdc(pdc_node: Node2D):
 		print("Registered PDC: %s" % pdc_id)
 
 func _physics_process(delta):
-	# Extra safety check
-	if not GameMode.is_battle_mode():
-		set_physics_process(false)
-		return
-	
 	if not sensor_system:
 		return
 	

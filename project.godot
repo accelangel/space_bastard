@@ -17,11 +17,7 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 [autoload]
 
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
-GameMode="*res://Scripts/Systems/GameMode.gd"
 DebugConfig="*res://Scripts/Systems/DebugConfig.gd"
-TuningParams="*res://Scripts/Systems/ManualTuningParameters.gd"
-TrajectoryPlannerSystem="*res://Scripts/Systems/TrajectoryPlanner.gd"
-BatchMPC="*res://Scripts/Systems/BatchMPCManager.gd"
 
 [display]
 

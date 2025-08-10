@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/EnemyShip.gd - Updated with Reset Functions
+# Scripts/Entities/Ships/EnemyShip.gd - SIMPLIFIED VERSION
 extends Area2D
 class_name EnemyShip
 
@@ -11,9 +11,6 @@ class_name EnemyShip
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2.ZERO
-
-# Movement control flag
-var movement_enabled: bool = false
 
 # Identity
 var entity_id: String = ""
@@ -55,12 +52,8 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "enemy_ship")
 	
-	# Notify observers of spawn
-	get_tree().call_group("battle_observers", "on_entity_spawned", self, "enemy_ship")
-	
-	# Don't start moving until mode selected
-	if debug_enabled:
-		print("EnemyShip spawned - waiting for mode selection")
+	# ALWAYS enable movement immediately
+	enable_movement()
 	
 	print("Enemy ship spawned: %s" % entity_id)
 
@@ -68,20 +61,14 @@ func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# Only move if movement enabled
-	if movement_enabled:
-		# Update movement
-		var acceleration_vector = movement_direction * acceleration_mps2
-		velocity_mps += acceleration_vector * delta
-		var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
-		global_position += velocity_pixels_per_second * delta
-	
-	# Notify sensor systems of our position for immediate state
-	get_tree().call_group("sensor_systems", "report_entity_position", self, global_position, "enemy_ship", faction)
+	# Update movement
+	var acceleration_vector = movement_direction * acceleration_mps2
+	velocity_mps += acceleration_vector * delta
+	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
+	global_position += velocity_pixels_per_second * delta
 
-# Enable movement when mode selected
 func enable_movement():
-	movement_enabled = true
+	print("[EnemyShip] Movement ENABLED")
 	if test_acceleration:
 		set_acceleration(test_gs)
 		set_movement_direction(test_direction)
@@ -105,32 +92,6 @@ func toggle_test_acceleration():
 	else:
 		set_movement_direction(Vector2.ZERO)
 
-# Reset functions for MPC tuning
-func reset_for_mpc_cycle():
-	global_position = Vector2(60000, -33000)  # Actual position from scene
-	rotation = -2.35619  # -135 degrees
-	velocity_mps = Vector2.ZERO
-	movement_direction = test_direction
-	if movement_enabled and test_acceleration:
-		set_acceleration(test_gs)
-
-func force_reset_physics():
-	"""Force physics state reset for MPC tuning"""
-	velocity_mps = Vector2.ZERO
-	movement_direction = test_direction
-	
-	# Force physics server to update position
-	if has_method("_integrate_forces"):
-		PhysicsServer2D.body_set_state(
-			get_rid(),
-			PhysicsServer2D.BODY_STATE_TRANSFORM,
-			Transform2D(rotation, global_position)
-		)
-	
-	# Re-enable test acceleration
-	if movement_enabled and test_acceleration:
-		set_acceleration(test_gs)
-
 func mark_for_destruction(reason: String):
 	if marked_for_death:
 		return
@@ -144,8 +105,7 @@ func mark_for_destruction(reason: String):
 	if collision:
 		collision.disabled = true
 	
-	# Notify observers
-	get_tree().call_group("battle_observers", "on_entity_dying", self, reason)
+	print("Enemy ship destroyed!")
 	
 	# Simple destruction
 	queue_free()
