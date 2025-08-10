@@ -5,17 +5,20 @@ extends Area2D
 @export var acceleration: float = 980.0       # 100G forward thrust
 @export var max_turn_rate: float = 1080.0     # degrees/second (3 full rotations)
 
-# Proportional Navigation
-@export var navigation_constant: float = 99.0  # N value for PN guidance
+# Proportional Navigation with gain scheduling
+@export var navigation_constant_initial: float = 1.0  # N value at launch
+@export var navigation_constant_final: float = 50.0  # N value after ramp-up
+@export var gain_hold_time: float = 3.0  # Hold initial gain for this long
+@export var gain_ramp_time: float = 15.0  # Ramp up over this duration
 
 # Trajectory parameters
 @export var curve_strength: float = 0.1       # How much the trajectory curves (0 = straight, 1 = maximum curve)
-@export var trajectory_points: int = 10      # Points for visualization
+@export var trajectory_points: int = 50      # Points for visualization
 @export var intercept_iterations: int = 10    # Iterations for intercept calculation
 
 # Debug settings
 @export var debug_output: bool = true
-@export var debug_interval: float = 0.5
+@export var debug_interval: float = 1.0  # Once per second
 
 # Torpedo identity
 var torpedo_id: String = ""
@@ -50,11 +53,15 @@ var trajectory_line: Line2D = null
 
 # Debug tracking
 var last_debug_print: float = 0.0
+var initial_gain_logged: bool = false
+var max_gain_logged: bool = false
+var last_gain_phase: String = "initial"  # "initial", "ramping", "max"
 
 func _ready():
 	Engine.max_fps = 60
 	
 	torpedo_id = "torp_%d" % [get_instance_id()]
+	print("  - Initial rotation: %.1f degrees" % rad_to_deg(rotation))
 	
 	add_to_group("torpedoes")
 	add_to_group("combat_entities")
@@ -101,6 +108,10 @@ func _ready():
 	area_entered.connect(_on_area_entered)
 	print("  - area_entered signal connected: %s" % area_entered.is_connected(_on_area_entered))
 	
+	# Log gain scheduling info
+	print("  - Gain scheduling: N=%.1f initial, ramping to N=%.1f over %.1f-%.1fs" % 
+		[navigation_constant_initial, navigation_constant_final, gain_hold_time, gain_hold_time + gain_ramp_time])
+	
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
 		sprite.play()
@@ -118,6 +129,19 @@ func setup_trajectory_line():
 		trajectory_line.z_index = 5
 		trajectory_line.top_level = true
 
+func get_current_navigation_constant() -> float:
+	"""Calculate the current navigation constant based on time since launch"""
+	if time_since_launch <= gain_hold_time:
+		# First 5 seconds: use initial gain
+		return navigation_constant_initial
+	elif time_since_launch <= gain_hold_time + gain_ramp_time:
+		# Next 10 seconds: ramp up from initial to final
+		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time
+		return lerp(navigation_constant_initial, navigation_constant_final, ramp_progress)
+	else:
+		# After 15 seconds: use final gain
+		return navigation_constant_final
+
 func _physics_process(delta):
 	if marked_for_death or not is_alive or not target_node:
 		return
@@ -128,6 +152,10 @@ func _physics_process(delta):
 	
 	# Update time tracking
 	time_since_launch += delta
+	
+	# TEMPORARY DEBUG - Remove after testing
+	if time_since_launch < 0.1:
+		print("Torpedo %s at %.3fs: rotation=%.1f°" % [torpedo_id, time_since_launch, rad_to_deg(rotation)])
 	
 	# Track closest approach
 	update_closest_approach()
@@ -367,6 +395,9 @@ func follow_trajectory_with_pn(delta):
 	if not target_node or not is_instance_valid(target_node):
 		return
 	
+	# Get current navigation constant based on time
+	var current_nav_constant = get_current_navigation_constant()
+	
 	if trajectory_curve.is_empty():
 		# No trajectory yet - aim directly at target
 		var to_target = target_node.global_position - global_position
@@ -406,8 +437,8 @@ func follow_trajectory_with_pn(delta):
 		los_rate = angle_diff / delta
 	last_los_angle = los_angle
 	
-	# Proportional Navigation law
-	var commanded_turn_rate = navigation_constant * los_rate
+	# Proportional Navigation law with scheduled gain
+	var commanded_turn_rate = current_nav_constant * los_rate
 	
 	# Add direct heading correction toward aim point
 	var current_heading = rotation - PI/2
@@ -471,8 +502,36 @@ func update_debug_output():
 	
 	var progress = curve_t * 100.0
 	
-	print("Torpedo %s: %.1f km/s | Target: %.1f km | Intercept: %.1f km | Progress: %.0f%% | Error: %.1f°" % 
-		[torpedo_id, speed_kms, range_km, intercept_range_km, progress, heading_error])
+	# Get current gain and determine phase
+	var current_gain = get_current_navigation_constant()
+	var gain_phase = "initial"
+	var gain_info = ""
+	
+	if time_since_launch <= gain_hold_time:
+		gain_phase = "initial"
+		if not initial_gain_logged:
+			print("Torpedo %s: Initial gain N=%.1f" % [torpedo_id, current_gain])
+			initial_gain_logged = true
+		gain_info = " | N=%.0f" % current_gain
+	elif time_since_launch <= gain_hold_time + gain_ramp_time:
+		gain_phase = "ramping"
+		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time * 100.0
+		gain_info = " | N=%.0f (ramping %.0f%%)" % [current_gain, ramp_progress]
+		
+		# Log when we start ramping
+		if last_gain_phase == "initial":
+			print("Torpedo %s: Starting gain ramp-up from %.1f to %.1f" % [torpedo_id, navigation_constant_initial, navigation_constant_final])
+	else:
+		gain_phase = "max"
+		if not max_gain_logged:
+			print("Torpedo %s: Max gain reached N=%.1f" % [torpedo_id, current_gain])
+			max_gain_logged = true
+		gain_info = " | N=%.0f (MAX)" % current_gain
+	
+	last_gain_phase = gain_phase
+	
+	print("Torpedo %s: %.1f km/s | Target: %.1f km | Intercept: %.1f km | Progress: %.0f%% | Error: %.1f°%s" % 
+		[torpedo_id, speed_kms, range_km, intercept_range_km, progress, heading_error, gain_info])
 
 func check_world_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2

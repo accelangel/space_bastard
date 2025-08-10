@@ -101,10 +101,12 @@ func fire_from_side(target: Node2D, side: int, tube_index: int):
 	var side_offset = ship_right * LATERAL_OFFSET * side
 	var tube_offset = ship_forward * (tube_index - (TUBES_PER_SIDE - 1) * 0.5) * TUBE_SPACING
 	
-	# Add to scene AFTER configuration
-	get_tree().root.add_child(torpedo)
+	# Set position and rotation BEFORE adding to scene
 	torpedo.global_position = parent_ship.global_position + side_offset + tube_offset
 	torpedo.rotation = parent_ship.rotation
+	
+	# Add to scene AFTER configuration
+	get_tree().root.add_child(torpedo)
 	
 	# Mark tube as firing and start reload
 	reload_timers[tube_id] = reload_time

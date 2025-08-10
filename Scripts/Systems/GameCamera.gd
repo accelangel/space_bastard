@@ -45,6 +45,9 @@ func _ready():
 	
 	# Create selection indicator
 	create_selection_indicator()
+	
+	# Start following the player ship
+	call_deferred("focus_on_player_ship")
 
 func _process(delta):
 	handle_zoom(delta)
@@ -320,6 +323,22 @@ func calculate_min_zoom():
 	# Fixed: removed unused variable warning by directly using the calculation
 	var clean_zoom = 0.01397  # Slightly smaller than calculated for buffer
 	return Vector2(clean_zoom, clean_zoom)
+
+func focus_on_player_ship():
+	"""Find and focus on the player ship at startup"""
+	var player_ships = get_tree().get_nodes_in_group("player_ships")
+	if player_ships.size() > 0:
+		var player_ship = player_ships[0]
+		start_following_ship(player_ship)
+		
+		# Set initial zoom to something reasonable (zoomed in)
+		zoom = Vector2(2.0, 2.0)
+		zoomTarget = zoom
+		
+		# Immediately position camera on player ship
+		position = player_ship.global_position
+		
+		print("Camera focused on player ship at startup")
 
 # Public methods for external control
 func set_follow_target(ship: Node2D):

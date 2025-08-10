@@ -10,7 +10,7 @@ class_name PlayerShip
 # Movement
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
-var movement_direction: Vector2 = Vector2.ZERO
+var movement_direction: Vector2 = Vector2(1, -1).normalized()  # Default movement direction
 
 # Identity
 var entity_id: String = ""
@@ -22,11 +22,6 @@ var marked_for_death: bool = false
 @onready var sensor_system: SensorSystem = $SensorSystem
 @onready var torpedo_launcher: Node2D = $TorpedoLauncher
 @onready var fire_control_manager = $FireControlManager
-
-# Test movement
-var test_acceleration: bool = true
-var test_direction: Vector2 = Vector2(1, -1).normalized()
-var test_gs: float = 0.0
 
 # DEBUG CONTROL
 @export var debug_enabled: bool = false
@@ -65,11 +60,9 @@ func _physics_process(delta):
 
 func enable_movement():
 	print("[PlayerShip] Movement ENABLED")
-	if test_acceleration:
-		set_acceleration(test_gs)
-		set_movement_direction(test_direction)
-		if debug_enabled:
-			print("PlayerShip movement enabled at %.1fG" % test_gs)
+	set_movement_direction(movement_direction)
+	if debug_enabled:
+		print("PlayerShip movement enabled at %.1fG" % acceleration_gs)
 
 func _input(event):
 	if marked_for_death or not is_alive:
@@ -112,13 +105,6 @@ func set_acceleration(gs: float):
 
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
-
-func toggle_test_acceleration():
-	test_acceleration = !test_acceleration
-	if test_acceleration:
-		set_movement_direction(test_direction)
-	else:
-		set_movement_direction(Vector2.ZERO)
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
