@@ -123,7 +123,7 @@ func on_tube_reloaded(tube_id: String):
 	else:
 		starboard_tubes_ready += 1
 	
-	print("Tube %s reloaded" % tube_id)
+	#print("Tube %s reloaded" % tube_id)
 
 func is_valid_target(target: Node2D) -> bool:
 	if not target:

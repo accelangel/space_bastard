@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - Simplified Straight-Line PN Version
 extends Area2D
 
 # Core parameters
@@ -7,13 +7,12 @@ extends Area2D
 
 # Proportional Navigation with gain scheduling
 @export var navigation_constant_initial: float = 1.0  # N value at launch
-@export var navigation_constant_final: float = 50.0  # N value after ramp-up
-@export var gain_hold_time: float = 3.0  # Hold initial gain for this long
-@export var gain_ramp_time: float = 15.0  # Ramp up over this duration
+@export var navigation_constant_final: float = 500.0  # N value after ramp-up
+@export var gain_hold_time: float = 3.0       # Hold initial gain for this long
+@export var gain_ramp_time: float = 15.0      # Ramp up over this duration
 
 # Trajectory parameters
-@export var curve_strength: float = 0.1       # How much the trajectory curves (0 = straight, 1 = maximum curve)
-@export var trajectory_points: int = 50      # Points for visualization
+@export var trajectory_points: int = 50       # Points for visualization
 @export var intercept_iterations: int = 10    # Iterations for intercept calculation
 
 # Debug settings
@@ -32,12 +31,12 @@ var marked_for_death: bool = false
 
 # Trajectory state
 var intercept_point: Vector2 = Vector2.ZERO
-var trajectory_curve: Array = []  # Points for visualization only
-var closest_point_on_curve: Vector2 = Vector2.ZERO
-var curve_t: float = 0.0  # Parameter along the curve (0 to 1)
 
 # PN state
 var last_los_angle: float = 0.0
+var last_heading_error: float = 0.0
+var error_rate: float = 0.0
+var terminal_reduction_logged: bool = false
 
 # Tracking statistics
 var closest_approach_distance: float = INF
@@ -55,12 +54,12 @@ var trajectory_line: Line2D = null
 var last_debug_print: float = 0.0
 var initial_gain_logged: bool = false
 var max_gain_logged: bool = false
-var last_gain_phase: String = "initial"  # "initial", "ramping", "max"
+var last_gain_phase: String = "initial"
 
 func _ready():
 	Engine.max_fps = 60
 	
-	torpedo_id = "torp_%d" % [get_instance_id()]
+	torpedo_id = "T%d" % [get_instance_id() % 10000]  # Shorter ID for cleaner logs
 	print("  - Initial rotation: %.1f degrees" % rad_to_deg(rotation))
 	
 	add_to_group("torpedoes")
@@ -70,46 +69,30 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "torpedo")
 	
-	# COLLISION DEBUG: Log initial setup
-	print("Torpedo %s launched - PHYSICS-BASED INTERCEPT + PN GUIDANCE" % torpedo_id)
+	# Collision setup logging
+	print("Torpedo %s launched - STRAIGHT-LINE PN GUIDANCE" % torpedo_id)
 	print("  - Faction: %s" % faction)
 	print("  - Groups: %s" % get_groups())
-	print("  - Monitoring enabled: %s" % monitoring)
-	print("  - Monitorable enabled: %s" % monitorable)
 	
-	# Check collision shape location - it might be under AnimatedSprite2D
+	# Check collision shape
 	var collision_shape = get_node_or_null("CollisionShape2D")
 	var animated_sprite = get_node_or_null("AnimatedSprite2D")
 	if animated_sprite:
 		var sprite_collision = animated_sprite.get_node_or_null("CollisionShape2D")
 		if sprite_collision:
-			print("  - CollisionShape2D found under AnimatedSprite2D")
 			collision_shape = sprite_collision
 	
 	if collision_shape:
 		print("  - Collision shape: %s" % collision_shape.shape.get_class())
-		print("  - Collision disabled: %s" % collision_shape.disabled)
-		# Check shape properties based on type
 		if collision_shape.shape is CapsuleShape2D:
-			print("  - Capsule radius: %.1f pixels" % collision_shape.shape.radius)
-			print("  - Capsule height: %.1f pixels" % collision_shape.shape.height)
-		elif collision_shape.shape is CircleShape2D:
-			print("  - Circle radius: %.1f pixels" % collision_shape.shape.radius)
-		elif collision_shape.shape is RectangleShape2D:
-			print("  - Rectangle size: %s pixels" % collision_shape.shape.size)
-		# Account for parent scale
-		var parent_scale = animated_sprite.scale if animated_sprite else Vector2.ONE
-		print("  - Parent scale: %s" % parent_scale)
-		print("  - Effective size multiplier: %.3f" % (parent_scale.x if parent_scale.x == parent_scale.y else parent_scale))
-	else:
-		print("  - WARNING: No CollisionShape2D found!")
+			print("  - Capsule: radius=%.1f, height=%.1f pixels" % 
+				[collision_shape.shape.radius, collision_shape.shape.height])
 	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
-	print("  - area_entered signal connected: %s" % area_entered.is_connected(_on_area_entered))
 	
-	# Log gain scheduling info
-	print("  - Gain scheduling: N=%.1f initial, ramping to N=%.1f over %.1f-%.1fs" % 
+	# Log gain scheduling
+	print("  - Gain: N=%.1f initial, ramping to N=%.1f over %.1f-%.1fs" % 
 		[navigation_constant_initial, navigation_constant_final, gain_hold_time, gain_hold_time + gain_ramp_time])
 	
 	var sprite = get_node_or_null("AnimatedSprite2D")
@@ -120,7 +103,6 @@ func _ready():
 	setup_trajectory_line()
 
 func setup_trajectory_line():
-	# Use the existing TrajectoryLine node for visualization
 	trajectory_line = get_node_or_null("TrajectoryLine")
 	if trajectory_line:
 		trajectory_line.width = 2.0
@@ -132,14 +114,11 @@ func setup_trajectory_line():
 func get_current_navigation_constant() -> float:
 	"""Calculate the current navigation constant based on time since launch"""
 	if time_since_launch <= gain_hold_time:
-		# First 5 seconds: use initial gain
 		return navigation_constant_initial
 	elif time_since_launch <= gain_hold_time + gain_ramp_time:
-		# Next 10 seconds: ramp up from initial to final
 		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time
 		return lerp(navigation_constant_initial, navigation_constant_final, ramp_progress)
 	else:
-		# After 15 seconds: use final gain
 		return navigation_constant_final
 
 func _physics_process(delta):
@@ -153,21 +132,17 @@ func _physics_process(delta):
 	# Update time tracking
 	time_since_launch += delta
 	
-	# TEMPORARY DEBUG - Remove after testing
-	if time_since_launch < 0.1:
-		print("Torpedo %s at %.3fs: rotation=%.1f°" % [torpedo_id, time_since_launch, rad_to_deg(rotation)])
-	
 	# Track closest approach
 	update_closest_approach()
 	
-	# COLLISION DEBUG: Check if we're extremely close
+	# Check proximity for collision debugging
 	check_proximity_collision()
 	
-	# Generate intercept trajectory every frame
-	generate_intercept_trajectory()
+	# Calculate intercept point
+	calculate_intercept()
 	
-	# Follow the trajectory using PN
-	follow_trajectory_with_pn(delta)
+	# Apply PN guidance to track intercept
+	apply_pn_guidance(delta)
 	
 	# Always thrust forward
 	var thrust_direction = Vector2.from_angle(rotation - PI/2)
@@ -197,48 +172,13 @@ func check_proximity_collision():
 	
 	# Log at specific distance thresholds
 	if distance_meters < 100.0 and last_distance_logged > 100.0:
-		print("COLLISION DEBUG [%s]: Within 100m of target! Distance: %.1f m" % [torpedo_id, distance_meters])
-		print("  - Torpedo pos: %s" % global_position)
-		print("  - Target pos: %s" % target_node.global_position)
-		print("  - Pixel distance: %.1f" % distance)
-		
-		# Check collision shapes
-		var my_collision = get_node_or_null("CollisionShape2D")
-		if my_collision:
-			print("  - Torpedo collision enabled: %s" % (not my_collision.disabled))
-			if my_collision.shape:
-				print("  - Torpedo collision shape: %s" % my_collision.shape.get_class())
-		
-		var target_collision = target_node.get_node_or_null("CollisionShape2D")
-		if target_collision:
-			print("  - Target collision enabled: %s" % (not target_collision.disabled))
-			if target_collision.shape:
-				var shape_info = target_collision.shape.get_class()
-				if target_collision.shape is CapsuleShape2D:
-					shape_info += " (radius: %.1f, height: %.1f)" % [target_collision.shape.radius, target_collision.shape.height]
-				elif target_collision.shape is CircleShape2D:
-					shape_info += " (radius: %.1f)" % target_collision.shape.radius
-				elif target_collision.shape is RectangleShape2D:
-					shape_info += " (size: %s)" % target_collision.shape.size
-				print("  - Target collision shape: %s" % shape_info)
+		print("COLLISION DEBUG [%s]: Within 100m! Distance: %.1f m" % [torpedo_id, distance_meters])
 	
 	if distance_meters < 50.0 and last_distance_logged > 50.0:
-		print("COLLISION DEBUG [%s]: Within 50m! This should definitely hit!" % torpedo_id)
-		print("  - Speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
-		print("  - Areas detected in range: %s" % get_overlapping_areas())
+		print("COLLISION DEBUG [%s]: Within 50m! Should hit!" % torpedo_id)
 		
 	if distance_meters < 10.0 and last_distance_logged > 10.0:
-		print("COLLISION CRITICAL [%s]: Within 10m! Checking for collision failure..." % torpedo_id)
-		
-		# Try manual collision check
-		var overlapping = get_overlapping_areas()
-		print("  - Overlapping areas: %d" % overlapping.size())
-		for area in overlapping:
-			print("    - Found: %s (faction: %s)" % [area.name, area.get("faction")])
-		
-		# Check if we're in correct groups
-		print("  - Torpedo in groups: %s" % get_groups())
-		print("  - Target in groups: %s" % target_node.get_groups())
+		print("COLLISION CRITICAL [%s]: Within 10m!" % torpedo_id)
 	
 	last_distance_logged = distance_meters
 
@@ -253,6 +193,17 @@ func update_closest_approach():
 	if current_distance_meters < closest_approach_distance:
 		closest_approach_distance = current_distance_meters
 		closest_approach_time = time_since_launch
+
+func calculate_intercept():
+	"""Calculate the intercept point using physics-based approach"""
+	if not target_node or not is_instance_valid(target_node):
+		return
+	
+	var target_velocity = Vector2.ZERO
+	if target_node.has_method("get_velocity_mps"):
+		target_velocity = target_node.get_velocity_mps()
+	
+	intercept_point = calculate_true_intercept(target_node.global_position, target_velocity)
 
 func calculate_true_intercept(target_pos: Vector2, target_velocity: Vector2) -> Vector2:
 	"""Calculate the true intercept point using iterative physics-based approach"""
@@ -273,13 +224,10 @@ func calculate_true_intercept(target_pos: Vector2, target_velocity: Vector2) -> 
 		var distance_meters = to_intercept.length() * WorldSettings.meters_per_pixel
 		
 		# Calculate our average speed to intercept
-		# We start at current speed and accelerate
 		var current_speed = our_velocity.length()
 		
-		# Account for acceleration during intercept
 		# Using kinematic equation: d = v0*t + 0.5*a*t^2
 		# Rearranged: t^2 + (2*v0/a)*t - (2*d/a) = 0
-		# Solving quadratic for time
 		var a = 0.5 * acceleration
 		var b = current_speed
 		var c = -distance_meters
@@ -287,7 +235,6 @@ func calculate_true_intercept(target_pos: Vector2, target_velocity: Vector2) -> 
 		# Quadratic formula (only positive root makes sense)
 		var discriminant = b * b - 4 * a * c
 		if discriminant < 0:
-			# Can't reach target - use simple calculation
 			time_to_intercept = distance_meters / max(current_speed, 100.0)
 		else:
 			time_to_intercept = (-b + sqrt(discriminant)) / (2 * a)
@@ -306,128 +253,105 @@ func calculate_true_intercept(target_pos: Vector2, target_velocity: Vector2) -> 
 	
 	return intercept
 
-func generate_intercept_trajectory():
-	"""Generate a curved intercept trajectory using physics-based calculation"""
+func calculate_time_to_impact() -> float:
+	"""Calculate estimated time to impact based on current velocity and distance"""
 	if not target_node or not is_instance_valid(target_node):
-		return
+		return INF
 	
-	var target_pos = target_node.global_position
-	var target_velocity = Vector2.ZERO
-	if target_node.has_method("get_velocity_mps"):
-		target_velocity = target_node.get_velocity_mps()
+	var distance_to_target = global_position.distance_to(target_node.global_position)
+	var distance_meters = distance_to_target * WorldSettings.meters_per_pixel
 	
-	# Calculate true physics-based intercept point
-	intercept_point = calculate_true_intercept(target_pos, target_velocity)
+	# Get closing velocity (component of our velocity toward target)
+	var to_target = (target_node.global_position - global_position).normalized()
+	var closing_velocity = velocity_mps.dot(to_target)
 	
-	# Generate curved trajectory
-	trajectory_curve.clear()
-	
-	# Calculate control point for quadratic curve
-	var start_pos = global_position
-	var end_pos = intercept_point
-	var midpoint = (start_pos + end_pos) * 0.5
-	
-	# Create perpendicular offset for curve
-	var direction = (end_pos - start_pos).normalized()
-	var perpendicular = Vector2(-direction.y, direction.x)
-	
-	# Curve control point - offset perpendicular to direct path
-	var curve_offset = perpendicular * (start_pos.distance_to(end_pos) * curve_strength)
-	
-	# If we have velocity, bias the curve in the direction of our current heading
-	if velocity_mps.length() > 10:
-		var velocity_pixels = velocity_mps / WorldSettings.meters_per_pixel
-		var velocity_dir = velocity_pixels.normalized()
-		# Blend between perpendicular and velocity direction for smoother curves
-		curve_offset = curve_offset * 0.5 + velocity_dir * (start_pos.distance_to(end_pos) * curve_strength * 0.5)
-	
-	var control_point = midpoint + curve_offset
-	
-	# Generate points along the quadratic curve for visualization
-	for i in range(trajectory_points + 1):
-		var t = float(i) / float(trajectory_points)
-		var point = calculate_quadratic_point(start_pos, control_point, end_pos, t)
-		trajectory_curve.append(point)
-	
-	# Find our current position on the curve (closest point)
-	find_closest_point_on_curve()
-
-func calculate_quadratic_point(p0: Vector2, p1: Vector2, p2: Vector2, t: float) -> Vector2:
-	"""Calculate point on quadratic Bezier curve"""
-	var u = 1.0 - t
-	return u * u * p0 + 2.0 * u * t * p1 + t * t * p2
-
-func find_closest_point_on_curve():
-	"""Find the closest point on the trajectory curve to our current position"""
-	if trajectory_curve.is_empty():
-		return
-	
-	var min_dist = INF
-	var closest_idx = 0
-	
-	for i in range(trajectory_curve.size()):
-		var dist = global_position.distance_squared_to(trajectory_curve[i])
-		if dist < min_dist:
-			min_dist = dist
-			closest_idx = i
-	
-	# Update curve parameter
-	curve_t = float(closest_idx) / float(trajectory_points)
-	
-	# Get the actual closest point (could interpolate for smoother following)
-	if closest_idx < trajectory_curve.size() - 1:
-		var p1 = trajectory_curve[closest_idx]
-		var p2 = trajectory_curve[closest_idx + 1]
+	# At launch, estimate based on physics
+	if closing_velocity < 1000.0:  # Less than 1 km/s closing
+		# Use kinematic equation to estimate time given constant acceleration
+		# d = v0*t + 0.5*a*t^2
+		# Solving for t with v0 near 0 gives approximately: t = sqrt(2*d/a)
+		var estimated_time = sqrt(2.0 * distance_meters / acceleration)
+		return estimated_time
 		
-		# Project our position onto the line segment
-		var segment = p2 - p1
-		var to_pos = global_position - p1
-		var projection = to_pos.dot(segment) / segment.length_squared()
-		projection = clamp(projection, 0.0, 1.0)
-		
-		closest_point_on_curve = p1 + segment * projection
-	else:
-		closest_point_on_curve = trajectory_curve[closest_idx]
+	return distance_meters / closing_velocity
 
-func follow_trajectory_with_pn(delta):
-	"""Use Proportional Navigation to follow the curved trajectory"""
+func apply_pn_guidance(delta):
+	"""Apply Proportional Navigation to track the intercept point"""
 	
 	if not target_node or not is_instance_valid(target_node):
 		return
 	
-	# Get current navigation constant based on time
+	# Calculate heading error first (needed for error rate)
+	var los_vector = intercept_point - global_position
+	var desired_heading = los_vector.angle()
+	var current_heading = rotation - PI/2
+	var heading_error = atan2(sin(desired_heading - current_heading), cos(desired_heading - current_heading))
+	
+	# Calculate error growth rate
+	if last_heading_error != 0.0:  # Skip first frame
+		error_rate = rad_to_deg(heading_error - last_heading_error) / delta
+	last_heading_error = heading_error
+	
+	# Get base navigation constant based on time
 	var current_nav_constant = get_current_navigation_constant()
 	
-	if trajectory_curve.is_empty():
-		# No trajectory yet - aim directly at target
-		var to_target = target_node.global_position - global_position
-		var desired_angle = to_target.angle() + PI/2
-		var angle_error = atan2(sin(desired_angle - rotation), cos(desired_angle - rotation))
-		var turn_rate = clamp(angle_error * 5.0, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
-		rotation += turn_rate * delta
-		return
+	# Error rate-based gain reduction for terminal phase
+	var time_to_impact = calculate_time_to_impact()
 	
-	# Look ahead on the curve for our aim point
-	var look_ahead_distance = velocity_mps.length() * 0.5  # Look ahead based on speed
-	var look_ahead_pixels = look_ahead_distance / WorldSettings.meters_per_pixel
+	# More aggressive terminal reduction based on both error magnitude AND rate
+	if time_to_impact < 30.0:
+		var should_reduce = false
+		var reduction_reason = ""
+		
+		# Check for rapid error growth
+		if abs(error_rate) > 3.0:  # Reduced from 5.0
+			should_reduce = true
+			reduction_reason = "rapid error rate %.1f°/s" % error_rate
+		# Check for accumulated error in terminal phase
+		elif time_to_impact < 10.0 and abs(rad_to_deg(heading_error)) > 1.0:  # Reduced from 1.5
+			should_reduce = true
+			reduction_reason = "terminal error %.1f°" % rad_to_deg(heading_error)
+		# Check for slow but steady error growth - MORE AGGRESSIVE
+		elif error_rate > 0.1 and abs(rad_to_deg(heading_error)) > 0.8:  # Reduced from 0.2 and 1.0
+			should_reduce = true
+			reduction_reason = "error creep %.1f° at %.2f°/s" % [rad_to_deg(heading_error), error_rate]
+		
+		if should_reduce:
+			var old_gain = current_nav_constant
+			# More aggressive reduction based on how bad things are
+			var terminal_gain = 5.0  # Reduced from 10.0
+			if abs(error_rate) > 10.0:
+				terminal_gain = 2.0  # Reduced from 5.0
+			elif time_to_impact < 3.0:
+				terminal_gain = 3.0  # Very low gain in final seconds
+			
+			# More aggressive reduction factor
+			var error_factor = clamp(abs(rad_to_deg(heading_error)) / 2.0, 0.5, 1.0)  # Changed from /3.0 to /2.0
+			current_nav_constant = lerp(current_nav_constant, terminal_gain, error_factor)
+			
+			# Log only significant reductions, and only once
+			if not terminal_reduction_logged and old_gain / current_nav_constant > 1.5:  # Reduced from 2
+				print("%s: TERMINAL REDUCTION - %s, gain %.0f -> %.0f" % 
+					[torpedo_id, reduction_reason, old_gain, current_nav_constant])
+				terminal_reduction_logged = true
 	
-	# Find aim point ahead on the curve
-	var aim_point = closest_point_on_curve
-	var current_idx = int(curve_t * trajectory_points)
+	# Log gain phase changes (for initial ramp-up)
+	if time_since_launch <= gain_hold_time:
+		if not initial_gain_logged:
+			print("%s: Initial gain N=%.1f" % [torpedo_id, current_nav_constant])
+			initial_gain_logged = true
+	elif time_since_launch <= gain_hold_time + gain_ramp_time:
+		if last_gain_phase == "initial":
+			print("%s: Starting gain ramp-up from %.1f to %.1f" % 
+				[torpedo_id, navigation_constant_initial, navigation_constant_final])
+		last_gain_phase = "ramping"
+	else:
+		if not max_gain_logged and last_gain_phase != "max":
+			print("%s: Max gain reached N=%.1f" % [torpedo_id, navigation_constant_final])
+			max_gain_logged = true
+		last_gain_phase = "max"
 	
-	# Search forward along the curve for look-ahead point
-	var accumulated_dist = 0.0
-	for i in range(current_idx, min(current_idx + 10, trajectory_curve.size() - 1)):
-		if i + 1 < trajectory_curve.size():
-			var segment_length = trajectory_curve[i].distance_to(trajectory_curve[i + 1])
-			accumulated_dist += segment_length
-			if accumulated_dist >= look_ahead_pixels:
-				aim_point = trajectory_curve[i + 1]
-				break
-			aim_point = trajectory_curve[i + 1]
-	
-	# Calculate LOS to aim point
-	var los_vector = aim_point - global_position
+	# Calculate LOS angle (already have los_vector from earlier)
 	var los_angle = los_vector.angle()
 	
 	# Calculate LOS rate for PN
@@ -437,15 +361,14 @@ func follow_trajectory_with_pn(delta):
 		los_rate = angle_diff / delta
 	last_los_angle = los_angle
 	
-	# Proportional Navigation law with scheduled gain
+	# Proportional Navigation law
 	var commanded_turn_rate = current_nav_constant * los_rate
 	
-	# Add direct heading correction toward aim point
-	var current_heading = rotation - PI/2
-	var heading_error = atan2(sin(los_angle - current_heading), cos(los_angle - current_heading))
-	
-	# Stronger heading correction for better curve following
-	commanded_turn_rate += heading_error * 8.0
+	# Heading correction - more aggressive in terminal phase
+	var heading_correction_gain = 3.0
+	if time_to_impact < 10.0:
+		heading_correction_gain = 5.0  # More aggressive heading correction near impact
+	commanded_turn_rate += heading_error * heading_correction_gain
 	
 	# Apply turn rate limits
 	commanded_turn_rate = clamp(commanded_turn_rate, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
@@ -454,7 +377,7 @@ func follow_trajectory_with_pn(delta):
 	rotation += commanded_turn_rate * delta
 
 func update_trajectory_visualization():
-	if not trajectory_line or trajectory_curve.is_empty():
+	if not trajectory_line:
 		return
 	
 	# Get camera for line width scaling
@@ -463,18 +386,14 @@ func update_trajectory_visualization():
 	if cam:
 		scale_factor = 1.0 / cam.zoom.x
 	
-	# Update trajectory line
+	# Update trajectory line - simple straight line to intercept
 	trajectory_line.clear_points()
 	trajectory_line.width = 2.0 * scale_factor
 	trajectory_line.default_color = Color.ORANGE
 	
-	# Draw from current position onward
+	# Draw straight line from current position to intercept
 	trajectory_line.add_point(global_position)
-	
-	# Add remaining trajectory points
-	var current_idx = int(curve_t * trajectory_points)
-	for i in range(current_idx + 1, trajectory_curve.size()):
-		trajectory_line.add_point(trajectory_curve[i])
+	trajectory_line.add_point(intercept_point)
 
 func update_debug_output():
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -489,49 +408,62 @@ func update_debug_output():
 	var range_km = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel / 1000.0
 	var intercept_range_km = global_position.distance_to(intercept_point) * WorldSettings.meters_per_pixel / 1000.0
 	
-	# Calculate heading error to aim point
-	var heading_error = 0.0
-	if not trajectory_curve.is_empty():
-		var current_idx = int(curve_t * trajectory_points)
-		if current_idx < trajectory_curve.size() - 1:
-			var aim_point = trajectory_curve[min(current_idx + 5, trajectory_curve.size() - 1)]
-			var to_aim = aim_point - global_position
-			var desired_heading = to_aim.angle()
-			var current_heading = rotation - PI/2
-			heading_error = rad_to_deg(atan2(sin(desired_heading - current_heading), cos(desired_heading - current_heading)))
+	# Calculate heading error
+	var los_vector = intercept_point - global_position
+	var desired_heading = los_vector.angle()
+	var current_heading = rotation - PI/2
+	var heading_error = rad_to_deg(atan2(sin(desired_heading - current_heading), cos(desired_heading - current_heading)))
 	
-	var progress = curve_t * 100.0
-	
-	# Get current gain and determine phase
-	var current_gain = get_current_navigation_constant()
-	var gain_phase = "initial"
-	var gain_info = ""
-	
-	if time_since_launch <= gain_hold_time:
-		gain_phase = "initial"
-		if not initial_gain_logged:
-			print("Torpedo %s: Initial gain N=%.1f" % [torpedo_id, current_gain])
-			initial_gain_logged = true
-		gain_info = " | N=%.0f" % current_gain
-	elif time_since_launch <= gain_hold_time + gain_ramp_time:
-		gain_phase = "ramping"
-		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time * 100.0
-		gain_info = " | N=%.0f (ramping %.0f%%)" % [current_gain, ramp_progress]
-		
-		# Log when we start ramping
-		if last_gain_phase == "initial":
-			print("Torpedo %s: Starting gain ramp-up from %.1f to %.1f" % [torpedo_id, navigation_constant_initial, navigation_constant_final])
+	# Get time to impact
+	var tti = calculate_time_to_impact()
+	var tti_str = ""
+	if tti < 100.0:
+		tti_str = "TTI: %.1fs" % tti
+	elif tti < INF:
+		tti_str = "TTI: %.0fs" % tti  # No decimal for large values
 	else:
-		gain_phase = "max"
-		if not max_gain_logged:
-			print("Torpedo %s: Max gain reached N=%.1f" % [torpedo_id, current_gain])
-			max_gain_logged = true
-		gain_info = " | N=%.0f (MAX)" % current_gain
+		tti_str = "TTI: ---"
 	
-	last_gain_phase = gain_phase
+	# Format error rate
+	var err_rate_str = "ΔErr: %.1f°/s" % error_rate
 	
-	print("Torpedo %s: %.1f km/s | Target: %.1f km | Intercept: %.1f km | Progress: %.0f%% | Error: %.1f°%s" % 
-		[torpedo_id, speed_kms, range_km, intercept_range_km, progress, heading_error, gain_info])
+	# Get current gain (AFTER any terminal reduction)
+	var display_gain = get_current_navigation_constant()
+	
+	# Apply same terminal reduction logic for display
+	if tti < 30.0:
+		var should_reduce_display = false
+		if abs(error_rate) > 3.0:
+			should_reduce_display = true
+		elif tti < 10.0 and abs(heading_error) > 1.0:
+			should_reduce_display = true
+		elif error_rate > 0.1 and abs(heading_error) > 0.8:
+			should_reduce_display = true
+			
+		if should_reduce_display:
+			var terminal_gain = 5.0
+			if abs(error_rate) > 10.0:
+				terminal_gain = 2.0
+			elif tti < 3.0:
+				terminal_gain = 3.0
+			var error_factor = clamp(abs(heading_error) / 2.0, 0.5, 1.0)
+			display_gain = lerp(display_gain, terminal_gain, error_factor)
+	
+	# Add time of flight
+	var tof_str = "ToF: %.1fs" % time_since_launch
+	
+	# Format: "T1: 102.8 km/s | Tgt: 221.7 km | Int: 222.9 km | Err: 2.7° | ToF: 10.2s | TTI: 2.2s | ΔErr: 5.1°/s | PN: 50"
+	var gain_str = ""
+	if time_since_launch <= gain_hold_time:
+		gain_str = "PN: %.0f" % display_gain
+	elif time_since_launch <= gain_hold_time + gain_ramp_time:
+		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time * 100.0
+		gain_str = "PN: %.0f (%.0f%%)" % [display_gain, ramp_progress]
+	else:
+		gain_str = "PN: %.0f" % display_gain
+	
+	print("%s: %.1f km/s | Tgt: %.1f km | Int: %.1f km | Err: %.1f° | %s | %s | %s | %s" % 
+		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, tof_str, tti_str, err_rate_str, gain_str])
 
 func check_world_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
@@ -539,32 +471,30 @@ func check_world_bounds():
 		mark_for_destruction("out_of_bounds")
 
 func _on_area_entered(area: Area2D):
-	print("COLLISION DEBUG [%s]: _on_area_entered triggered!" % torpedo_id)
-	print("  - Collided with: %s" % area.name)
-	print("  - Area groups: %s" % area.get_groups())
-	print("  - Area faction: %s" % area.get("faction"))
+	print("COLLISION [%s]: Hit %s!" % [torpedo_id, area.name])
 	
 	if marked_for_death or not is_alive:
-		print("  - Torpedo already dead, ignoring collision")
 		return
 	
 	if area.is_in_group("ships"):
-		print("  - Target is a ship!")
 		if area.get("faction") == faction:
-			print("  - Same faction (%s), ignoring" % faction)
 			return
 		
-		print("COLLISION SUCCESS [%s]: HIT TARGET %s!" % [torpedo_id, area.name])
-		print("  - Impact at: %.1f km distance" % closest_approach_distance)
+		# Calculate angle between velocity and orientation
+		var velocity_angle = velocity_mps.angle()
+		var torpedo_angle = rotation - PI/2  # Convert from Godot rotation to angle
+		var velocity_orientation_diff = rad_to_deg(atan2(sin(velocity_angle - torpedo_angle), cos(velocity_angle - torpedo_angle)))
+		
+		print("SUCCESS [%s]: HIT TARGET %s!" % [torpedo_id, area.name])
+		print("  - Impact at: %.1f km" % (closest_approach_distance / 1000.0))
 		print("  - Impact time: %.1fs" % time_since_launch)
 		print("  - Impact speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
+		print("  - Velocity/Orientation angle: %.1f°" % velocity_orientation_diff)
 		
 		if area.has_method("mark_for_destruction"):
 			area.mark_for_destruction("torpedo_impact")
 		
 		mark_for_destruction("target_impact")
-	else:
-		print("  - Not a ship, ignoring")
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
@@ -573,20 +503,16 @@ func mark_for_destruction(reason: String):
 	marked_for_death = true
 	is_alive = false
 	
-	# Log destruction with detailed info
+	# Log destruction
 	if reason == "out_of_bounds" and closest_approach_distance < INF:
 		var closest_km = closest_approach_distance / 1000.0
-		print("DESTRUCTION [%s]: %s | CLOSEST APPROACH: %.3f km (%.1f m) at %.1fs" % 
-			[torpedo_id, reason, closest_km, closest_approach_distance, closest_approach_time])
+		print("DESTRUCTION [%s]: %s | Closest: %.3f km at %.1fs" % 
+			[torpedo_id, reason, closest_km, closest_approach_time])
 		
-		# If we got very close but still "missed", it's probably a collision bug
 		if closest_approach_distance < 100.0:
-			print("  - WARNING: Very close approach but no collision detected!")
-			print("  - This suggests collision shapes may be too small or misaligned")
+			print("  - WARNING: Very close approach but no collision!")
 	elif reason == "target_impact":
 		print("DESTRUCTION [%s]: SUCCESSFUL IMPACT!" % torpedo_id)
-		print("  - Final distance: %.1f m" % closest_approach_distance)
-		print("  - Impact time: %.1fs" % time_since_launch)
 	else:
 		print("DESTRUCTION [%s]: %s" % [torpedo_id, reason])
 	
@@ -598,14 +524,16 @@ func mark_for_destruction(reason: String):
 	var collision = get_node_or_null("CollisionShape2D")
 	if collision:
 		collision.disabled = true
-		print("  - Collision shape disabled for cleanup")
 	
 	queue_free()
 
 # Public interface
 func set_target(target: Node2D):
 	target_node = target
-	print("  - Target set: %s" % target_node.name if target_node else "null")
+	var target_name = "null"
+	if target_node:
+		target_name = target_node.name
+	print("  - Target set: %s" % target_name)
 
 func set_launcher(launcher_ship: Node2D):
 	if "faction" in launcher_ship:
@@ -615,31 +543,7 @@ func set_launcher(launcher_ship: Node2D):
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
 
-func get_collision_debug_info() -> Dictionary:
-	"""Returns detailed collision debugging information"""
-	var info = {
-		"torpedo_id": torpedo_id,
-		"alive": is_alive,
-		"marked_for_death": marked_for_death,
-		"has_target": target_node != null,
-		"closest_approach_m": closest_approach_distance,
-		"current_distance_m": INF,
-		"overlapping_areas": []
-	}
-	
-	if target_node and is_instance_valid(target_node):
-		info.current_distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-	
-	for area in get_overlapping_areas():
-		info.overlapping_areas.append({
-			"name": area.name,
-			"faction": area.get("faction"),
-			"groups": area.get_groups()
-		})
-	
-	return info
-
-# Compatibility
+# Compatibility stubs for old interface
 func set_launch_side(_side: int):
 	pass
 
