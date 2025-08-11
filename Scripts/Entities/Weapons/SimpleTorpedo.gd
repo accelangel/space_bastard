@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - Simplified Straight-Line PN Version
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - Simplified Straight-Line PN Version with I-term
 extends Area2D
 
 # Static counter for sequential torpedo naming
@@ -9,9 +9,14 @@ static var torpedo_counter: int = 0
 @export var max_turn_rate: float = 1080.0     # degrees/second (3 full rotations)
 
 # Adaptive Proportional Navigation parameters
-@export var gain_scale_factor: float = 5.0    # Base gain scaling factor
+@export var gain_scale_factor: float = 30.0    # Base gain scaling factor (was 5.0, then 15.0, now 30.0)
 @export var min_gain: float = 1.0             # Minimum PN gain
 @export var max_gain_multiplier: float = 100.0 # Max gain = sqrt(range_km) * this
+
+## PID augmentation parameters
+#@export var derivative_damping: float = 0.75  # D-term coefficient
+#@export var integral_gain: float = 0.5       # I-term gain (start conservative)
+#@export var integral_max: float = 1.0         # Anti-windup limit
 
 # Trajectory parameters
 @export var trajectory_points: int = 50       # Points for visualization
@@ -41,6 +46,10 @@ var current_gain: float = 1.0                 # THE single source of truth for g
 var last_los_angle: float = 0.0
 var last_heading_error: float = 0.0
 var error_rate: float = 0.0
+
+## I-term state (NEW!)
+#var error_integral: float = 0.0               # Accumulated error over time
+#var integral_enabled: bool = true             # Can disable for testing
 
 # Tracking statistics
 var closest_approach_distance: float = INF
@@ -75,7 +84,7 @@ func _ready():
 	set_meta("entity_type", "torpedo")
 	
 	# Collision setup logging
-	print("Torpedo %s launched - ADAPTIVE PN GUIDANCE" % torpedo_id)
+	print("Torpedo %s launched - ADAPTIVE PN GUIDANCE with I-term" % torpedo_id)
 	print("  - Faction: %s" % faction)
 	print("  - Groups: %s" % get_groups())
 	
@@ -97,7 +106,7 @@ func _ready():
 	area_entered.connect(_on_area_entered)
 	
 	# Initialize adaptive gain system will happen when target is set
-	print("  - Gain: Adaptive system based on engagement range")
+	print("  - Gain: Adaptive system with PID augmentation")
 	
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
@@ -181,9 +190,9 @@ func calculate_adaptive_gain() -> float:
 	
 	# Additional error magnitude limiting - reduce gain if error is too large
 	var heading_error_deg = rad_to_deg(abs(last_heading_error))
-	if heading_error_deg > 1.0:
-		# Reduce gain proportionally when error exceeds 1 degree
-		var error_factor = 1.0 / heading_error_deg  # 1° = 100%, 2° = 50%, etc.
+	if heading_error_deg > 2.0:  # Raised threshold from 1.0 to 2.0
+		# Reduce gain proportionally when error exceeds 2 degrees
+		var error_factor = 2.0 / heading_error_deg  # 2° = 100%, 4° = 50%, etc.
 		var old_gain = phase_gain
 		phase_gain *= clamp(error_factor, 0.3, 1.0)  # Don't reduce by more than 70%
 		
@@ -363,18 +372,24 @@ func calculate_time_to_impact() -> float:
 	return distance_meters / closing_velocity
 
 func apply_pn_guidance(delta):
-	"""Apply Proportional Navigation to track the intercept point"""
+	"""Apply Proportional Navigation with PID augmentation to track the intercept point"""
 	
 	if not target_node or not is_instance_valid(target_node):
 		return
 	
-	# Calculate heading error first (needed for error rate)
+	# Calculate heading error first (needed for error rate and I-term)
 	var los_vector = intercept_point - global_position
 	var desired_heading = los_vector.angle()
 	var current_heading = rotation - PI/2
 	var heading_error = atan2(sin(desired_heading - current_heading), cos(desired_heading - current_heading))
 	
-	# Calculate error growth rate
+	## I-TERM: Accumulate error over time (NEW!)
+	#if integral_enabled:
+		#error_integral += heading_error * delta
+		## Anti-windup: prevent integral from growing too large
+		#error_integral = clamp(error_integral, -integral_max, integral_max)
+	
+	# Calculate error growth rate (for D-term)
 	if last_heading_error != 0.0:  # Skip first frame
 		error_rate = rad_to_deg(heading_error - last_heading_error) / delta
 	last_heading_error = heading_error
@@ -395,7 +410,7 @@ func apply_pn_guidance(delta):
 	# Proportional Navigation law with THE current gain
 	var commanded_turn_rate = current_gain * los_rate
 	
-	# Heading correction - now scales with PN gain for better authority
+	# P-TERM: Heading correction - scales with PN gain for better authority
 	var time_to_impact = calculate_time_to_impact()
 	var heading_correction_gain = 3.0 + (current_gain * 0.02)  # Scales with PN gain
 	if time_to_impact < 10.0:
@@ -403,9 +418,12 @@ func apply_pn_guidance(delta):
 		heading_correction_gain = 5.0 + (current_gain * 0.03)
 	commanded_turn_rate += heading_error * heading_correction_gain
 	
-	# Derivative damping - resist error growth
-	var error_damping = deg_to_rad(error_rate) * 0.5  # Convert error_rate from deg/s to rad/s
-	commanded_turn_rate -= error_damping  # Oppose the direction of error growth
+	## I-TERM: Add integral correction (NEW!)
+	#commanded_turn_rate += error_integral * integral_gain
+	
+	## D-TERM: Derivative damping - resist error growth
+	#var error_damping = deg_to_rad(error_rate) * derivative_damping  # Using export variable
+	#commanded_turn_rate -= error_damping  # Oppose the direction of error growth
 	
 	# Apply turn rate limits
 	commanded_turn_rate = clamp(commanded_turn_rate, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
@@ -470,15 +488,18 @@ func update_debug_output():
 	# Format gain string - now just shows the current adaptive gain
 	var gain_str = "PN: %.0f" % current_gain
 	
+	## Add I-term value (NEW!)
+	#var i_str = "I: %.2f" % error_integral
+	
 	# Calculate progress for additional debug info
 	var current_distance_meters = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
 	var progress = 1.0 - (current_distance_meters / initial_target_distance)
 	if abs(progress - last_logged_progress) > 0.1:  # Log phase changes
-		var phase = "Launch" if progress < 0.05 else "Mid-course" if progress < 0.85 else "Terminal"
+		var phase = "Launch" if progress < 0.05 else "Mid-course" if progress < 0.70 else "Terminal"
 		print("%s: Entering %s phase (%.0f%% complete)" % [torpedo_id, phase, progress * 100])
 		last_logged_progress = progress
 	
-	# REORDERED: Err, ΔErr, PN together, then ToF and TTI at the end
+	# Updated debug output with I-term
 	print("%s: %.1f km/s | Tgt: %.1f km | Int: %.1f km | Err: %.1f° | %s | %s | %s | %s" % 
 		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, err_rate_str, gain_str, tof_str, tti_str])
 
@@ -507,6 +528,7 @@ func _on_area_entered(area: Area2D):
 		print("  - Impact time: %.1fs" % time_since_launch)
 		print("  - Impact speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
 		print("  - Velocity/Orientation angle: %.1f°" % velocity_orientation_diff)
+		#print("  - Final integral value: %.3f" % error_integral)  # NEW!
 		
 		if area.has_method("mark_for_destruction"):
 			area.mark_for_destruction("torpedo_impact")
