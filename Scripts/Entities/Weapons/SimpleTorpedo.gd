@@ -1,15 +1,17 @@
 # Scripts/Entities/Weapons/SimpleTorpedo.gd - Simplified Straight-Line PN Version
 extends Area2D
 
+# Static counter for sequential torpedo naming
+static var torpedo_counter: int = 0
+
 # Core parameters
 @export var acceleration: float = 980.0       # 100G forward thrust
 @export var max_turn_rate: float = 1080.0     # degrees/second (3 full rotations)
 
-# Proportional Navigation with gain scheduling
-@export var navigation_constant_initial: float = 1.0  # N value at launch
-@export var navigation_constant_final: float = 500.0  # N value after ramp-up
-@export var gain_hold_time: float = 3.0       # Hold initial gain for this long
-@export var gain_ramp_time: float = 15.0      # Ramp up over this duration
+# Adaptive Proportional Navigation parameters
+@export var gain_scale_factor: float = 5.0    # Base gain scaling factor
+@export var min_gain: float = 1.0             # Minimum PN gain
+@export var max_gain_multiplier: float = 100.0 # Max gain = sqrt(range_km) * this
 
 # Trajectory parameters
 @export var trajectory_points: int = 50       # Points for visualization
@@ -31,12 +33,14 @@ var marked_for_death: bool = false
 
 # Trajectory state
 var intercept_point: Vector2 = Vector2.ZERO
+var initial_target_distance: float = 0.0      # Store initial range for scaling
+var expected_flight_time: float = 0.0         # Estimated total flight time
 
 # PN state
+var current_gain: float = 1.0                 # THE single source of truth for gain
 var last_los_angle: float = 0.0
 var last_heading_error: float = 0.0
 var error_rate: float = 0.0
-var terminal_reduction_logged: bool = false
 
 # Tracking statistics
 var closest_approach_distance: float = INF
@@ -52,14 +56,15 @@ var trajectory_line: Line2D = null
 
 # Debug tracking
 var last_debug_print: float = 0.0
-var initial_gain_logged: bool = false
-var max_gain_logged: bool = false
-var last_gain_phase: String = "initial"
+var last_logged_progress: float = -1.0
+var last_error_reduction_logged: float = 0.0
 
 func _ready():
 	Engine.max_fps = 60
 	
-	torpedo_id = "T%d" % [get_instance_id() % 10000]  # Shorter ID for cleaner logs
+	# Generate sequential torpedo ID
+	torpedo_counter += 1
+	torpedo_id = "Torp_%d" % torpedo_counter
 	print("  - Initial rotation: %.1f degrees" % rad_to_deg(rotation))
 	
 	add_to_group("torpedoes")
@@ -70,7 +75,7 @@ func _ready():
 	set_meta("entity_type", "torpedo")
 	
 	# Collision setup logging
-	print("Torpedo %s launched - STRAIGHT-LINE PN GUIDANCE" % torpedo_id)
+	print("Torpedo %s launched - ADAPTIVE PN GUIDANCE" % torpedo_id)
 	print("  - Faction: %s" % faction)
 	print("  - Groups: %s" % get_groups())
 	
@@ -91,9 +96,8 @@ func _ready():
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
-	# Log gain scheduling
-	print("  - Gain: N=%.1f initial, ramping to N=%.1f over %.1f-%.1fs" % 
-		[navigation_constant_initial, navigation_constant_final, gain_hold_time, gain_hold_time + gain_ramp_time])
+	# Initialize adaptive gain system will happen when target is set
+	print("  - Gain: Adaptive system based on engagement range")
 	
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
@@ -111,15 +115,89 @@ func setup_trajectory_line():
 		trajectory_line.z_index = 5
 		trajectory_line.top_level = true
 
-func get_current_navigation_constant() -> float:
-	"""Calculate the current navigation constant based on time since launch"""
-	if time_since_launch <= gain_hold_time:
-		return navigation_constant_initial
-	elif time_since_launch <= gain_hold_time + gain_ramp_time:
-		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time
-		return lerp(navigation_constant_initial, navigation_constant_final, ramp_progress)
-	else:
-		return navigation_constant_final
+func calculate_adaptive_gain() -> float:
+	"""Single unified gain calculation - THE source of truth for PN gain"""
+	if not target_node or not is_instance_valid(target_node):
+		return min_gain
+	
+	# Get current state
+	var current_distance = global_position.distance_to(target_node.global_position)
+	var current_distance_meters = current_distance * WorldSettings.meters_per_pixel
+	var current_speed = velocity_mps.length()
+	var time_to_impact = calculate_time_to_impact()
+	
+	# Calculate dimensionless progress (0 at launch, 1 at impact)
+	var progress = 1.0 - (current_distance_meters / initial_target_distance)
+	progress = clamp(progress, 0.0, 1.0)
+	
+	# Calculate base gain scaled to engagement range
+	var range_km = initial_target_distance / 1000.0
+	var base_gain = sqrt(range_km) * gain_scale_factor
+	base_gain = clamp(base_gain, min_gain, sqrt(range_km) * max_gain_multiplier)
+	
+	# Three-phase gain profile
+	var phase_gain: float
+	
+	if progress < 0.05:  # First 5% of flight - Launch phase
+		# Gentle ramp up to avoid oscillations (but stronger than before)
+		phase_gain = min_gain + (base_gain - min_gain) * (progress / 0.05) * 0.6  # Was 0.3
+		
+	elif progress < 0.70:  # 5-70% of flight - Mid-course phase (was 80%)
+		# Full gain, scaled by velocity ratio for stability
+		var expected_speed = acceleration * time_since_launch  # Rough estimate
+		var velocity_factor = clamp(current_speed / expected_speed, 0.5, 2.0)
+		phase_gain = base_gain * velocity_factor
+		
+	else:  # Final 30% of flight - Terminal phase (was 20%)
+		# More gradual taper based on time to impact
+		var terminal_factor: float
+		if time_to_impact > 30.0:
+			terminal_factor = 1.0
+		elif time_to_impact > 20.0:
+			# Very gradual reduction from 30s to 20s
+			terminal_factor = 0.7 + 0.3 * ((time_to_impact - 20.0) / 10.0)
+		elif time_to_impact > 10.0:
+			# Gradual reduction from 20s to 10s
+			terminal_factor = 0.4 + 0.3 * ((time_to_impact - 10.0) / 10.0)
+		elif time_to_impact > 5.0:
+			# Steeper reduction from 10s to 5s
+			terminal_factor = 0.15 + 0.25 * ((time_to_impact - 5.0) / 5.0)
+		elif time_to_impact > 2.0:
+			# Significant reduction from 5s to 2s
+			terminal_factor = 0.05 + 0.10 * ((time_to_impact - 2.0) / 3.0)
+		else:
+			# Minimal gain in final 2 seconds
+			terminal_factor = 0.02 + 0.03 * (time_to_impact / 2.0)
+		
+		phase_gain = base_gain * terminal_factor
+	
+	# Apply error-based damping (always active, not just terminal)
+	if abs(error_rate) > 5.0:  # Rapid oscillation
+		phase_gain *= 0.3
+	elif abs(error_rate) > 2.0:  # Moderate oscillation
+		phase_gain *= 0.6
+	elif abs(error_rate) > 1.0:  # Light oscillation
+		phase_gain *= 0.85
+	
+	# Additional error magnitude limiting - reduce gain if error is too large
+	var heading_error_deg = rad_to_deg(abs(last_heading_error))
+	if heading_error_deg > 1.0:
+		# Reduce gain proportionally when error exceeds 1 degree
+		var error_factor = 1.0 / heading_error_deg  # 1° = 100%, 2° = 50%, etc.
+		var old_gain = phase_gain
+		phase_gain *= clamp(error_factor, 0.3, 1.0)  # Don't reduce by more than 70%
+		
+		# Log significant error-based reductions (only once per second)
+		var current_time = Time.get_ticks_msec() / 1000.0
+		if current_time - last_error_reduction_logged > 1.0:
+			print("%s: ERROR LIMITING - %.1f° error, gain %.0f -> %.0f" % 
+				[torpedo_id, heading_error_deg, old_gain, phase_gain])
+			last_error_reduction_logged = current_time
+	
+	# Ensure minimum gain
+	phase_gain = max(phase_gain, min_gain)
+	
+	return phase_gain
 
 func _physics_process(delta):
 	if marked_for_death or not is_alive or not target_node:
@@ -128,6 +206,15 @@ func _physics_process(delta):
 	if not is_instance_valid(target_node):
 		mark_for_destruction("lost_target")
 		return
+	
+	# Initialize on first frame when we're actually positioned
+	if initial_target_distance <= 0 and target_node:
+		initial_target_distance = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+		expected_flight_time = sqrt(2.0 * initial_target_distance / acceleration)
+		var range_km = initial_target_distance / 1000.0
+		var base_gain = sqrt(range_km) * gain_scale_factor
+		base_gain = clamp(base_gain, min_gain, sqrt(range_km) * max_gain_multiplier)
+		print("%s: Initialized at launch - range %.1f km, base gain %.1f" % [torpedo_id, range_km, base_gain])
 	
 	# Update time tracking
 	time_since_launch += delta
@@ -292,66 +379,10 @@ func apply_pn_guidance(delta):
 		error_rate = rad_to_deg(heading_error - last_heading_error) / delta
 	last_heading_error = heading_error
 	
-	# Get base navigation constant based on time
-	var current_nav_constant = get_current_navigation_constant()
+	# SINGLE SOURCE OF TRUTH: Calculate gain once per frame
+	current_gain = calculate_adaptive_gain()
 	
-	# Error rate-based gain reduction for terminal phase
-	var time_to_impact = calculate_time_to_impact()
-	
-	# More aggressive terminal reduction based on both error magnitude AND rate
-	if time_to_impact < 30.0:
-		var should_reduce = false
-		var reduction_reason = ""
-		
-		# Check for rapid error growth
-		if abs(error_rate) > 3.0:  # Reduced from 5.0
-			should_reduce = true
-			reduction_reason = "rapid error rate %.1f°/s" % error_rate
-		# Check for accumulated error in terminal phase
-		elif time_to_impact < 10.0 and abs(rad_to_deg(heading_error)) > 1.0:  # Reduced from 1.5
-			should_reduce = true
-			reduction_reason = "terminal error %.1f°" % rad_to_deg(heading_error)
-		# Check for slow but steady error growth - MORE AGGRESSIVE
-		elif error_rate > 0.1 and abs(rad_to_deg(heading_error)) > 0.8:  # Reduced from 0.2 and 1.0
-			should_reduce = true
-			reduction_reason = "error creep %.1f° at %.2f°/s" % [rad_to_deg(heading_error), error_rate]
-		
-		if should_reduce:
-			var old_gain = current_nav_constant
-			# More aggressive reduction based on how bad things are
-			var terminal_gain = 5.0  # Reduced from 10.0
-			if abs(error_rate) > 10.0:
-				terminal_gain = 2.0  # Reduced from 5.0
-			elif time_to_impact < 3.0:
-				terminal_gain = 3.0  # Very low gain in final seconds
-			
-			# More aggressive reduction factor
-			var error_factor = clamp(abs(rad_to_deg(heading_error)) / 2.0, 0.5, 1.0)  # Changed from /3.0 to /2.0
-			current_nav_constant = lerp(current_nav_constant, terminal_gain, error_factor)
-			
-			# Log only significant reductions, and only once
-			if not terminal_reduction_logged and old_gain / current_nav_constant > 1.5:  # Reduced from 2
-				print("%s: TERMINAL REDUCTION - %s, gain %.0f -> %.0f" % 
-					[torpedo_id, reduction_reason, old_gain, current_nav_constant])
-				terminal_reduction_logged = true
-	
-	# Log gain phase changes (for initial ramp-up)
-	if time_since_launch <= gain_hold_time:
-		if not initial_gain_logged:
-			print("%s: Initial gain N=%.1f" % [torpedo_id, current_nav_constant])
-			initial_gain_logged = true
-	elif time_since_launch <= gain_hold_time + gain_ramp_time:
-		if last_gain_phase == "initial":
-			print("%s: Starting gain ramp-up from %.1f to %.1f" % 
-				[torpedo_id, navigation_constant_initial, navigation_constant_final])
-		last_gain_phase = "ramping"
-	else:
-		if not max_gain_logged and last_gain_phase != "max":
-			print("%s: Max gain reached N=%.1f" % [torpedo_id, navigation_constant_final])
-			max_gain_logged = true
-		last_gain_phase = "max"
-	
-	# Calculate LOS angle (already have los_vector from earlier)
+	# Calculate LOS angle
 	var los_angle = los_vector.angle()
 	
 	# Calculate LOS rate for PN
@@ -361,14 +392,20 @@ func apply_pn_guidance(delta):
 		los_rate = angle_diff / delta
 	last_los_angle = los_angle
 	
-	# Proportional Navigation law
-	var commanded_turn_rate = current_nav_constant * los_rate
+	# Proportional Navigation law with THE current gain
+	var commanded_turn_rate = current_gain * los_rate
 	
-	# Heading correction - more aggressive in terminal phase
-	var heading_correction_gain = 3.0
+	# Heading correction - now scales with PN gain for better authority
+	var time_to_impact = calculate_time_to_impact()
+	var heading_correction_gain = 3.0 + (current_gain * 0.02)  # Scales with PN gain
 	if time_to_impact < 10.0:
-		heading_correction_gain = 5.0  # More aggressive heading correction near impact
+		# Even more aggressive in terminal phase
+		heading_correction_gain = 5.0 + (current_gain * 0.03)
 	commanded_turn_rate += heading_error * heading_correction_gain
+	
+	# Derivative damping - resist error growth
+	var error_damping = deg_to_rad(error_rate) * 0.5  # Convert error_rate from deg/s to rad/s
+	commanded_turn_rate -= error_damping  # Oppose the direction of error growth
 	
 	# Apply turn rate limits
 	commanded_turn_rate = clamp(commanded_turn_rate, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
@@ -427,43 +464,23 @@ func update_debug_output():
 	# Format error rate
 	var err_rate_str = "ΔErr: %.1f°/s" % error_rate
 	
-	# Get current gain (AFTER any terminal reduction)
-	var display_gain = get_current_navigation_constant()
-	
-	# Apply same terminal reduction logic for display
-	if tti < 30.0:
-		var should_reduce_display = false
-		if abs(error_rate) > 3.0:
-			should_reduce_display = true
-		elif tti < 10.0 and abs(heading_error) > 1.0:
-			should_reduce_display = true
-		elif error_rate > 0.1 and abs(heading_error) > 0.8:
-			should_reduce_display = true
-			
-		if should_reduce_display:
-			var terminal_gain = 5.0
-			if abs(error_rate) > 10.0:
-				terminal_gain = 2.0
-			elif tti < 3.0:
-				terminal_gain = 3.0
-			var error_factor = clamp(abs(heading_error) / 2.0, 0.5, 1.0)
-			display_gain = lerp(display_gain, terminal_gain, error_factor)
-	
 	# Add time of flight
 	var tof_str = "ToF: %.1fs" % time_since_launch
 	
-	# Format: "T1: 102.8 km/s | Tgt: 221.7 km | Int: 222.9 km | Err: 2.7° | ToF: 10.2s | TTI: 2.2s | ΔErr: 5.1°/s | PN: 50"
-	var gain_str = ""
-	if time_since_launch <= gain_hold_time:
-		gain_str = "PN: %.0f" % display_gain
-	elif time_since_launch <= gain_hold_time + gain_ramp_time:
-		var ramp_progress = (time_since_launch - gain_hold_time) / gain_ramp_time * 100.0
-		gain_str = "PN: %.0f (%.0f%%)" % [display_gain, ramp_progress]
-	else:
-		gain_str = "PN: %.0f" % display_gain
+	# Format gain string - now just shows the current adaptive gain
+	var gain_str = "PN: %.0f" % current_gain
 	
+	# Calculate progress for additional debug info
+	var current_distance_meters = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+	var progress = 1.0 - (current_distance_meters / initial_target_distance)
+	if abs(progress - last_logged_progress) > 0.1:  # Log phase changes
+		var phase = "Launch" if progress < 0.05 else "Mid-course" if progress < 0.85 else "Terminal"
+		print("%s: Entering %s phase (%.0f%% complete)" % [torpedo_id, phase, progress * 100])
+		last_logged_progress = progress
+	
+	# REORDERED: Err, ΔErr, PN together, then ToF and TTI at the end
 	print("%s: %.1f km/s | Tgt: %.1f km | Int: %.1f km | Err: %.1f° | %s | %s | %s | %s" % 
-		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, tof_str, tti_str, err_rate_str, gain_str])
+		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, err_rate_str, gain_str, tof_str, tti_str])
 
 func check_world_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
@@ -533,7 +550,11 @@ func set_target(target: Node2D):
 	var target_name = "null"
 	if target_node:
 		target_name = target_node.name
-	print("  - Target set: %s" % target_name)
+		print("  - Target set: %s" % target_name)
+		# Initial distance will be calculated on first physics frame
+		# when torpedo is actually positioned
+	else:
+		print("  - Target set: %s" % target_name)
 
 func set_launcher(launcher_ship: Node2D):
 	if "faction" in launcher_ship:
