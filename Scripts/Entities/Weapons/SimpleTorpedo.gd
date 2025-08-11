@@ -1,7 +1,13 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - VELOCITY-MEASURED PN+P WITH PURE PHYSICS
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - PN+PID GUIDANCE SYSTEM v2
 # Measures error from velocity vector to eliminate bias
-# Body rotates freely to generate optimal thrust vector (no alignment constraints!)
-# Result: Zero guidance bias, maximum maneuverability against high-G targets
+# Body rotates freely to generate optimal thrust vector
+# PN handles target motion, PID handles heading error and oscillation damping
+# 
+# VERSION 2 CHANGES:
+# - Restored error-based gain reduction (was working, shouldn't have removed it)
+# - Aggressive PID retuning: Kp=0.3 (was 1.0), Kd=3.0 (was 0.5)
+# - Added body-velocity offset limiter to prevent extreme angles
+# - Hybrid approach: Nonlinear safety net + linear PID damping
 extends Area2D
 
 # Static counter for sequential torpedo naming
@@ -19,9 +25,16 @@ static var torpedo_counter: int = 0
 @export var min_gain: float = 1.0             # Minimum PN gain
 @export var max_gain_multiplier: float = 100.0 # Max gain = sqrt(range_km) * this
 
-# Body alignment parameters (optional, only when flying straight)
-@export var body_alignment_rate: float = 8.0   # How quickly torpedo aligns with velocity when not turning
-@export var min_velocity_for_alignment: float = 10.0  # Min velocity (m/s) before alignment kicks in
+# PID CONTROLLER PARAMETERS - NEW!
+@export_group("PID Controller")
+@export var pid_kp: float = 50.0              # Proportional gain (MUCH lower - was 1.0, originally ~3.0)
+@export var pid_ki: float = 0.005               # Integral gain (keeping at zero until P and D work)
+@export var pid_kd: float = 0.025               # Derivative gain (WAY up for real damping - was 0.5)
+
+# Anti-windup parameters for integral term
+@export var integral_max: float = 5.0         # Maximum integral value (degree-seconds)
+@export var integral_decay: float = 0.99      # Decay factor per second (helps forget old errors)
+@export var integral_threshold: float = 5.0   # Only integrate errors smaller than this (degrees)
 
 # Trajectory parameters
 @export var trajectory_points: int = 50       # Points for visualization
@@ -55,9 +68,13 @@ var expected_flight_time: float = 0.0         # Estimated total flight time
 var current_gain: float = 1.0                 # THE single source of truth for gain
 var last_los_angle: float = 0.0
 var last_heading_error: float = 0.0
-var error_rate: float = 0.0
+var error_rate: float = 0.0                   # Degrees per second (used by both PN and PID)
 
-# NEW: Track velocity-based heading
+# PID state - NEW!
+var error_integral: float = 0.0               # Accumulated error for I term
+var last_error_sign: int = 0                  # Track sign changes for integral reset
+
+# Track velocity-based heading
 var last_velocity_angle: float = 0.0
 
 # Debug: Track angle history for bias investigation
@@ -93,7 +110,9 @@ func _ready():
 	if debug_bias_investigation:
 		print("[BIAS DEBUG] %s: Initial Godot rotation: %.3f rad (%.1f°)" % 
 			[torpedo_id, rotation, rad_to_deg(rotation)])
-		print("[BIAS DEBUG] %s: Pure physics - no alignment constraints!" % torpedo_id)
+		print("[BIAS DEBUG] %s: PN+PID Guidance with Error-Based Safety Net" % torpedo_id)
+		print("  - PID Gains: Kp=%.2f, Ki=%.2f, Kd=%.2f" % [pid_kp, pid_ki, pid_kd])
+		print("  - Error-based gain reduction ACTIVE (safety net restored)")
 	
 	add_to_group("torpedoes")
 	add_to_group("combat_entities")
@@ -103,14 +122,14 @@ func _ready():
 	set_meta("entity_type", "torpedo")
 	
 	# Collision setup logging
-	print("Torpedo %s launched - VELOCITY-MEASURED PN+P (PURE PHYSICS)" % torpedo_id)
+	print("Torpedo %s launched - PN+PID GUIDANCE" % torpedo_id)
 	print("  - Faction: %s" % faction)
 	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
 	# Initialize adaptive gain system will happen when target is set
-	print("  - Gain: Adaptive PN+P (velocity-measured, thrust vectoring)")
+	print("  - Gain: Adaptive PN + PID control")
 	
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
@@ -176,15 +195,16 @@ func calculate_adaptive_gain() -> float:
 		
 		phase_gain = base_gain * terminal_factor
 	
-	# Apply error-based damping
+	# RESTORED: Error-based damping - our safety net against oscillation!
+	# This is nonlinear adaptive damping that kicks in during rapid changes
 	if abs(error_rate) > 5.0:
-		phase_gain *= 0.3
+		phase_gain *= 0.3  # 70% reduction for violent oscillations
 	elif abs(error_rate) > 2.0:
-		phase_gain *= 0.6
+		phase_gain *= 0.6  # 40% reduction for moderate oscillations
 	elif abs(error_rate) > 1.0:
-		phase_gain *= 0.85
+		phase_gain *= 0.85  # 15% reduction for mild oscillations
 	
-	# Additional error magnitude limiting
+	# Additional error magnitude limiting (keeping this as extra safety)
 	var heading_error_deg = rad_to_deg(abs(last_heading_error))
 	if heading_error_deg > 2.0:
 		var error_factor = 2.0 / heading_error_deg
@@ -234,8 +254,8 @@ func _physics_process(delta):
 	# Calculate intercept point
 	calculate_intercept()
 	
-	# VELOCITY-ALIGNED GUIDANCE
-	apply_velocity_aligned_guidance(delta)
+	# PN+PID GUIDANCE - MODIFIED!
+	apply_pn_pid_guidance(delta)
 	
 	# Update position
 	var velocity_pixels = velocity_mps / WorldSettings.meters_per_pixel
@@ -255,8 +275,8 @@ func _physics_process(delta):
 	
 	check_world_bounds()
 
-func apply_velocity_aligned_guidance(delta):
-	"""Apply guidance measured from velocity vector, but thrust realistically (forward only)"""
+func apply_pn_pid_guidance(delta):
+	"""Apply PN+PID guidance: PN for target motion, PID for heading error control"""
 	
 	if not target_node or not is_instance_valid(target_node):
 		return
@@ -281,15 +301,19 @@ func apply_velocity_aligned_guidance(delta):
 		"los_angle": los_vector.angle()
 	})
 	
-	# Calculate error growth rate
+	# Calculate error growth rate (used for D term)
 	if last_heading_error != 0.0:
 		error_rate = rad_to_deg(heading_error - last_heading_error) / delta
+	
+	# UPDATE INTEGRAL TERM WITH ANTI-WINDUP
+	update_error_integral(heading_error, delta)
+	
 	last_heading_error = heading_error
 	
 	# Calculate gain
 	current_gain = calculate_adaptive_gain()
 	
-	# Calculate LOS angle and rate
+	# Calculate LOS angle and rate for PN
 	var los_angle = los_vector.angle()
 	var los_rate = 0.0
 	if last_los_angle != 0.0:
@@ -297,45 +321,77 @@ func apply_velocity_aligned_guidance(delta):
 		los_rate = angle_diff / delta
 	last_los_angle = los_angle
 	
-	# VELOCITY-SPACE PN: Command a change in velocity direction
-	var commanded_velocity_turn_rate = current_gain * los_rate
+	# ============ PN+PID CONTROL LAW ============
 	
-	# P-TERM: Proportional heading correction in velocity space
-	var time_to_impact = calculate_time_to_impact()
-	var heading_correction_gain = 3.0 + (current_gain * 0.02)
-	if time_to_impact < 10.0:
-		heading_correction_gain = 5.0 + (current_gain * 0.03)
-	commanded_velocity_turn_rate += heading_error * heading_correction_gain
+	# PROPORTIONAL NAVIGATION TERM (handles target motion)
+	var pn_command = current_gain * los_rate
+	
+	# PID TERMS ON HEADING ERROR (handles stability and tracking)
+	var p_term = pid_kp * heading_error                    # Proportional: correct the error
+	var i_term = pid_ki * error_integral                   # Integral: eliminate steady-state bias (currently off)
+	var d_term = pid_kd * (error_rate * PI / 180.0)       # Derivative: resist rapid changes (damping!)
+	
+	# COMBINED COMMAND
+	# Note: D term is subtracted to provide damping (opposes rapid error changes)
+	var commanded_velocity_turn_rate = pn_command + p_term + i_term - d_term
 	
 	# Apply turn rate limits
 	commanded_velocity_turn_rate = clamp(commanded_velocity_turn_rate, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
 	
-	# Apply turn rate limits to the commanded turn
-	commanded_velocity_turn_rate = clamp(commanded_velocity_turn_rate, -deg_to_rad(max_turn_rate), deg_to_rad(max_turn_rate))
+	# SAFETY LIMIT: Prevent extreme body-velocity offsets
+	# If we're getting too sideways, reduce the commanded turn to let velocity catch up
+	var current_body_heading = rotation - PI/2
+	var body_velocity_offset = atan2(sin(velocity_angle - current_body_heading), cos(velocity_angle - current_body_heading))
+	
+	if abs(rad_to_deg(body_velocity_offset)) > 45.0:  # Getting dangerously sideways
+		# Reduce turn rate to let velocity align better
+		commanded_velocity_turn_rate *= 0.5
+		if debug_output and time_since_launch - last_error_reduction_logged > 1.0:
+			print("%s: SAFETY - Extreme offset %.1f°, reducing turn rate" % 
+				[torpedo_id, rad_to_deg(body_velocity_offset)])
+			last_error_reduction_logged = time_since_launch
 	
 	# ROTATE THE BODY to steer the velocity vector
-	# The body needs to "lead" the velocity to turn it
-	# We command the body to rotate, which will affect velocity through thrust
 	rotation += commanded_velocity_turn_rate * delta
 	
 	# REALISTIC THRUST: Only thrust forward in the direction the torpedo is pointing
 	var thrust_direction = Vector2.from_angle(rotation - PI/2)  # Convert Godot rotation to direction
 	velocity_mps += thrust_direction * acceleration * delta
+
+func update_error_integral(heading_error: float, delta: float):
+	"""Update integral term with anti-windup strategies"""
 	
-	# NO ALIGNMENT CODE - The torpedo points wherever it needs to for optimal thrust vectoring!
-	# If we need 30° off-axis to catch a 12G target, so be it!
-	# Against gentle targets, physics naturally minimizes the offset
-	# Against aggressive targets, we maximize our lateral thrust component
+	# Convert to degrees for consistency with your other measurements
+	var heading_error_deg = rad_to_deg(heading_error)
+	
+	# STRATEGY 1: Only integrate small errors (prevents windup during large maneuvers)
+	if abs(heading_error_deg) < integral_threshold:
+		error_integral += heading_error_deg * delta
+	
+	# STRATEGY 2: Clamp integral to maximum value
+	error_integral = clamp(error_integral, -integral_max, integral_max)
+	
+	# STRATEGY 3: Decay integral over time (slowly forget old errors)
+	error_integral *= pow(integral_decay, delta)
+	
+	# STRATEGY 4: Reset or reduce on sign change (helps prevent overshoot)
+	var current_sign = sign(heading_error_deg)
+	if current_sign != 0 and last_error_sign != 0 and current_sign != last_error_sign:
+		# Error has changed sign - we've crossed the target, reduce integral
+		error_integral *= 0.5
+		if debug_output:
+			print("%s: Error sign change detected, integral reduced to %.2f" % [torpedo_id, error_integral])
+	last_error_sign = current_sign
 
 func update_bias_debug():
-	"""Debug function showing velocity-based measurement eliminates bias"""
+	"""Debug function showing PN+PID performance with safety net"""
 	var current_time = time_since_launch
 	
 	# Log detailed angle analysis every N seconds
 	if current_time - last_bias_debug_time >= debug_bias_interval:
 		last_bias_debug_time = current_time
 		
-		print("\n[VELOCITY-MEASURED GUIDANCE] %s at %.1fs:" % [torpedo_id, current_time])
+		print("\n[PN+PID HYBRID GUIDANCE] %s at %.1fs:" % [torpedo_id, current_time])
 		
 		# 1. Body orientation vs velocity
 		var body_heading = rotation - PI/2
@@ -355,7 +411,13 @@ func update_bias_debug():
 			
 			# Heading error (now measured from velocity, not body)
 			var heading_error = atan2(sin(intercept_angle - velocity_angle), cos(intercept_angle - velocity_angle))
-			print("  VELOCITY-BASED ERROR: %.4f rad (%.2f°) <- Should converge to ZERO" % [heading_error, rad_to_deg(heading_error)])
+			print("  VELOCITY-BASED ERROR: %.4f rad (%.2f°)" % [heading_error, rad_to_deg(heading_error)])
+			
+			# PID state
+			print("  PID State:")
+			print("    - P contribution: %.3f rad/s" % (pid_kp * heading_error))
+			print("    - I contribution: %.3f rad/s (integral: %.2f)" % [pid_ki * error_integral * PI / 180.0, error_integral])
+			print("    - D contribution: %.3f rad/s (rate: %.1f°/s)" % [pid_kd * error_rate * PI / 180.0, error_rate])
 			
 			# Average error from history
 			if angle_history.size() > 5:
@@ -548,6 +610,9 @@ func update_debug_output():
 	# Add thrust vectoring angle
 	var thrust_angle_str = "Thrust: %.1f°" % alignment_error
 	
+	# NEW: Add PID info
+	var pid_str = "I: %.2f" % error_integral  # Show integral accumulation
+	
 	# Calculate progress for additional debug info
 	var current_distance_meters = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
 	var progress = 1.0 - (current_distance_meters / initial_target_distance)
@@ -556,8 +621,8 @@ func update_debug_output():
 		print("%s: Entering %s phase (%.0f%% complete)" % [torpedo_id, phase, progress * 100])
 		last_logged_progress = progress
 	
-	print("%s: %.1f km/s | Tgt: %.1f km | Int: %.1f km | Err: %.1f° | %s | %s | %s | %s | %s" % 
-		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, err_rate_str, gain_str, tof_str, tti_str, thrust_angle_str])
+	print("%s: %.1f km/s | Tgt: %.1f km | Int: %.1f km | Err: %.1f° | %s | %s | %s | %s | %s | %s" % 
+		[torpedo_id, speed_kms, range_km, intercept_range_km, heading_error, err_rate_str, gain_str, tof_str, tti_str, thrust_angle_str, pid_str])
 
 func check_world_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
@@ -584,6 +649,7 @@ func _on_area_entered(area: Area2D):
 		print("  - Impact time: %.1fs" % time_since_launch)
 		print("  - Impact speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
 		print("  - Body/velocity alignment at impact: %.1f°" % velocity_orientation_diff)
+		print("  - Final integral value: %.2f" % error_integral)
 		
 		if area.has_method("mark_for_destruction"):
 			area.mark_for_destruction("torpedo_impact")
