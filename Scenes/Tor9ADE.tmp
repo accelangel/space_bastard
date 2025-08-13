@@ -1,0 +1,54 @@
+[gd_scene load_steps=7 format=3 uid="uid://etp2naxkcn88"]
+
+[ext_resource type="Script" path="res://Scripts/Entities/Weapons/SimpleTorpedo.gd" id="1_30el6"]
+[ext_resource type="Texture2D" uid="uid://cy7ccql58dstn" path="res://Art/AnimatedTorpedo.png" id="1_cj81h"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nyo5r"]
+atlas = ExtResource("1_cj81h")
+region = Rect2(0, 0, 240, 848)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7amtq"]
+atlas = ExtResource("1_cj81h")
+region = Rect2(240, 0, 240, 848)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_i2lyk"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_nyo5r")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_7amtq")
+}],
+"loop": true,
+"name": &"default",
+"speed": 5.0
+}]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_1iiyw"]
+radius = 5.0
+height = 42.0
+
+[node name="Torpedo" type="Area2D"]
+script = ExtResource("1_30el6")
+acceleration = null
+turn_rate_deg_per_s = null
+error_threshold_deg = null
+terminal_phase_threshold = null
+terminal_alignment_threshold_deg = null
+intercept_iterations = null
+debug_output = null
+debug_interval = null
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+z_index = 10
+scale = Vector2(0.05, 0.05)
+sprite_frames = SubResource("SpriteFrames_i2lyk")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CapsuleShape2D_1iiyw")
+
+[node name="TrajectoryLine" type="Line2D" parent="."]
+width = 2.0
+default_color = Color(1, 0.647059, 0, 1)
+antialiased = true
