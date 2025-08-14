@@ -1,5 +1,5 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - CLEAN PID IMPLEMENTATION
-# Full PID control with proper debug management (1 Hz max output)
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - WITH ACCELERATION-AWARE INTERCEPT
+# Full PID control with proper phase separation and acceleration compensation
 extends Area2D
 
 # Static counter for sequential torpedo naming
@@ -16,6 +16,7 @@ static var torpedo_counter: int = 0
 
 @export_group("Launch Sequence")
 @export var launch_alignment_threshold_deg: float = 5.0  # Must align within this before thrust
+@export var intercept_delay: float = 0.5  # Seconds after thrust before using intercept calculations
 
 @export_group("PID Gains")
 @export var kp_gain: float = 2.0  # Proportional gain (fixed, no ramping)
@@ -47,6 +48,7 @@ static var torpedo_counter: int = 0
 var torpedo_id: String = ""
 var faction: String = "friendly"
 var target_node: Node2D = null
+var target_acceleration_gs: float = 0.0  # Store target's acceleration
 
 # Physics
 var velocity_mps: Vector2 = Vector2.ZERO
@@ -71,6 +73,7 @@ var current_kd: float = 0.0
 
 # Flight State
 var time_since_launch: float = 0.0
+var time_thrust_started: float = -1.0  # Track when thrust actually began
 var initial_distance_m: float = 0.0
 var is_terminal: bool = false
 var is_close_range: bool = false
@@ -153,6 +156,11 @@ func _ready():
 		heading_error = angle_wrap(to_target.angle() - initial_body_angle)
 		prev_heading_error = heading_error
 		
+		# Get target acceleration
+		if "acceleration_gs" in target_node:
+			target_acceleration_gs = target_node.acceleration_gs
+			print("  Target acceleration: %.1fG" % target_acceleration_gs)
+		
 		if debug_enabled:
 			print("  Initial aim: %.1f° (error: %.1f°)" % [rad_to_deg(to_target.angle()), rad_to_deg(heading_error)])
 
@@ -180,7 +188,7 @@ func _physics_process(delta):
 	# Initialize launch distance
 	if initial_distance_m <= 0:
 		initial_distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-		print("[%s] Launch | Range: %.1fkm" % [torpedo_id, initial_distance_m / 1000.0])
+		print("[%s] Launch | Range: %.1fkm | Target: %.1fG accel" % [torpedo_id, initial_distance_m / 1000.0, target_acceleration_gs])
 	
 	# Update time
 	time_since_launch += delta
@@ -200,8 +208,20 @@ func _physics_process(delta):
 	prev_rotation = rotation
 	max_rotation_rate = max(max_rotation_rate, abs(actual_rotation_rate))
 	
-	# Control pipeline
-	calculate_intercept()
+	# Trajectory calculation with delay
+	if launch_phase == LaunchPhase.CRUISE:
+		# Check if enough time has passed since thrust started
+		var time_since_thrust = time_since_launch - time_thrust_started
+		if time_since_thrust > intercept_delay:
+			# Use full intercept calculations
+			calculate_intercept()
+		else:
+			# Still in delay period - use simple targeting
+			calculate_alignment_target()
+	else:
+		# During ALIGNING, just aim directly at target
+		calculate_alignment_target()
+	
 	apply_pid_control(delta)
 	apply_thrust(delta)
 	
@@ -227,7 +247,23 @@ func _physics_process(delta):
 # LAYER 1: TRAJECTORY CALCULATION
 # ============================================================================
 
+func calculate_alignment_target():
+	"""During alignment phase and early cruise, just aim at the target's current position"""
+	if not target_node:
+		return
+	
+	# Simple direct aim - no intercept calculations
+	var target_pos = target_node.global_position
+	desired_heading = (target_pos - global_position).angle()
+	
+	# No filtering during alignment - we want direct aim
+	filtered_heading = desired_heading
+	
+	# Intercept point is just the target position during alignment
+	intercept_point = target_pos
+
 func calculate_intercept():
+	"""During cruise phase (after delay), calculate proper intercept point with acceleration"""
 	if not target_node:
 		return
 	
@@ -236,18 +272,27 @@ func calculate_intercept():
 	if target_node.has_method("get_velocity_mps"):
 		target_vel = target_node.get_velocity_mps()
 	
+	# Get target acceleration vector (assuming it's in movement direction)
+	var target_accel = Vector2.ZERO
+	if target_acceleration_gs > 0 and target_vel.length() > 0:
+		# Acceleration is in the direction of velocity
+		target_accel = target_vel.normalized() * (target_acceleration_gs * 9.81)
+	
 	if is_close_range:
 		intercept_point = target_pos
 		desired_heading = (target_pos - global_position).angle()
 	else:
 		var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
+		var target_accel_pixels = target_accel / WorldSettings.meters_per_pixel
 		intercept_point = target_pos
 		
 		for i in range(10):
 			var to_intercept = intercept_point - global_position
 			var dist_m = to_intercept.length() * WorldSettings.meters_per_pixel
 			var time_to_impact = calculate_time_to_impact(dist_m)
-			var new_intercept = target_pos + target_vel_pixels * time_to_impact
+			
+			# Include acceleration term: pos + vel*t + 0.5*accel*t²
+			var new_intercept = target_pos + target_vel_pixels * time_to_impact + target_accel_pixels * 0.5 * time_to_impact * time_to_impact
 			
 			if new_intercept.distance_to(intercept_point) < 1.0:
 				break
@@ -336,6 +381,7 @@ func apply_thrust(delta):
 	if launch_phase == LaunchPhase.ALIGNING:
 		if abs(rad_to_deg(heading_error)) < launch_alignment_threshold_deg:
 			launch_phase = LaunchPhase.CRUISE
+			time_thrust_started = time_since_launch  # Record when thrust actually starts
 			print("[%s] Thrust ON" % torpedo_id)
 		else:
 			current_thrust_g = 0.0
@@ -371,9 +417,16 @@ func output_debug(distance_m: float, _progress: float):
 	match launch_phase:
 		LaunchPhase.ALIGNING: phase_str = "ALGN"
 		LaunchPhase.CRUISE: 
-			if is_terminal: phase_str = "TERM"
-			elif is_close_range: phase_str = "CLSE"
-			else: phase_str = "CRSE"
+			# Show if we're still in delay period
+			var time_since_thrust = time_since_launch - time_thrust_started
+			if time_since_thrust < intercept_delay and time_thrust_started >= 0:
+				phase_str = "DLAY"  # Delay period
+			elif is_terminal: 
+				phase_str = "TERM"
+			elif is_close_range: 
+				phase_str = "CLSE"
+			else: 
+				phase_str = "CRSE"
 	
 	var speed_kms = velocity_mps.length() / 1000.0
 	var range_km = distance_m / 1000.0
@@ -404,9 +457,15 @@ func update_trajectory_visual():
 	
 	trajectory_line.clear_points()
 	
-	# Don't show line until we're thrusting
+	# Don't show line until we're past the delay period
 	if launch_phase == LaunchPhase.ALIGNING:
 		return
+	
+	# Also hide during the delay period
+	if launch_phase == LaunchPhase.CRUISE and time_thrust_started >= 0:
+		var time_since_thrust = time_since_launch - time_thrust_started
+		if time_since_thrust < intercept_delay:
+			return  # Don't show line during delay period
 	
 	# Color by state
 	if abs(actual_rotation_rate) > deg_to_rad(180):
@@ -507,6 +566,9 @@ func mark_for_destruction(reason: String):
 
 func set_target(target: Node2D):
 	target_node = target
+	# Get acceleration when target is set
+	if target_node and "acceleration_gs" in target_node:
+		target_acceleration_gs = target_node.acceleration_gs
 
 func set_launcher(launcher: Node2D):
 	if "faction" in launcher:
