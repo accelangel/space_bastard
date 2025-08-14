@@ -1,133 +1,160 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - PROPORTIONAL CONTROL WITH SMART THRUST
-# Two-layer architecture: Trajectory generator + P-controller with intelligent thrust management
-#
-# Launch Sequence:
-#   1. ALIGN: Pure rotation to face target (no thrust)
-#   2. GENTLE: 1G thrust for 3 seconds
-#   3. RAMP: Linear ramp from 1G to 100G over 10 seconds
-#   4. CRUISE: Full 100G until 80% of journey
-#   5. TERMINAL: Smart thrust reduction based on time and error
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - CLEAN PID IMPLEMENTATION
+# Full PID control with proper debug management (1 Hz max output)
 extends Area2D
 
 # Static counter for sequential torpedo naming
 static var torpedo_counter: int = 0
 
-# Core parameters
-@export var acceleration_cruise_g: float = 100.0  # Cruise phase acceleration
-@export var terminal_phase_start: float = 0.80    # Start terminal at 80% of journey
+# ============================================================================
+# EXPORTED PARAMETERS
+# ============================================================================
 
-# Launch sequence parameters
-@export var launch_alignment_threshold_deg: float = 5.0  # Must be aligned within this before thrust
-@export var launch_gentle_thrust_g: float = 1.0         # Initial gentle thrust
-@export var launch_gentle_duration: float = 3.0          # How long to thrust gently
-@export var launch_ramp_duration: float = 10.0           # How long to ramp to full thrust
+@export_group("Core Physics")
+@export var launch_thrust_g: float = 100.0  # Main thrust (no ramping)
+@export var terminal_phase_start: float = 0.80
+@export var close_range_distance_m: float = 500.0
 
-# Proportional control parameters
-@export var kp_heading_initial: float = 0.1      # Initial Kp for first 15 seconds
-@export var kp_heading_final: float = 10.0        # Final Kp after ramping
-@export var kp_initial_duration: float = 15.0    # How long to use initial Kp
-@export var kp_ramp_duration: float = 15.0       # How long to ramp to final Kp
-@export var max_turn_rate_deg: float = 9999.0      # Maximum rotation rate (deg/s)
+@export_group("Launch Sequence")
+@export var launch_alignment_threshold_deg: float = 2.0  # Must align within this before thrust
 
-# Terminal thrust parameters
-@export var terminal_max_thrust_g: float = 10.0   # Max thrust at start of terminal
-@export var terminal_min_thrust_g: float = 0.5    # Min thrust at impact
-@export var terminal_time_window: float = 15.0    # Time window for thrust scaling
-@export var terminal_thrust_curve: float = 2.0    # Exponential curve for time scaling
-@export var error_thrust_weight: float = 0.8      # How much error affects thrust (0.2-1.0 range)
-@export var error_threshold_deg: float = 5.0      # Error that gives full thrust authority
+@export_group("PID Gains")
+@export var kp_gain: float = 2.0  # Proportional gain (fixed, no ramping)
+@export var ki_gain: float = 0.0  # Integral gain (usually 0 for torpedoes)
+@export var kd_gain: float = 0.4  # Derivative gain (Kp/5 ratio)
+# Note: Try Kp=1.0, Kd=0.3 if oscillating, or Kp=3.0, Kd=1.0 for more aggressive
 
-# Trajectory calculation
-@export var intercept_iterations: int = 10        # Iterations for intercept calculation
-@export var use_kinematic_prediction: bool = true # Use kinematics for time-to-impact
+@export_group("PID Limits")
+@export var max_turn_rate_deg: float = 120.0
+@export var integral_limit_deg: float = 30.0
+@export var integral_decay_rate: float = 0.95
+@export var heading_filter_alpha: float = 0.8
 
-# Debug settings
-@export var debug_output: bool = true
-@export var debug_interval: float = 1.0
+@export_group("Terminal Phase")
+@export var terminal_max_thrust_g: float = 10.0
+@export var terminal_min_thrust_g: float = 2.0
+@export var terminal_time_window: float = 15.0
+@export var terminal_thrust_curve: float = 2.0
 
-# Torpedo identity
+@export_group("Debug Settings")
+@export var debug_enabled: bool = true
+@export var debug_hz: float = 1.0  # Debug frequency in Hz
+
+# ============================================================================
+# INTERNAL STATE
+# ============================================================================
+
+# Identity
 var torpedo_id: String = ""
 var faction: String = "friendly"
 var target_node: Node2D = null
 
-# Physics state
+# Physics
 var velocity_mps: Vector2 = Vector2.ZERO
 var is_alive: bool = true
 var marked_for_death: bool = false
 
-# Trajectory state (Layer 1)
+# Trajectory Layer
 var intercept_point: Vector2 = Vector2.ZERO
 var desired_heading: float = 0.0
-var initial_target_distance: float = 0.0
+var filtered_heading: float = 0.0
+
+# PID Control Layer
+var heading_error: float = 0.0
+var prev_heading_error: float = 0.0
+var integral_error: float = 0.0
+var p_term: float = 0.0
+var i_term: float = 0.0
+var d_term: float = 0.0
+var current_kp: float = 0.0
+var current_ki: float = 0.0
+var current_kd: float = 0.0
+
+# Flight State
 var time_since_launch: float = 0.0
-
-# Control state (Layer 2)
-var current_heading_error: float = 0.0
+var initial_distance_m: float = 0.0
+var is_terminal: bool = false
+var is_close_range: bool = false
 var current_thrust_g: float = 0.0
-var current_kp: float = 0.0  # Track current Kp for debug
-var is_terminal_phase: bool = false
 
-# Launch phase tracking
+# Launch Phase
 enum LaunchPhase {
-	ALIGNING,      # Phase 0: Pure rotation, no thrust
-	GENTLE_START,  # Phase 1: 1G for 3 seconds
-	RAMPING,       # Phase 2: Ramp from 1G to 100G over 10 seconds
-	CRUISE         # Phase 3: Full thrust cruise
+	ALIGNING,
+	CRUISE
 }
 var launch_phase: LaunchPhase = LaunchPhase.ALIGNING
-var phase_start_time: float = 0.0  # When current phase started
 
-# Tracking
-var closest_approach_distance: float = INF
-var closest_approach_time: float = 0.0
+# Rotation Tracking
+var actual_rotation_rate: float = 0.0
+var prev_rotation: float = 0.0
 
-# Visual elements
+# Debug Management
+var last_debug_time: float = 0.0
+var debug_interval: float = 1.0
+
+# Flight Statistics (for end report)
+var max_rotation_rate: float = 0.0
+var max_speed_achieved: float = 0.0
+var total_heading_error: float = 0.0
+var heading_error_samples: int = 0
+var closest_approach: float = INF
+
+# Visual
 var trajectory_line: Line2D = null
 
-# Debug tracking
-var last_debug_print: float = 0.0
-var last_logged_progress: float = -1.0
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
 
 func _ready():
 	Engine.max_fps = 60
 	
-	# Generate sequential torpedo ID
+	# Generate ID
 	torpedo_counter += 1
 	torpedo_id = "Torp_%d" % torpedo_counter
 	
-	print("[P-CONTROL] %s: Initialized" % torpedo_id)
-	print("  - Launch: Align < %.1f°, then 1G for 3s, ramp to 100G over 10s" % launch_alignment_threshold_deg)
-	print("  - Kp: %.2f for 15s, then ramp to %.1f over 15s" % [kp_heading_initial, kp_heading_final])
-	print("  - Max turn rate: %.1f°/s" % max_turn_rate_deg)
-	print("  - Terminal phase: >%.0f%%" % (terminal_phase_start * 100))
-	print("  - Terminal thrust: %.1fG to %.1fG" % [terminal_max_thrust_g, terminal_min_thrust_g])
-	print("  - Starting in ALIGNMENT phase (no thrust)")
+	# Calculate debug interval from Hz
+	debug_interval = 1.0 / debug_hz if debug_hz > 0 else 1.0
 	
+	# Initial debug output
+	print("\n[%s] INITIALIZED" % torpedo_id)
+	if debug_enabled:
+		print("  Config: %.0fG thrust | Kp=%.1f Kd=%.2f | %.0f°/s max turn" % 
+			[launch_thrust_g, kp_gain, kd_gain, max_turn_rate_deg])
+		var test_vec = Vector2.UP.rotated(0.1)
+		print("  Rotation: Positive = %s" % ["CCW" if test_vec.x > 0 else "CW"])
+	
+	# Setup groups and metadata
 	add_to_group("torpedoes")
 	add_to_group("combat_entities")
-	
 	set_meta("torpedo_id", torpedo_id)
 	set_meta("faction", faction)
 	set_meta("entity_type", "torpedo")
 	
-	# Connect collision signal
+	# Connect signals
 	area_entered.connect(_on_area_entered)
 	
+	# Start animation
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
 		sprite.play()
 	
-	# Setup trajectory visualization
+	# Setup visualization
 	setup_trajectory_line()
 	
-	# CRITICAL FIX: Set initial rotation toward target if we have one
+	# Initial targeting
 	if target_node and is_instance_valid(target_node):
 		var to_target = target_node.global_position - global_position
-		# Set rotation so torpedo points at target
-		# Since torpedo sprite points UP at rotation=0, and we want it to point at angle theta:
-		# rotation = theta + PI/2
 		rotation = to_target.angle() + PI/2
-		print("  - Initial rotation set toward target: %.1f°" % rad_to_deg(rotation))
+		prev_rotation = rotation
+		filtered_heading = to_target.angle()
+		
+		# Initialize prev_heading_error to prevent D-term spike
+		var initial_body_angle = rotation - PI/2
+		heading_error = angle_wrap(to_target.angle() - initial_body_angle)
+		prev_heading_error = heading_error
+		
+		if debug_enabled:
+			print("  Initial aim: %.1f° (error: %.1f°)" % [rad_to_deg(to_target.angle()), rad_to_deg(heading_error)])
 
 func setup_trajectory_line():
 	trajectory_line = get_node_or_null("TrajectoryLine")
@@ -138,362 +165,279 @@ func setup_trajectory_line():
 		trajectory_line.z_index = 5
 		trajectory_line.top_level = true
 
+# ============================================================================
+# MAIN UPDATE LOOP
+# ============================================================================
+
 func _physics_process(delta):
-	if marked_for_death or not is_alive or not target_node:
+	if marked_for_death or not is_alive:
 		return
 	
-	if not is_instance_valid(target_node):
-		mark_for_destruction("lost_target")
+	if not target_node or not is_instance_valid(target_node):
+		mark_for_destruction("no_target")
 		return
 	
-	# Initialize on first frame
-	if initial_target_distance <= 0 and target_node:
-		initial_target_distance = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-		var range_km = initial_target_distance / 1000.0
-		print("%s: Launch - range %.1f km" % [torpedo_id, range_km])
+	# Initialize launch distance
+	if initial_distance_m <= 0:
+		initial_distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+		print("[%s] Launch | Range: %.1fkm" % [torpedo_id, initial_distance_m / 1000.0])
 	
+	# Update time
 	time_since_launch += delta
 	
-	# Track closest approach
-	update_closest_approach()
+	# Calculate state
+	var distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+	var progress = 1.0 - (distance_m / initial_distance_m)
+	is_close_range = distance_m < close_range_distance_m
+	is_terminal = progress > terminal_phase_start or is_close_range
 	
-	# LAYER 1: Calculate trajectory (updates intercept point and desired heading)
-	calculate_trajectory()
+	# Track statistics
+	closest_approach = min(closest_approach, distance_m)
+	max_speed_achieved = max(max_speed_achieved, velocity_mps.length())
 	
-	# LAYER 2: Follow trajectory with proportional control
-	apply_proportional_control(delta)
+	# Track rotation rate
+	actual_rotation_rate = angle_wrap(rotation - prev_rotation) / delta
+	prev_rotation = rotation
+	max_rotation_rate = max(max_rotation_rate, abs(actual_rotation_rate))
 	
-	# Apply smart thrust
-	apply_smart_thrust(delta)
+	# Control pipeline
+	calculate_intercept()
+	apply_pid_control(delta)
+	apply_thrust(delta)
+	
+	# Track heading error statistics
+	if launch_phase == LaunchPhase.CRUISE:
+		total_heading_error += abs(heading_error)
+		heading_error_samples += 1
 	
 	# Update position
 	var velocity_pixels = velocity_mps / WorldSettings.meters_per_pixel
 	global_position += velocity_pixels * delta
 	
-	# Update visualization
-	if trajectory_line:
-		update_trajectory_visualization()
+	# Visualization
+	update_trajectory_visual()
 	
-	# Debug output
-	if debug_output:
-		update_debug_output()
+	# Debug output (throttled)
+	output_debug(distance_m, progress)
 	
-	check_world_bounds()
+	# Bounds check
+	check_bounds()
 
-func calculate_trajectory():
-	"""Layer 1: Simple trajectory generator - straight line to intercept"""
-	if not target_node or not is_instance_valid(target_node):
+# ============================================================================
+# LAYER 1: TRAJECTORY CALCULATION
+# ============================================================================
+
+func calculate_intercept():
+	if not target_node:
 		return
 	
-	# Get target state
-	var target_velocity = Vector2.ZERO
-	if target_node.has_method("get_velocity_mps"):
-		target_velocity = target_node.get_velocity_mps()
-	
-	# Calculate intercept point
-	var target_vel_pixels = target_velocity / WorldSettings.meters_per_pixel
 	var target_pos = target_node.global_position
+	var target_vel = Vector2.ZERO
+	if target_node.has_method("get_velocity_mps"):
+		target_vel = target_node.get_velocity_mps()
 	
-	# Simple iterative refinement
-	intercept_point = target_pos
-	for iteration in range(intercept_iterations):
-		var to_intercept_vector = intercept_point - global_position
-		var iter_distance_m = to_intercept_vector.length() * WorldSettings.meters_per_pixel
+	if is_close_range:
+		intercept_point = target_pos
+		desired_heading = (target_pos - global_position).angle()
+	else:
+		var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
+		intercept_point = target_pos
 		
-		# Calculate time with current intercept point
-		var iter_time = calculate_time_to_impact(iter_distance_m)
-		var new_intercept = target_pos + target_vel_pixels * iter_time
+		for i in range(10):
+			var to_intercept = intercept_point - global_position
+			var dist_m = to_intercept.length() * WorldSettings.meters_per_pixel
+			var time_to_impact = calculate_time_to_impact(dist_m)
+			var new_intercept = target_pos + target_vel_pixels * time_to_impact
+			
+			if new_intercept.distance_to(intercept_point) < 1.0:
+				break
+			intercept_point = new_intercept
 		
-		# Check convergence
-		if new_intercept.distance_to(intercept_point) < 1.0:
-			break
-		
-		intercept_point = new_intercept
+		desired_heading = (intercept_point - global_position).angle()
 	
-	# Calculate desired heading to final intercept
-	var final_vector_to_intercept = intercept_point - global_position
-	desired_heading = final_vector_to_intercept.angle()
+	var alpha = heading_filter_alpha if not is_close_range else 0.9
+	filtered_heading = lerp_angle(filtered_heading, desired_heading, alpha)
 
 func calculate_time_to_impact(distance_m: float) -> float:
-	"""Calculate time to cover distance considering acceleration"""
-	var current_speed = velocity_mps.length()
+	var speed = velocity_mps.length()
 	
-	# CRITICAL: When stationary or very slow, use kinematic prediction assuming we'll accelerate
-	if current_speed < 100.0:  # Less than 100 m/s
-		# Assume we'll accelerate at cruise acceleration
-		var accel = acceleration_cruise_g * 9.81
-		# Time to reach distance from near-standstill: t = sqrt(2d/a)
-		return sqrt(2.0 * distance_m / accel)
+	if is_close_range or speed < 100:
+		return distance_m / max(speed, 100.0)
 	
-	if use_kinematic_prediction and current_speed < 100000:  # Still accelerating
-		# Use kinematics: d = v₀t + 0.5at²
-		var accel = acceleration_cruise_g * 9.81
-		
-		# Will we reach max speed before target?
-		var max_speed = 100000.0  # 100 km/s max
-		var time_to_max = (max_speed - current_speed) / accel
-		var dist_to_max = current_speed * time_to_max + 0.5 * accel * time_to_max * time_to_max
-		
-		if dist_to_max < distance_m:
-			# Will reach max speed, then cruise
-			var remaining_dist = distance_m - dist_to_max
-			var cruise_time = remaining_dist / max_speed
-			return time_to_max + cruise_time
-		else:
-			# Will hit target while still accelerating
-			# Solve quadratic: 0.5at² + v₀t - d = 0
-			var discriminant = current_speed * current_speed + 2 * accel * distance_m
-			if discriminant < 0:
-				return distance_m / max(current_speed, 1.0)
-			
-			return (-current_speed + sqrt(discriminant)) / accel
-	else:
-		# Constant velocity
-		return distance_m / current_speed
+	var accel = launch_thrust_g * 9.81
+	if speed < 100000:
+		var discriminant = speed * speed + 2 * accel * distance_m
+		if discriminant > 0:
+			return (-speed + sqrt(discriminant)) / accel
+	
+	return distance_m / speed
 
-func apply_proportional_control(delta):
-	"""Layer 2: Proportional controller to follow trajectory"""
-	
-	# Get current velocity heading (where we're going)
+# ============================================================================
+# LAYER 2: PID CONTROL
+# ============================================================================
+
+func apply_pid_control(delta):
 	var current_heading: float
-	if velocity_mps.length() > 10.0:  # Only use velocity angle if moving
+	if velocity_mps.length() > 50:
 		current_heading = velocity_mps.angle()
 	else:
-		current_heading = rotation - PI/2  # Back to original (was correct)
+		current_heading = rotation - PI/2
 	
-	# Calculate heading error
-	current_heading_error = angle_difference(desired_heading, current_heading)
+	heading_error = angle_wrap(filtered_heading - current_heading)
 	
-	# Dynamic Kp based on flight time
-	if time_since_launch < kp_initial_duration:
-		# First 15 seconds: Use initial low Kp
-		current_kp = kp_heading_initial
-	elif time_since_launch < kp_initial_duration + kp_ramp_duration:
-		# Next 15 seconds: Ramp from initial to final Kp
-		var ramp_progress = (time_since_launch - kp_initial_duration) / kp_ramp_duration
-		current_kp = lerp(kp_heading_initial, kp_heading_final, ramp_progress)
-	else:
-		# After 30 seconds: Use final Kp
-		current_kp = kp_heading_final
+	update_gains()
 	
-	# Proportional control
-	var commanded_turn_rate = current_kp * current_heading_error
+	# P term
+	p_term = current_kp * heading_error
 	
-	# Limit turn rate
-	var max_turn_rate_rad = deg_to_rad(max_turn_rate_deg)
-	commanded_turn_rate = clamp(commanded_turn_rate, -max_turn_rate_rad, max_turn_rate_rad)
+	# I term
+	integral_error += heading_error * delta
+	integral_error *= pow(integral_decay_rate, delta)
+	var integral_limit_rad = deg_to_rad(integral_limit_deg)
+	integral_error = clamp(integral_error, -integral_limit_rad, integral_limit_rad)
+	i_term = current_ki * integral_error
+	
+	# D term
+	var error_rate = angle_wrap(heading_error - prev_heading_error) / delta
+	d_term = -current_kd * error_rate
+	prev_heading_error = heading_error
+	
+	# Combined control
+	var commanded_rate = p_term + i_term + d_term
+	
+	# Apply limits
+	var max_rate_rad = deg_to_rad(max_turn_rate_deg)
+	commanded_rate = clamp(commanded_rate, -max_rate_rad, max_rate_rad)
 	
 	# Apply rotation
-	rotation += commanded_turn_rate * delta
+	rotation += commanded_rate * delta
 
-func apply_smart_thrust(delta):
-	"""Smart thrust management with launch sequence and terminal phase scaling"""
+func update_gains():
+	# NO RAMPING - use fixed gains
+	current_kp = kp_gain
+	current_kd = kd_gain
+	current_ki = ki_gain
 	
-	# Calculate progress and phase
-	var current_distance = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-	var progress = 1.0 - (current_distance / initial_target_distance)
-	progress = clamp(progress, 0.0, 1.0)
+	# Reduce gains in close range
+	if is_close_range:
+		current_kp *= 0.5
+		current_kd *= 0.5
+		current_ki *= 0.5
+
+# ============================================================================
+# LAYER 3: THRUST MANAGEMENT
+# ============================================================================
+
+func apply_thrust(delta):
+	var body_angle = rotation - PI/2
+	var vel_angle = velocity_mps.angle() if velocity_mps.length() > 10 else body_angle
+	var alignment = max(0, cos(angle_wrap(vel_angle - body_angle)))
 	
-	# Calculate alignment factor (don't thrust sideways)
-	var body_angle = rotation - PI/2  # Back to original
-	var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 10.0 else body_angle
-	var alignment_error = angle_difference(velocity_angle, body_angle)
-	var alignment_factor = max(0, cos(alignment_error))
-	
-	# LAUNCH SEQUENCE MANAGEMENT
 	if launch_phase == LaunchPhase.ALIGNING:
-		# Phase 0: Pure rotation, no thrust until aligned
-		var error_deg = rad_to_deg(current_heading_error)
-		
-		# Handle angle wrapping - if error is close to ±180°, we might actually be aligned
-		if abs(error_deg) > 175.0:
-			# We're likely experiencing angle wrapping - check the opposite angle
-			if error_deg > 0:
-				error_deg = error_deg - 360.0
-			else:
-				error_deg = error_deg + 360.0
-		
-		if abs(error_deg) < launch_alignment_threshold_deg:
-			# Aligned! Move to gentle start
-			launch_phase = LaunchPhase.GENTLE_START
-			phase_start_time = time_since_launch
-			print("%s: Aligned! Starting gentle thrust (1G)" % torpedo_id)
-		else:
-			# Still aligning, no thrust
-			current_thrust_g = 0.0
-			return  # Don't apply any thrust
-	
-	elif launch_phase == LaunchPhase.GENTLE_START:
-		# Phase 1: Gentle 1G thrust for 3 seconds
-		current_thrust_g = launch_gentle_thrust_g
-		
-		if time_since_launch - phase_start_time >= launch_gentle_duration:
-			# Move to ramping phase
-			launch_phase = LaunchPhase.RAMPING
-			phase_start_time = time_since_launch
-			print("%s: Starting thrust ramp (1G -> 100G over 10s)" % torpedo_id)
-	
-	elif launch_phase == LaunchPhase.RAMPING:
-		# Phase 2: Ramp from 1G to 100G over 10 seconds
-		var ramp_progress = (time_since_launch - phase_start_time) / launch_ramp_duration
-		ramp_progress = clamp(ramp_progress, 0.0, 1.0)
-		
-		# Linear interpolation from 1G to 100G
-		current_thrust_g = lerp(launch_gentle_thrust_g, acceleration_cruise_g, ramp_progress)
-		
-		if ramp_progress >= 1.0:
-			# Ramping complete, enter cruise
+		if abs(rad_to_deg(heading_error)) < launch_alignment_threshold_deg:
 			launch_phase = LaunchPhase.CRUISE
-			print("%s: Full thrust achieved! Entering cruise phase" % torpedo_id)
-	
-	else:  # LaunchPhase.CRUISE
-		# Check if in terminal phase
-		var was_terminal = is_terminal_phase
-		is_terminal_phase = progress > terminal_phase_start
-		
-		if is_terminal_phase and not was_terminal:
-			print("%s: TERMINAL PHASE at %.1f km/s" % [torpedo_id, velocity_mps.length() / 1000.0])
-		
-		if is_terminal_phase:
-			# Terminal phase: Smart thrust scaling
-			var time_to_impact = current_distance / max(velocity_mps.length(), 1.0)
-			
-			# Time-based scaling
-			var time_factor = clamp(time_to_impact / terminal_time_window, 0.0, 1.0)
-			var time_based_thrust = lerp(terminal_min_thrust_g, terminal_max_thrust_g, pow(time_factor, terminal_thrust_curve))
-			
-			# Error-based multiplier (0.2 to 1.0 range)
-			var error_mult = 0.2 + error_thrust_weight * clamp(abs(rad_to_deg(current_heading_error)) / error_threshold_deg, 0.0, 1.0)
-			
-			# Combine factors
-			current_thrust_g = time_based_thrust * error_mult
+			print("[%s] Thrust ON" % torpedo_id)
 		else:
-			# Normal cruise: Full thrust
-			current_thrust_g = acceleration_cruise_g
+			current_thrust_g = 0.0
+			return
 	
-	# Apply thrust with alignment factor
-	var final_thrust = current_thrust_g * 9.81 * alignment_factor
-	var thrust_direction = Vector2.from_angle(rotation - PI/2)  # Back to original
-	velocity_mps += thrust_direction * final_thrust * delta
+	# CRUISE - apply thrust based on phase
+	if is_terminal:
+		var dist_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
+		var time_to_impact = dist_m / max(velocity_mps.length(), 1.0)
+		var time_factor = clamp(time_to_impact / terminal_time_window, 0, 1)
+		current_thrust_g = lerp(terminal_min_thrust_g, terminal_max_thrust_g, pow(time_factor, terminal_thrust_curve))
+	else:
+		current_thrust_g = launch_thrust_g
+	
+	var thrust = current_thrust_g * 9.81 * alignment
+	var thrust_dir = Vector2.from_angle(rotation - PI/2)
+	velocity_mps += thrust_dir * thrust * delta
 
-func angle_difference(to_angle: float, from_angle: float) -> float:
-	"""Calculate shortest angular distance between two angles"""
-	var diff = fmod(to_angle - from_angle, TAU)
-	if diff > PI:
-		diff -= TAU
-	elif diff < -PI:
-		diff += TAU
-	return diff
+# ============================================================================
+# DEBUG OUTPUT (1 Hz THROTTLED)
+# ============================================================================
 
-func update_trajectory_visualization():
+func output_debug(distance_m: float, _progress: float):
+	if not debug_enabled:
+		return
+	
+	var current_time = Time.get_ticks_msec() / 1000.0
+	if current_time - last_debug_time < debug_interval:
+		return
+	last_debug_time = current_time
+	
+	var phase_str = ""
+	match launch_phase:
+		LaunchPhase.ALIGNING: phase_str = "ALGN"
+		LaunchPhase.CRUISE: 
+			if is_terminal: phase_str = "TERM"
+			elif is_close_range: phase_str = "CLSE"
+			else: phase_str = "CRSE"
+	
+	var speed_kms = velocity_mps.length() / 1000.0
+	var range_km = distance_m / 1000.0
+	print("[%s] %s | %.1fkm/s | %.1fkm | Err:%.1f° | P:%.1f D:%.1f | Rot:%.1f°/s | T:%.0fG" % 
+		[torpedo_id, phase_str, speed_kms, range_km, 
+		 rad_to_deg(heading_error), rad_to_deg(p_term), rad_to_deg(d_term),
+		 rad_to_deg(actual_rotation_rate), current_thrust_g])
+
+# ============================================================================
+# UTILITIES
+# ============================================================================
+
+func angle_wrap(angle: float) -> float:
+	var wrapped = fmod(angle, TAU)
+	if wrapped > PI:
+		wrapped -= TAU
+	elif wrapped < -PI:
+		wrapped += TAU
+	return wrapped
+
+func lerp_angle(from: float, to: float, weight: float) -> float:
+	var diff = angle_wrap(to - from)
+	return from + diff * weight
+
+func update_trajectory_visual():
 	if not trajectory_line:
 		return
 	
 	trajectory_line.clear_points()
 	
-	# Color based on phase
-	if is_terminal_phase:
+	# Don't show line until we're thrusting
+	if launch_phase == LaunchPhase.ALIGNING:
+		return
+	
+	# Color by state
+	if abs(actual_rotation_rate) > deg_to_rad(180):
+		trajectory_line.default_color = Color.RED
+	elif is_close_range:
+		trajectory_line.default_color = Color.YELLOW
+	elif is_terminal:
 		trajectory_line.default_color = Color.CYAN
 	else:
 		trajectory_line.default_color = Color.ORANGE
 	
-	# Draw line to intercept
 	trajectory_line.add_point(global_position)
 	trajectory_line.add_point(intercept_point)
 
-func update_debug_output():
-	var current_time = Time.get_ticks_msec() / 1000.0
-	if current_time - last_debug_print < debug_interval:
-		return
-	last_debug_print = current_time
-	
-	if not target_node:
-		return
-	
-	var speed_kms = velocity_mps.length() / 1000.0
-	var range_km = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel / 1000.0
-	
-	# Calculate body-velocity alignment
-	var body_angle = rotation - PI/2  # Back to original
-	var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 10.0 else body_angle
-	var alignment_error = angle_difference(velocity_angle, body_angle)
-	var alignment_deg = rad_to_deg(alignment_error)
-	
-	# Phase info
-	var current_distance = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-	var progress = 1.0 - (current_distance / initial_target_distance)
-	
-	# Determine phase string
-	var phase_str: String
-	if launch_phase == LaunchPhase.ALIGNING:
-		phase_str = "ALGN"
-	elif launch_phase == LaunchPhase.GENTLE_START:
-		phase_str = "GNTL"
-	elif launch_phase == LaunchPhase.RAMPING:
-		phase_str = "RAMP"
-	elif is_terminal_phase:
-		phase_str = "TERM"
-	else:
-		phase_str = "CRSE"
-	
-	# Log phase changes
-	if abs(progress - last_logged_progress) > 0.1:
-		var phase_name = ""
-		if launch_phase == LaunchPhase.ALIGNING:
-			phase_name = "Aligning"
-		elif launch_phase == LaunchPhase.GENTLE_START:
-			phase_name = "Gentle Start"
-		elif launch_phase == LaunchPhase.RAMPING:
-			phase_name = "Ramping"
-		elif progress < terminal_phase_start:
-			phase_name = "Cruise"
-		else:
-			phase_name = "Terminal"
-		print("%s: %s phase (%.0f%%)" % [torpedo_id, phase_name, progress * 100])
-		last_logged_progress = progress
-	
-	# FIXED: Actually include Kp in the output!
-	print("%s: %.1f km/s | %.1f km | Err: %.1f° | Align: %.1f° | Thrust: %.1fG | Kp: %.2f | %s" % 
-		[torpedo_id, speed_kms, range_km, rad_to_deg(current_heading_error), alignment_deg, current_thrust_g, current_kp, phase_str])
-
-func update_closest_approach():
-	if not target_node:
-		return
-	
-	var current_distance = global_position.distance_to(target_node.global_position)
-	var current_distance_meters = current_distance * WorldSettings.meters_per_pixel
-	
-	if current_distance_meters < closest_approach_distance:
-		closest_approach_distance = current_distance_meters
-		closest_approach_time = time_since_launch
-
-func check_world_bounds():
+func check_bounds():
 	var half_size = WorldSettings.map_size_pixels / 2
 	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
 		mark_for_destruction("out_of_bounds")
+
+# ============================================================================
+# COLLISION & LIFECYCLE
+# ============================================================================
 
 func _on_area_entered(area: Area2D):
 	if marked_for_death or not is_alive:
 		return
 	
-	if area.is_in_group("ships"):
-		if area.get("faction") == faction:
-			return
-		
-		# Calculate final alignment
-		var velocity_angle = velocity_mps.angle()
-		var body_angle = rotation - PI/2  # Back to original
-		var alignment_diff = rad_to_deg(angle_difference(velocity_angle, body_angle))
-		
-		print("SUCCESS [%s]: HIT %s!" % [torpedo_id, area.name])
-		print("  - Impact: %.1fs at %.1f km" % [time_since_launch, closest_approach_distance / 1000.0])
-		print("  - Speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
-		print("  - Alignment: %.1f°" % alignment_diff)
-		
+	if area.is_in_group("ships") and area.get("faction") != faction:
 		if area.has_method("mark_for_destruction"):
 			area.mark_for_destruction("torpedo_impact")
-		
-		mark_for_destruction("target_impact")
+		mark_for_destruction("target_hit")
 
 func mark_for_destruction(reason: String):
 	if marked_for_death:
@@ -502,14 +446,51 @@ func mark_for_destruction(reason: String):
 	marked_for_death = true
 	is_alive = false
 	
-	if reason == "out_of_bounds" and closest_approach_distance < INF:
-		print("MISS [%s]: %s | Closest: %.1f km at %.1fs" % 
-			[torpedo_id, reason, closest_approach_distance / 1000.0, closest_approach_time])
-	elif reason == "target_impact":
-		print("HIT [%s]: Target destroyed" % torpedo_id)
-	else:
-		print("LOST [%s]: %s" % [torpedo_id, reason])
+	# Comprehensive end-of-flight report
+	print("\n========== [%s] END OF FLIGHT REPORT ==========" % torpedo_id)
+	print("Result: %s" % reason.to_upper())
+	print("Flight Time: %.1f seconds" % time_since_launch)
 	
+	# Distance and speed
+	print("Final Speed: %.1f km/s (Max: %.1f km/s)" % [velocity_mps.length() / 1000.0, max_speed_achieved / 1000.0])
+	print("Closest Approach: %.1f km" % (closest_approach / 1000.0))
+	var final_range = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel if target_node and is_instance_valid(target_node) else INF
+	print("Final Range: %.1f km" % (final_range / 1000.0))
+	
+	# Body-velocity alignment
+	if velocity_mps.length() > 100:
+		var body_angle = rotation - PI/2
+		var velocity_angle = velocity_mps.angle()
+		var alignment_error = rad_to_deg(angle_wrap(velocity_angle - body_angle))
+		print("Body-Velocity Alignment Error: %.1f°" % alignment_error)
+		if abs(alignment_error) > 5:
+			print("  WARNING: Poor alignment - torpedo was thrusting off-axis")
+	
+	# Control performance
+	if heading_error_samples > 0:
+		var avg_heading_error = total_heading_error / heading_error_samples
+		print("Average Heading Error: %.1f°" % rad_to_deg(avg_heading_error))
+	print("Max Rotation Rate: %.1f°/s" % rad_to_deg(max_rotation_rate))
+	
+	# Final heading error
+	print("Final Heading Error: %.1f°" % rad_to_deg(heading_error))
+	
+	# PID performance
+	print("Final PID State: P=%.1f°/s, D=%.1f°/s" % [rad_to_deg(p_term), rad_to_deg(d_term)])
+	
+	# Success/failure analysis
+	if reason == "target_hit":
+		print("SUCCESS: Direct impact!")
+	elif reason == "out_of_bounds":
+		print("FAILURE: Left map boundaries")
+		if abs(heading_error) > deg_to_rad(10):
+			print("  Likely cause: Poor tracking (high heading error)")
+	elif reason == "no_target":
+		print("FAILURE: Lost target lock")
+	
+	print("==================================================\n")
+	
+	# Cleanup
 	if trajectory_line:
 		trajectory_line.visible = false
 	
@@ -520,15 +501,16 @@ func mark_for_destruction(reason: String):
 	
 	queue_free()
 
-# Public interface
+# ============================================================================
+# PUBLIC INTERFACE
+# ============================================================================
+
 func set_target(target: Node2D):
 	target_node = target
-	if target_node:
-		print("  - Target: %s" % target_node.name)
 
-func set_launcher(launcher_ship: Node2D):
-	if "faction" in launcher_ship:
-		faction = launcher_ship.faction
+func set_launcher(launcher: Node2D):
+	if "faction" in launcher:
+		faction = launcher.faction
 
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
