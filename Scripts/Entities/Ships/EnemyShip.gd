@@ -3,7 +3,7 @@ extends Area2D
 class_name EnemyShip
 
 # Ship properties
-@export var acceleration_gs: float = 1.0
+@export var acceleration_gs: float = 12.0
 @export var rotation_speed: float = 2.0
 @export var faction: String = "hostile"
 

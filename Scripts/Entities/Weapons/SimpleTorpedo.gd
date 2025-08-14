@@ -15,7 +15,7 @@ static var torpedo_counter: int = 0
 @export var close_range_distance_m: float = 500.0
 
 @export_group("Launch Sequence")
-@export var launch_alignment_threshold_deg: float = 2.0  # Must align within this before thrust
+@export var launch_alignment_threshold_deg: float = 5.0  # Must align within this before thrust
 
 @export_group("PID Gains")
 @export var kp_gain: float = 2.0  # Proportional gain (fixed, no ramping)
@@ -24,7 +24,7 @@ static var torpedo_counter: int = 0
 # Note: Try Kp=1.0, Kd=0.3 if oscillating, or Kp=3.0, Kd=1.0 for more aggressive
 
 @export_group("PID Limits")
-@export var max_turn_rate_deg: float = 120.0
+@export var max_turn_rate_deg: float = 999999.0
 @export var integral_limit_deg: float = 30.0
 @export var integral_decay_rate: float = 0.95
 @export var heading_filter_alpha: float = 0.8
