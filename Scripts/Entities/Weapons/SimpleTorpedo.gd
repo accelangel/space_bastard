@@ -10,7 +10,7 @@ static var torpedo_counter: int = 0
 # ============================================================================
 
 @export_group("Core Physics")
-@export var launch_thrust_g: float = 150.0  # Main thrust (no ramping)
+@export var launch_thrust_g: float = 100.0  # Main thrust (no ramping)
 @export var terminal_phase_start: float = 0.80
 @export var close_range_distance_m: float = 500.0
 
