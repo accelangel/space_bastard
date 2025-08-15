@@ -1,5 +1,5 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - WITH ACCELERATION-AWARE INTERCEPT
-# Full PID control with proper phase separation and acceleration compensation
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - FIXED WITH 0.5s INTERCEPT DELAY
+# Full PID control with proper phase separation and intercept delay
 extends Area2D
 
 # Static counter for sequential torpedo naming
@@ -10,8 +10,8 @@ static var torpedo_counter: int = 0
 # ============================================================================
 
 @export_group("Core Physics")
-@export var launch_thrust_g: float = 100.0  # Main thrust (no ramping)
-@export var terminal_phase_start: float = 0.80
+@export var launch_thrust_g: float = 150.0  # Main thrust (no ramping)
+@export var terminal_phase_start: float = 0.97
 @export var close_range_distance_m: float = 500.0
 
 @export_group("Launch Sequence")
@@ -48,7 +48,6 @@ static var torpedo_counter: int = 0
 var torpedo_id: String = ""
 var faction: String = "friendly"
 var target_node: Node2D = null
-var target_acceleration_gs: float = 0.0  # Store target's acceleration
 
 # Physics
 var velocity_mps: Vector2 = Vector2.ZERO
@@ -156,11 +155,6 @@ func _ready():
 		heading_error = angle_wrap(to_target.angle() - initial_body_angle)
 		prev_heading_error = heading_error
 		
-		# Get target acceleration
-		if "acceleration_gs" in target_node:
-			target_acceleration_gs = target_node.acceleration_gs
-			print("  Target acceleration: %.1fG" % target_acceleration_gs)
-		
 		if debug_enabled:
 			print("  Initial aim: %.1f° (error: %.1f°)" % [rad_to_deg(to_target.angle()), rad_to_deg(heading_error)])
 
@@ -188,7 +182,7 @@ func _physics_process(delta):
 	# Initialize launch distance
 	if initial_distance_m <= 0:
 		initial_distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
-		print("[%s] Launch | Range: %.1fkm | Target: %.1fG accel" % [torpedo_id, initial_distance_m / 1000.0, target_acceleration_gs])
+		print("[%s] Launch | Range: %.1fkm" % [torpedo_id, initial_distance_m / 1000.0])
 	
 	# Update time
 	time_since_launch += delta
@@ -263,7 +257,7 @@ func calculate_alignment_target():
 	intercept_point = target_pos
 
 func calculate_intercept():
-	"""During cruise phase (after delay), calculate proper intercept point with acceleration"""
+	"""During cruise phase (after delay), calculate proper intercept point"""
 	if not target_node:
 		return
 	
@@ -272,27 +266,18 @@ func calculate_intercept():
 	if target_node.has_method("get_velocity_mps"):
 		target_vel = target_node.get_velocity_mps()
 	
-	# Get target acceleration vector (assuming it's in movement direction)
-	var target_accel = Vector2.ZERO
-	if target_acceleration_gs > 0 and target_vel.length() > 0:
-		# Acceleration is in the direction of velocity
-		target_accel = target_vel.normalized() * (target_acceleration_gs * 9.81)
-	
 	if is_close_range:
 		intercept_point = target_pos
 		desired_heading = (target_pos - global_position).angle()
 	else:
 		var target_vel_pixels = target_vel / WorldSettings.meters_per_pixel
-		var target_accel_pixels = target_accel / WorldSettings.meters_per_pixel
 		intercept_point = target_pos
 		
 		for i in range(10):
 			var to_intercept = intercept_point - global_position
 			var dist_m = to_intercept.length() * WorldSettings.meters_per_pixel
 			var time_to_impact = calculate_time_to_impact(dist_m)
-			
-			# Include acceleration term: pos + vel*t + 0.5*accel*t²
-			var new_intercept = target_pos + target_vel_pixels * time_to_impact + target_accel_pixels * 0.5 * time_to_impact * time_to_impact
+			var new_intercept = target_pos + target_vel_pixels * time_to_impact
 			
 			if new_intercept.distance_to(intercept_point) < 1.0:
 				break
@@ -566,9 +551,6 @@ func mark_for_destruction(reason: String):
 
 func set_target(target: Node2D):
 	target_node = target
-	# Get acceleration when target is set
-	if target_node and "acceleration_gs" in target_node:
-		target_acceleration_gs = target_node.acceleration_gs
 
 func set_launcher(launcher: Node2D):
 	if "faction" in launcher:
