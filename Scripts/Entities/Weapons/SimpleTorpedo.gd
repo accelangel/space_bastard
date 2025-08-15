@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - FIXED WITH 0.5s INTERCEPT DELAY
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - ENHANCED DEBUG VERSION
 # Full PID control with proper phase separation and intercept delay
 extends Area2D
 
@@ -193,6 +193,9 @@ func _physics_process(delta):
 	is_close_range = distance_m < close_range_distance_m
 	is_terminal = progress > terminal_phase_start or is_close_range
 	
+	# Check for phase transitions
+	check_phase_transitions(progress, distance_m)
+	
 	# Track statistics
 	closest_approach = min(closest_approach, distance_m)
 	max_speed_achieved = max(max_speed_achieved, velocity_mps.length())
@@ -236,6 +239,29 @@ func _physics_process(delta):
 	
 	# Bounds check
 	check_bounds()
+
+# ============================================================================
+# PHASE TRANSITION TRACKING
+# ============================================================================
+
+func check_phase_transitions(progress: float, distance_m: float):
+	"""Log phase transitions for debugging"""
+	
+	# Track terminal phase entry
+	if not is_terminal and progress > terminal_phase_start:
+		print("\n[%s] >>> ENTERING TERMINAL PHASE at %.1f%% progress, %.1fkm range <<<" % 
+			[torpedo_id, progress * 100, distance_m / 1000.0])
+		print("  Current heading error: %.1f°" % rad_to_deg(heading_error))
+		print("  Current speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
+		print("  PID gains transitioning: Kp=%.2f->%.2f, Kd=%.2f->%.2f" % 
+			[kp_gain, kp_gain * 0.5, kd_gain, kd_gain * 0.5])
+	
+	# Track close range entry
+	if not is_close_range and distance_m < close_range_distance_m:
+		print("\n[%s] >>> ENTERING CLOSE RANGE at %.1fkm <<<" % 
+			[torpedo_id, distance_m / 1000.0])
+		print("  Current heading error: %.1f°" % rad_to_deg(heading_error))
+		print("  Reducing gains by 50%%")
 
 # ============================================================================
 # LAYER 1: TRAJECTORY CALCULATION
@@ -327,9 +353,21 @@ func apply_pid_control(delta):
 	integral_error = clamp(integral_error, -integral_limit_rad, integral_limit_rad)
 	i_term = current_ki * integral_error
 	
-	# D term
+	# D term - WITH DIAGNOSTIC TRACKING
 	var error_rate = angle_wrap(heading_error - prev_heading_error) / delta
+	
+	# Store the raw calculation for debugging
+	if has_meta("d_term_raw"):
+		set_meta("d_term_raw", current_kd * error_rate)
+	else:
+		set_meta("d_term_raw", 0.0)
+	
+	# Apply the negative sign (THIS MIGHT BE THE BUG!)
 	d_term = -current_kd * error_rate
+	
+	# Store actual delta for debug output
+	set_meta("last_delta", delta)
+	
 	prev_heading_error = heading_error
 	
 	# Combined control
@@ -386,39 +424,106 @@ func apply_thrust(delta):
 	velocity_mps += thrust_dir * thrust * delta
 
 # ============================================================================
-# DEBUG OUTPUT (1 Hz THROTTLED)
+# ENHANCED DEBUG OUTPUT
 # ============================================================================
 
-func output_debug(distance_m: float, _progress: float):
+func output_debug(distance_m: float, progress: float):
 	if not debug_enabled:
 		return
 	
 	var current_time = Time.get_ticks_msec() / 1000.0
-	if current_time - last_debug_time < debug_interval:
+	
+	# ENHANCED: Dynamic debug frequency based on flight progress
+	var dynamic_interval: float = debug_interval
+	
+	# Increase frequency at critical phases
+	if progress >= 0.95:  # From 95% onwards
+		dynamic_interval = 0.01  # 100 Hz for detailed terminal phase analysis
+	elif progress >= 0.90:  # Approaching terminal
+		dynamic_interval = 0.2  # 5 Hz
+	elif is_close_range:  # Close range override
+		dynamic_interval = 0.01  # 100 Hz when very close
+	
+	# Check if enough time has passed based on dynamic interval
+	if current_time - last_debug_time < dynamic_interval:
 		return
 	last_debug_time = current_time
 	
+	# Calculate additional critical data
+	var body_angle = rotation - PI/2
+	var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 10 else body_angle
+	var body_vel_alignment = rad_to_deg(angle_wrap(velocity_angle - body_angle))
+	
+	var _heading_lag = rad_to_deg(angle_wrap(desired_heading - filtered_heading))
+	
+	var time_to_impact = distance_m / max(velocity_mps.length(), 1.0)
+	
+	# Calculate intercept stability (how much intercept point moved)
+	var _intercept_delta = 0.0
+	if has_meta("prev_intercept"):
+		var prev_intercept = get_meta("prev_intercept")
+		_intercept_delta = intercept_point.distance_to(prev_intercept) * WorldSettings.meters_per_pixel
+	set_meta("prev_intercept", intercept_point)
+	
+	# Commanded rotation from PID
+	var commanded_rot = rad_to_deg(p_term + i_term + d_term)
+	
+	# Target velocity (if moving)
+	var _target_speed = 0.0
+	if target_node and target_node.has_method("get_velocity_mps"):
+		_target_speed = target_node.get_velocity_mps().length()
+	
+	# D-TERM DIAGNOSTIC DATA
+	var actual_delta = get_meta("last_delta", 0.01667)  # Get actual delta from PID control
+	var error_delta = heading_error - prev_heading_error  # Raw error change
+	var error_rate = angle_wrap(error_delta) / actual_delta  # Use ACTUAL delta, not assumed
+	var d_term_raw = current_kd * error_rate  # Before sign flip
+	var _d_term_final = -d_term_raw  # After sign flip (what we use)
+	
+	# Check if D-term opposes P-term (BAD!) or assists (GOOD!)
+	var p_sign = sign(p_term)
+	var d_sign = sign(d_term)
+	var d_opposes_p = (p_sign != 0 and d_sign != 0 and p_sign != d_sign)
+	
 	var phase_str = ""
 	match launch_phase:
-		LaunchPhase.ALIGNING: phase_str = "ALGN"
+		LaunchPhase.ALIGNING: phase_str = "AL"
 		LaunchPhase.CRUISE: 
-			# Show if we're still in delay period
 			var time_since_thrust = time_since_launch - time_thrust_started
 			if time_since_thrust < intercept_delay and time_thrust_started >= 0:
-				phase_str = "DLAY"  # Delay period
+				phase_str = "DL"  # Delay
 			elif is_terminal: 
-				phase_str = "TERM"
+				phase_str = "TM"
 			elif is_close_range: 
-				phase_str = "CLSE"
+				phase_str = "CL"
 			else: 
-				phase_str = "CRSE"
+				phase_str = "CR"
 	
 	var speed_kms = velocity_mps.length() / 1000.0
 	var range_km = distance_m / 1000.0
-	print("[%s] %s | %.1fkm/s | %.1fkm | Err:%.1f° | P:%.1f D:%.1f | Rot:%.1f°/s | T:%.0fG" % 
-		[torpedo_id, phase_str, speed_kms, range_km, 
-		 rad_to_deg(heading_error), rad_to_deg(p_term), rad_to_deg(d_term),
-		 rad_to_deg(actual_rotation_rate), current_thrust_g])
+	
+	# COMPRESSED FORMAT WITH MORE DATA
+	if progress >= 0.95:
+		# Ultra-detailed for terminal phase at 100 Hz WITH D-TERM DIAGNOSTICS
+		print("[%d]%s|%.0fkm/s|%.1fkm|%.1f%%|TTI:%.1fs|Err:%.1f°(prev:%.1f°)|ErrRate:%.1f°/s|P:%.1f|D:%.1f(raw:%.1f)|%s|Cmd:%.1f/Act:%.1f°/s" % 
+			[torpedo_counter, phase_str, speed_kms, range_km, progress * 100, time_to_impact,
+			 rad_to_deg(heading_error), rad_to_deg(prev_heading_error), rad_to_deg(error_rate),
+			 rad_to_deg(p_term), rad_to_deg(d_term), rad_to_deg(d_term_raw),
+			 "OPPOSE!" if d_opposes_p else "assist",
+			 commanded_rot, rad_to_deg(actual_rotation_rate)])
+		
+		# Extra diagnostic line for critical moments
+		if abs(commanded_rot) > 5.0 or d_opposes_p:
+			print("  >>> D-TERM DEBUG: errDelta=%.3f° rate=%.1f°/s Kd=%.2f raw=%.1f final=%.1f P+D=%.1f" %
+				[rad_to_deg(error_delta), rad_to_deg(error_rate), current_kd, 
+				 rad_to_deg(d_term_raw), rad_to_deg(d_term), commanded_rot])
+	else:
+		# Standard but compressed for cruise phase
+		print("[%d]%s|%.0fkm/s|%.1fkm|%.1f%%|TTI:%.1fs|Err:%.1f°|BV:%.1f°|PID:%.1f/%.1f|Rot:%.1f°/s|T:%.0fG" % 
+			[torpedo_counter, phase_str, speed_kms, range_km, progress * 100, time_to_impact,
+			 rad_to_deg(heading_error), body_vel_alignment,
+			 rad_to_deg(p_term), rad_to_deg(d_term),
+			 rad_to_deg(actual_rotation_rate), current_thrust_g])
 
 # ============================================================================
 # UTILITIES
