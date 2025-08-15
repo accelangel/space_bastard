@@ -1,5 +1,5 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - FULL DEBUG INSTRUMENTATION VERSION
-# Complete D-term forensics to catch the exact corruption point
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - ENHANCED DEBUG VERSION
+# Full PID control with proper phase separation and intercept delay
 extends Area2D
 
 # Static counter for sequential torpedo naming
@@ -69,12 +69,6 @@ var d_term: float = 0.0
 var current_kp: float = 0.0
 var current_ki: float = 0.0
 var current_kd: float = 0.0
-
-# NEW: Debug tracking variables
-var d_term_history: Array = []  # Track last 10 d_term values
-var suspicious_d_term_jumps: int = 0
-var frame_start_d_term: float = 0.0
-var frame_start_rotation: float = 0.0
 
 # Flight State
 var time_since_launch: float = 0.0
@@ -178,10 +172,6 @@ func setup_trajectory_line():
 # ============================================================================
 
 func _physics_process(delta):
-	# Store critical values at start of frame for interference detection
-	frame_start_d_term = d_term
-	frame_start_rotation = rotation
-	
 	if marked_for_death or not is_alive:
 		return
 	
@@ -249,14 +239,9 @@ func _physics_process(delta):
 	
 	# Bounds check
 	check_bounds()
-	
-	# Check for external interference at end of frame
-	if abs(d_term - frame_start_d_term) > 0.0001 and frame_start_d_term != 0:
-		print("!!! D-TERM CHANGED OUTSIDE PID: %.3f → %.3f !!!" % 
-			  [rad_to_deg(frame_start_d_term), rad_to_deg(d_term)])
 
 # ============================================================================
-# PHASE TRANSITION TRACKING - ENHANCED
+# PHASE TRANSITION TRACKING
 # ============================================================================
 
 func check_phase_transitions(progress: float, distance_m: float):
@@ -264,20 +249,7 @@ func check_phase_transitions(progress: float, distance_m: float):
 	
 	# Track terminal phase entry
 	if not is_terminal and progress > terminal_phase_start:
-		print("\n=== TERMINAL PHASE ENTRY STATE DUMP ===")
-		print("  Current gains: Kp=%.2f, Kd=%.2f" % [current_kp, current_kd])
-		print("  Heading error: %.3f°" % rad_to_deg(heading_error))
-		print("  Prev heading error: %.3f°" % rad_to_deg(prev_heading_error))
-		print("  Current D-term: %.3f°/s" % rad_to_deg(d_term))
-		print("  D-term history: %s" % d_term_history)
-		print("  Integral error: %.3f" % rad_to_deg(integral_error))
-		print("  Is close range: %s" % is_close_range)
-		print("  Velocity: %.1f km/s" % (velocity_mps.length() / 1000.0))
-		print("  Progress: %.1f%%" % (progress * 100))
-		print("  Range: %.1fkm" % (distance_m / 1000.0))
-		print("=========================================\n")
-		
-		print("[%s] >>> ENTERING TERMINAL PHASE at %.1f%% progress, %.1fkm range <<<" % 
+		print("\n[%s] >>> ENTERING TERMINAL PHASE at %.1f%% progress, %.1fkm range <<<" % 
 			[torpedo_id, progress * 100, distance_m / 1000.0])
 		print("  Current heading error: %.1f°" % rad_to_deg(heading_error))
 		print("  Current speed: %.1f km/s" % (velocity_mps.length() / 1000.0))
@@ -357,22 +329,15 @@ func calculate_time_to_impact(distance_m: float) -> float:
 	return distance_m / speed
 
 # ============================================================================
-# LAYER 2: PID CONTROL - FULL DEBUG INSTRUMENTATION
+# LAYER 2: PID CONTROL
 # ============================================================================
 
 func apply_pid_control(delta):
-	# DIAGNOSTIC: Track everything explicitly
-	var debug_frame_id = Engine.get_process_frames()
-	
 	var current_heading: float
 	if velocity_mps.length() > 50:
 		current_heading = velocity_mps.angle()
 	else:
 		current_heading = rotation - PI/2
-	
-	# Store old values for comparison
-	var old_d_term = d_term
-	var _old_heading_error = heading_error
 	
 	heading_error = angle_wrap(filtered_heading - current_heading)
 	
@@ -388,126 +353,20 @@ func apply_pid_control(delta):
 	integral_error = clamp(integral_error, -integral_limit_rad, integral_limit_rad)
 	i_term = current_ki * integral_error
 	
-	# ===== CRITICAL D-TERM DIAGNOSTIC SECTION =====
-	
-	# Step 1: Calculate raw error difference
-	var raw_error_diff = heading_error - prev_heading_error
-	var wrapped_error_diff = angle_wrap(raw_error_diff)
-	
-	# Step 2: Calculate error rate
-	var error_rate = wrapped_error_diff / delta
-	
-	# Step 3: Calculate D-term components
-	var d_term_before_sign = current_kd * error_rate
-	var d_term_with_neg_sign = -d_term_before_sign  # What we HAD (wrong)
-	var d_term_without_sign = d_term_before_sign    # What we SHOULD have
-	
-	# Step 4: What are we actually setting?
-	d_term = current_kd * error_rate  # FIXED: Removed negative sign!
-	
-	# Step 5: Extensive validation
-	var d_term_expected_correct = current_kd * error_rate  # Correct version
-	var _d_term_expected_wrong = -current_kd * error_rate   # Wrong version (what we had)
-	
-	# Track D-term history
-	d_term_history.append(rad_to_deg(d_term))
-	if d_term_history.size() > 10:
-		d_term_history.pop_front()
-	
-	# Check for suspicious jumps
-	if d_term_history.size() >= 2:
-		var d_term_change = abs(d_term_history[-1] - d_term_history[-2])
-		if d_term_change > 10.0 and is_terminal:  # 10°/s jump is suspicious
-			suspicious_d_term_jumps += 1
-			print("  !!! SUSPICIOUS D-TERM JUMP #%d: %.1f°/s in one frame !!!" % 
-				  [suspicious_d_term_jumps, d_term_change])
-			print("  D-term history: %s" % d_term_history)
-	
-	# DIAGNOSTIC OUTPUT - Only in terminal phase
-	if is_terminal and debug_enabled:
-		print("\n=== FRAME %d D-TERM FORENSICS ===" % debug_frame_id)
-		print("  Delta: %.6f seconds" % delta)
-		print("  Heading Error: %.3f° → %.3f° (change: %.3f°)" % [
-			rad_to_deg(prev_heading_error),
-			rad_to_deg(heading_error),
-			rad_to_deg(raw_error_diff)
-		])
-		print("  Error Wrap: raw %.3f° → wrapped %.3f°" % [
-			rad_to_deg(raw_error_diff),
-			rad_to_deg(wrapped_error_diff)
-		])
-		print("  Error Rate: %.3f°/s (wrapped_diff/delta)" % rad_to_deg(error_rate))
-		print("  Kd Gain: %.3f (reduced: %s)" % [current_kd, "YES" if is_close_range else "NO"])
-		print("  D Calculation:")
-		print("    - Kd * rate = %.3f" % rad_to_deg(d_term_before_sign))
-		print("    - With neg sign (WRONG) = %.3f" % rad_to_deg(d_term_with_neg_sign))
-		print("    - Without sign (CORRECT) = %.3f" % rad_to_deg(d_term_without_sign))
-		print("    - Actual d_term = %.3f" % rad_to_deg(d_term))
-		print("  P-term: %.3f°/s" % rad_to_deg(p_term))
-		print("  Old D-term: %.3f°/s (from last frame)" % rad_to_deg(old_d_term))
-		
-		# Check for corruption
-		if abs(d_term - d_term_expected_correct) > 0.0001:
-			print("  !!! D-TERM CORRUPTION DETECTED !!!")
-			print("  Expected: %.6f, Got: %.6f, Diff: %.6f" % [
-				d_term_expected_correct, d_term, d_term - d_term_expected_correct
-			])
-		
-		# Check if D assists or opposes P (with CORRECT D-term sign)
-		var p_sign = sign(p_term)
-		var d_sign = sign(d_term)
-		var error_growing = abs(heading_error) > abs(prev_heading_error)
-		
-		# With correct D-term:
-		# - When error is growing, D should have same sign as P (assist)
-		# - When error is shrinking, D should have opposite sign (damping)
-		var _d_is_wrong = false
-		if error_growing and p_sign != 0 and d_sign != 0 and p_sign != d_sign:
-			print("  !!! D OPPOSES P WHEN ERROR GROWING - BAD !!!")
-			print("  P wants: %s, D wants: %s" % [
-				"LEFT" if p_sign < 0 else "RIGHT",
-				"LEFT" if d_sign < 0 else "RIGHT"
-			])
-			_d_is_wrong = true
-		elif not error_growing and p_sign != 0 and d_sign != 0 and p_sign == d_sign:
-			print("  D assists P when error shrinking - providing damping (GOOD)")
-		else:
-			print("  D-term behavior: CORRECT")
-	
-	# Store debugging metadata
-	set_meta("d_term_raw", d_term_before_sign)
-	set_meta("d_term_neg", d_term_with_neg_sign)
-	set_meta("d_term_final", d_term)
-	set_meta("error_rate", error_rate)
-	set_meta("last_delta", delta)
-	
+	# D term
+	var error_rate = angle_wrap(heading_error - prev_heading_error) / delta
+	d_term = current_kd * error_rate
 	prev_heading_error = heading_error
 	
-	# === COMMAND APPLICATION DIAGNOSTIC ===
-	var commanded_rate_before = p_term + i_term + d_term
+	# Combined control
+	var commanded_rate = p_term + i_term + d_term
 	
 	# Apply limits
 	var max_rate_rad = deg_to_rad(max_turn_rate_deg)
-	var commanded_rate = clamp(commanded_rate_before, -max_rate_rad, max_rate_rad)
-	
-	# Check if we're clamping
-	if abs(commanded_rate_before) > max_rate_rad and debug_enabled and is_terminal:
-		print("  RATE CLAMPED: %.1f°/s → %.1f°/s" % [
-			rad_to_deg(commanded_rate_before),
-			rad_to_deg(commanded_rate)
-		])
+	commanded_rate = clamp(commanded_rate, -max_rate_rad, max_rate_rad)
 	
 	# Apply rotation
-	var old_rotation = rotation
 	rotation += commanded_rate * delta
-	var actual_rotation_change = rotation - old_rotation
-	
-	# Verify rotation was applied correctly
-	if abs(actual_rotation_change - commanded_rate * delta) > 0.0001 and debug_enabled and is_terminal:
-		print("  !!! ROTATION MISMATCH !!!")
-		print("  Expected change: %.6f, Actual: %.6f" % [
-			commanded_rate * delta, actual_rotation_change
-		])
 
 func update_gains():
 	# NO RAMPING - use fixed gains
@@ -578,80 +437,36 @@ func output_debug(distance_m: float, progress: float):
 		return
 	last_debug_time = current_time
 	
-	# Calculate additional critical data
-	var body_angle = rotation - PI/2
-	var velocity_angle = velocity_mps.angle() if velocity_mps.length() > 10 else body_angle
-	var body_vel_alignment = rad_to_deg(angle_wrap(velocity_angle - body_angle))
-	
-	var _heading_lag = rad_to_deg(angle_wrap(desired_heading - filtered_heading))
-	
-	var time_to_impact = distance_m / max(velocity_mps.length(), 1.0)
-	
-	# Calculate intercept stability (how much intercept point moved)
-	var _intercept_delta = 0.0
-	if has_meta("prev_intercept"):
-		var prev_intercept = get_meta("prev_intercept")
-		_intercept_delta = intercept_point.distance_to(prev_intercept) * WorldSettings.meters_per_pixel
-	set_meta("prev_intercept", intercept_point)
-	
-	# Commanded rotation from PID
-	var commanded_rot = rad_to_deg(p_term + i_term + d_term)
-	
-	# Target velocity (if moving)
-	var _target_speed = 0.0
-	if target_node and target_node.has_method("get_velocity_mps"):
-		_target_speed = target_node.get_velocity_mps().length()
-	
-	# D-TERM DIAGNOSTIC DATA - Use STORED values from PID calculation
-	var _actual_delta = get_meta("last_delta", 0.01667)
-	var stored_error_rate = get_meta("error_rate", 0.0)  # Use stored value!
-	var stored_d_term_raw = get_meta("d_term_raw", 0.0)  # Use stored value!
-	var _stored_d_term_final = get_meta("d_term_final", 0.0)  # Use stored value!
-	
-	# Check if D-term behavior is correct (for output line)
-	var p_sign = sign(p_term)
-	var d_sign = sign(d_term)
-	var error_growing = abs(heading_error) > abs(prev_heading_error)
-	var d_is_wrong = error_growing and p_sign != 0 and d_sign != 0 and p_sign != d_sign
-	
 	var phase_str = ""
 	match launch_phase:
-		LaunchPhase.ALIGNING: phase_str = "AL"
+		LaunchPhase.ALIGNING: phase_str = "ALGN"
 		LaunchPhase.CRUISE: 
+			# Show if we're still in delay period
 			var time_since_thrust = time_since_launch - time_thrust_started
 			if time_since_thrust < intercept_delay and time_thrust_started >= 0:
-				phase_str = "DL"  # Delay
+				phase_str = "DLAY"  # Delay period
 			elif is_terminal: 
-				phase_str = "TM"
+				phase_str = "TERM"
 			elif is_close_range: 
-				phase_str = "CL"
+				phase_str = "CLSE"
 			else: 
-				phase_str = "CR"
+				phase_str = "CRSE"
 	
 	var speed_kms = velocity_mps.length() / 1000.0
 	var range_km = distance_m / 1000.0
 	
-	# COMPRESSED FORMAT WITH MORE DATA
+	# ENHANCED: Add progress percentage and more detailed PID state at critical phases
 	if progress >= 0.95:
-		# Ultra-detailed for terminal phase at 100 Hz WITH D-TERM DIAGNOSTICS
-		print("[%d]%s|%.0fkm/s|%.1fkm|%.1f%%|TTI:%.1fs|Err:%.1f°(prev:%.1f°)|ErrRate:%.1f°/s|P:%.1f|D:%.1f(raw:%.1f)|%s|Cmd:%.1f/Act:%.1f°/s" % 
-			[torpedo_counter, phase_str, speed_kms, range_km, progress * 100, time_to_impact,
-			 rad_to_deg(heading_error), rad_to_deg(prev_heading_error), rad_to_deg(stored_error_rate),
-			 rad_to_deg(p_term), rad_to_deg(d_term), rad_to_deg(stored_d_term_raw),
-			 "WRONG!" if d_is_wrong else "OK",
-			 commanded_rot, rad_to_deg(actual_rotation_rate)])
-		
-		# Extra diagnostic line for critical moments
-		if abs(commanded_rot) > 5.0 or d_is_wrong:
-			print("  >>> D-TERM DEBUG: errDelta=%.3f° rate=%.1f°/s Kd=%.2f raw=%.1f final=%.1f P+D=%.1f" %
-				[rad_to_deg(heading_error - prev_heading_error), rad_to_deg(stored_error_rate), current_kd, 
-				 rad_to_deg(stored_d_term_raw), rad_to_deg(d_term), commanded_rot])
+		# Detailed output for terminal phase analysis at 25 Hz
+		print("[%s] %s | %.1fkm/s | %.1fkm | Prog:%.1f%% | Err:%.1f° | P:%.1f I:%.1f D:%.1f | Rot:%.1f°/s | T:%.0fG | Kp:%.2f Kd:%.2f" % 
+			[torpedo_id, phase_str, speed_kms, range_km, progress * 100,
+			 rad_to_deg(heading_error), rad_to_deg(p_term), rad_to_deg(i_term), rad_to_deg(d_term),
+			 rad_to_deg(actual_rotation_rate), current_thrust_g, current_kp, current_kd])
 	else:
-		# Standard but compressed for cruise phase
-		print("[%d]%s|%.0fkm/s|%.1fkm|%.1f%%|TTI:%.1fs|Err:%.1f°|BV:%.1f°|PID:%.1f/%.1f|Rot:%.1f°/s|T:%.0fG" % 
-			[torpedo_counter, phase_str, speed_kms, range_km, progress * 100, time_to_impact,
-			 rad_to_deg(heading_error), body_vel_alignment,
-			 rad_to_deg(p_term), rad_to_deg(d_term),
+		# Standard output for cruise phase - NOW WITH PROGRESS
+		print("[%s] %s | %.1fkm/s | %.1fkm | Prog:%.1f%% | Err:%.1f° | P:%.1f D:%.1f | Rot:%.1f°/s | T:%.0fG" % 
+			[torpedo_id, phase_str, speed_kms, range_km, progress * 100,
+			 rad_to_deg(heading_error), rad_to_deg(p_term), rad_to_deg(d_term),
 			 rad_to_deg(actual_rotation_rate), current_thrust_g])
 
 # ============================================================================
@@ -755,11 +570,6 @@ func mark_for_destruction(reason: String):
 	
 	# PID performance
 	print("Final PID State: P=%.1f°/s, D=%.1f°/s" % [rad_to_deg(p_term), rad_to_deg(d_term)])
-	
-	# D-term debugging summary
-	if suspicious_d_term_jumps > 0:
-		print("SUSPICIOUS D-TERM JUMPS: %d occurrences" % suspicious_d_term_jumps)
-		print("Final D-term history: %s" % d_term_history)
 	
 	# Success/failure analysis
 	if reason == "target_hit":
