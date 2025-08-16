@@ -2,9 +2,9 @@
 extends Camera2D
 
 # Map configuration
-var map_size = Vector2(131072, 73728)
-var zoom_min: Vector2
-var zoom_max: Vector2 = Vector2(5, 5)
+var map_size = Vector2(4000000, 2250000)
+var zoom_min: Vector2 = Vector2(0.00048, 0.00048)
+var zoom_max: Vector2 = Vector2(5.0, 5.0)
 
 # Zoom system variables
 var zoom_start_mouse_pos = Vector2.ZERO
@@ -55,6 +55,28 @@ func _process(delta):
 	handle_click_and_drag()
 	handle_ship_selection()
 	follow_ship(delta)
+	
+	# Debug view stats every second
+	#if Engine.get_frames_drawn() % 60 == 0:
+		#print(get_view_stats())
+
+func get_view_stats() -> String:
+	var viewport_size = get_viewport_rect().size
+	var world_visible_pixels = viewport_size / zoom
+	var world_visible_meters = world_visible_pixels * WorldSettings.meters_per_pixel
+	var world_visible_km = world_visible_meters / 1000.0
+	
+	var map_size_km = map_size * WorldSettings.meters_per_pixel / 1000.0
+	
+	var coverage_x = (world_visible_km.x / map_size_km.x) * 100.0
+	var coverage_y = (world_visible_km.y / map_size_km.y) * 100.0
+	
+	return "View: %.0f × %.0f km\nMap: %.0f × %.0f km\nCoverage: %.1f%% × %.1f%%\nZoom: %.6f" % [
+		world_visible_km.x, world_visible_km.y,
+		map_size_km.x, map_size_km.y,
+		coverage_x, coverage_y,
+		zoom.x
+	]
 
 func handle_zoom(delta):
 	var scroll = 0
@@ -87,17 +109,17 @@ func handle_zoom(delta):
 		zoomTarget *= zoom_factor
 		zoomTarget = clamp(zoomTarget, zoom_min, zoom_max)
 	
-	# Smooth interpolation toward target zoom
-	if zoom.distance_to(zoomTarget) > 0.001:
-		var mouse_world_before = zoom_start_mouse_pos
+	# Much smaller threshold - only snap when VERY close
+	if abs(zoom.x - zoomTarget.x) > 0.000001:  # Changed from 0.0001 to 0.000001
 		zoom = zoom.slerp(zoomTarget, zoomSpeed * delta)
 		
-		var viewport_center = Vector2(get_viewport().size) / 2
-		var mouse_world_after = position + (zoom_start_screen_pos - viewport_center) / zoom
-		
-		# Only apply zoom offset if not following a ship
+		# Don't reposition camera during active zoom transitions
+		# This might help with the snapping at borders
 		if not following_ship:
-			position += mouse_world_before - mouse_world_after
+			# Let the zoom finish before adjusting position
+			pass
+	else:
+		zoom = zoomTarget
 
 func handle_pan(delta):
 	# Don't allow manual panning while following a ship (unless it's relative panning)
@@ -219,7 +241,9 @@ func find_ship_at_position(world_pos: Vector2) -> Node2D:
 			return body
 	
 	# Method 2: Radius-based search if physics query fails
-	var search_radius = 50.0 / zoom.x  # Adjust search radius based on zoom
+	# Increased base radius for the larger map scale
+	var base_radius = 500.0  # Increased from 50 for bigger map
+	var search_radius = base_radius / zoom.x
 	var all_selectables = get_all_selectable_objects()
 	
 	for obj in all_selectables:
@@ -320,8 +344,9 @@ func calculate_min_zoom():
 	var viewport_size = get_viewport_rect().size
 	var _zoom_for_width = viewport_size.x / map_size.x
 	var _zoom_for_height = viewport_size.y / map_size.y
-	# Fixed: removed unused variable warning by directly using the calculation
-	var clean_zoom = 0.01397  # Slightly smaller than calculated for buffer
+	
+	# Actually use the calculated values
+	var clean_zoom = min(_zoom_for_width, _zoom_for_height)
 	return Vector2(clean_zoom, clean_zoom)
 
 func focus_on_player_ship():

@@ -7,20 +7,20 @@
 [ext_resource type="Script" path="res://Scripts/Managers/FireControlManager.gd" id="5_qjl7e"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_j8x4e"]
-radius = 30.9052
-height = 157.993
+radius = 14.0357
+height = 72.1036
 
 [node name="PlayerShip" type="Area2D" groups=["player_ships"]]
 script = ExtResource("1_jqy2v")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 z_index = 1
-position = Vector2(-0.999999, -10)
+position = Vector2(-1, -4)
 rotation = 0.0698132
 shape = SubResource("CapsuleShape2D_j8x4e")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
-scale = Vector2(0.25, 0.25)
+scale = Vector2(0.11, 0.11)
 texture = ExtResource("1_k28x5")
 
 [node name="TorpedoLauncher" type="Node2D" parent="." groups=["torpedo_launchers"]]

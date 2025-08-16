@@ -7,30 +7,30 @@
 [ext_resource type="Script" path="res://Scripts/Managers/FireControlManager.gd" id="5_xl005"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_hb6w0"]
-radius = 28.6304
-height = 179.254
+radius = 13.5244
+height = 69.0404
 
 [node name="EnemyShip" type="Area2D" groups=["enemy_ships"]]
 script = ExtResource("1_l7pq4")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 z_index = 1
-position = Vector2(1, -9)
+position = Vector2(-1.19209e-07, -4)
 rotation = 0.191986
 shape = SubResource("CapsuleShape2D_hb6w0")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
-scale = Vector2(0.25, 0.25)
+scale = Vector2(0.11, 0.11)
 texture = ExtResource("1_pf77x")
 
 [node name="SensorSystem" type="Node2D" parent="."]
 script = ExtResource("4_8qbgp")
 
 [node name="PDC1" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(-4, -72)
+position = Vector2(-1, -32)
 
 [node name="PDC2" parent="." instance=ExtResource("3_s8ewm")]
-position = Vector2(27, -71)
+position = Vector2(12, -31)
 
 [node name="FireControlManager" type="Node2D" parent="."]
 script = ExtResource("5_xl005")

@@ -43,6 +43,29 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "player_ship")
 	
+	# SHIP SCALE DEBUG
+	var sprite = get_node_or_null("Sprite2D")
+	if sprite:
+		var texture_size = sprite.texture.get_size()
+		var scaled_size = texture_size * sprite.scale
+		var size_in_meters = scaled_size * WorldSettings.meters_per_pixel
+		
+		print("\n=== PLAYER SHIP SCALE DEBUG ===")
+		print("  Texture size: %s pixels" % texture_size)
+		print("  Sprite scale: %s" % sprite.scale)
+		print("  Final sprite size: %s pixels" % scaled_size)
+		print("  Meters per pixel: %.1f" % WorldSettings.meters_per_pixel)
+		print("  ACTUAL SIZE: %.1f m long x %.1f m wide" % [size_in_meters.y, size_in_meters.x])
+		
+		# Calculate what scale would be needed for different ship sizes
+		var donnager_length_m = 500.0
+		var roci_length_m = 46.0  # The actual Rocinante size
+		var required_scale_donnager = donnager_length_m / (texture_size.y * WorldSettings.meters_per_pixel)
+		var required_scale_roci = roci_length_m / (texture_size.y * WorldSettings.meters_per_pixel)
+		print("  For 500m Donnager-class, would need scale: %.6f" % required_scale_donnager)
+		print("  For 46m Rocinante-class, would need scale: %.6f" % required_scale_roci)
+		print("================================\n")
+	
 	# ALWAYS enable movement immediately
 	enable_movement()
 	

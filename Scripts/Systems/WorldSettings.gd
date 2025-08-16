@@ -1,8 +1,8 @@
 # Scripts/Systems/WorldSettings.gd - CLEANED VERSION
 extends Node
 
-var meters_per_pixel := 40.0
-var map_size_pixels := Vector2(131072, 73728)
+var meters_per_pixel := 5.9
+var map_size_pixels := Vector2(4000000, 2250000)
 var map_size_meters := meters_per_pixel * map_size_pixels
 
 # DEBUG CONTROL

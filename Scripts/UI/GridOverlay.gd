@@ -19,8 +19,8 @@ var current_grid_size_meters: float = 0.0
 var major_grid_corners: Array = []  # Store screen positions of major grid corners
 
 # Map dimensions (from your debug output)
-const MAP_WIDTH: float = 131072.0
-const MAP_HEIGHT: float = 73728.0
+const MAP_WIDTH: float = 4000000.0
+const MAP_HEIGHT: float = 2250000.0
 
 func _ready():
 	# Find the game camera
@@ -95,10 +95,9 @@ func _draw():
 	
 	for i in range(start_x_index, end_x_index + 1):
 		var x = i * grid_spacing_pixels
-		
-		# Determine if this is a major line based on the actual grid value
-		var grid_value_meters = x * WorldSettings.meters_per_pixel
-		var is_major = is_major_gridline(grid_value_meters, nice_spacing)
+	
+		# Determine if this is a major line based on index
+		var is_major = (i % minor_grid_divisions) == 0
 		
 		if is_major or show_minor_grid:
 			var line_width = major_screen_width if is_major else minor_screen_width
@@ -122,10 +121,9 @@ func _draw():
 	
 	for i in range(start_y_index, end_y_index + 1):
 		var y = i * grid_spacing_pixels
-		
-		# Determine if this is a major line based on the actual grid value
-		var grid_value_meters = y * WorldSettings.meters_per_pixel
-		var is_major = is_major_gridline(grid_value_meters, nice_spacing)
+	
+		# Determine if this is a major line based on index
+		var is_major = (i % minor_grid_divisions) == 0
 		
 		if is_major or show_minor_grid:
 			var line_width = major_screen_width if is_major else minor_screen_width
@@ -166,7 +164,7 @@ func _draw():
 func is_major_gridline(value_meters: float, spacing_meters: float) -> bool:
 	# Major lines are at multiples of 5x the base spacing
 	var major_spacing = spacing_meters * minor_grid_divisions
-	return abs(fmod(value_meters, major_spacing)) < spacing_meters * 0.1
+	return abs(fmod(value_meters, major_spacing)) < spacing_meters * 0.75
 
 func get_nice_number(value: float) -> float:
 	if value <= 0:
@@ -176,11 +174,12 @@ func get_nice_number(value: float) -> float:
 	var normalized = value / magnitude
 	
 	var nice_normalized: float
-	if normalized < 2.0:  # Sticky thresholds
+	# MUCH wider ranges for stability
+	if normalized < 3.0:  # Was 2.0 - now 3x range
 		nice_normalized = 1.0
-	elif normalized < 4.0:
-		nice_normalized = 2.0
-	elif normalized < 8.0:
+	elif normalized < 7.0:  # Was 4.0 - now 2.3x range
+		nice_normalized = 2.5
+	elif normalized < 15.0:  # Was 8.0 - now 2x range
 		nice_normalized = 5.0
 	else:
 		nice_normalized = 10.0

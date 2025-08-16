@@ -11,7 +11,7 @@
 
 [node name="ColorRect" type="ColorRect" parent="."]
 z_index = -2
-custom_minimum_size = Vector2(131072, 65536)
+custom_minimum_size = Vector2(4e+06, 2.25e+06)
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
@@ -32,21 +32,21 @@ follow_viewport_enabled = true
 script = ExtResource("1_bm7um")
 
 [node name="GameCamera" type="Camera2D" parent="."]
-limit_left = -65536
-limit_top = -36864
-limit_right = 65536
-limit_bottom = 36864
+limit_left = -2000000
+limit_top = -1125000
+limit_right = 2000000
+limit_bottom = 1125000
 limit_smoothed = true
 position_smoothing_speed = 0.0
 editor_draw_limits = true
 script = ExtResource("1_at0gn")
 
 [node name="EnemyShip" parent="." instance=ExtResource("3_to3xv")]
-position = Vector2(60000, -33000)
+position = Vector2(1.9e+06, -1.06e+06)
 rotation = -2.35619
 
 [node name="PlayerShip" parent="." instance=ExtResource("4_k7omc")]
-position = Vector2(-64000, 35500)
+position = Vector2(-1.9e+06, 1.06e+06)
 rotation = 0.785398
 
 [node name="UILayer" type="CanvasLayer" parent="."]

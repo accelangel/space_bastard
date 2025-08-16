@@ -11,7 +11,7 @@ static var torpedo_counter: int = 0
 
 @export_group("Core Physics")
 @export var launch_thrust_g: float = 150.0  # Main thrust (no ramping)
-@export var terminal_phase_start: float = 0.97
+@export var terminal_phase_start: float = 0.95
 @export var close_range_distance_m: float = 500.0
 
 @export_group("Launch Sequence")
@@ -139,6 +139,24 @@ func _ready():
 	var sprite = get_node_or_null("AnimatedSprite2D")
 	if sprite:
 		sprite.play()
+		
+		# DEBUG TORPEDO SCALE - using the existing sprite variable
+		var texture_size = sprite.sprite_frames.get_frame_texture("default", 0).get_size()
+		var scaled_size = texture_size * sprite.scale
+		var size_in_meters = scaled_size * WorldSettings.meters_per_pixel
+		
+		print("\n=== TORPEDO SCALE DEBUG ===")
+		print("  Texture size: %s pixels" % texture_size)
+		print("  Sprite scale: %s" % sprite.scale)
+		print("  Final sprite size: %s pixels" % scaled_size)
+		print("  Meters per pixel: %.1f" % WorldSettings.meters_per_pixel)
+		print("  ACTUAL SIZE: %.1f m long x %.1f m wide" % [size_in_meters.y, size_in_meters.x])
+		
+		# Calculate what scale WOULD be needed for a 10m torpedo
+		var target_length_m = 10.0
+		var required_scale = target_length_m / (texture_size.y * WorldSettings.meters_per_pixel)
+		print("  For 10m torpedo, would need scale: %.6f" % required_scale)
+		print("========================\n")
 	
 	# Setup visualization
 	setup_trajectory_line()
@@ -355,7 +373,7 @@ func apply_pid_control(delta):
 	
 	# D term
 	var error_rate = angle_wrap(heading_error - prev_heading_error) / delta
-	d_term = current_kd * error_rate
+	d_term = -current_kd * error_rate
 	prev_heading_error = heading_error
 	
 	# Combined control
