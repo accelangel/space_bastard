@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/PDCBullet.gd - SIMPLIFIED VERSION
+# Scripts/Entities/Weapons/PDCBullet.gd - WITH FLOATING ORIGIN SUPPORT
 extends Area2D
 class_name PDCBullet
 
@@ -9,6 +9,9 @@ class_name PDCBullet
 @export var source_pdc_id: String = ""
 @export var source_ship_id: String = ""
 @export var target_id: String = ""  # What the PDC was aiming at
+
+# TRUE POSITION TRACKING (for floating origin)
+var true_position: Vector2 = Vector2.ZERO
 
 # State management
 var is_alive: bool = true
@@ -38,12 +41,24 @@ func _ready():
 	set_meta("source_ship_id", source_ship_id)
 	set_meta("target_id", target_id)
 	
+	# Connect to floating origin if it exists
+	if FloatingOrigin.instance:
+		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	
+	# Initialize true position
+	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
 	
 	# Set rotation to match velocity
 	if velocity.length() > 0:
 		rotation = velocity.angle() + 3*PI/2
+
+func _on_origin_shifted(shift_amount: Vector2):
+	"""Handle floating origin shifts"""
+	# Update our true position to compensate for the visual shift
+	true_position -= shift_amount
 
 func _physics_process(delta):
 	# Validate we're still alive
@@ -56,12 +71,18 @@ func _physics_process(delta):
 		mark_for_destruction("max_lifetime")
 		return
 	
-	# Move bullet
-	global_position += velocity * delta
+	# Update true position based on velocity
+	true_position += velocity * delta
 	
-	# Check if out of bounds
+	# Convert true position to visual position for rendering
+	if FloatingOrigin.instance:
+		global_position = FloatingOrigin.true_to_visual(true_position)
+	else:
+		global_position = true_position
+	
+	# Check if out of bounds (using true position)
 	var half_size = WorldSettings.map_size_pixels / 2
-	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
+	if abs(true_position.x) > half_size.x or abs(true_position.y) > half_size.y:
 		mark_for_destruction("out_of_bounds")
 		return
 
@@ -150,3 +171,7 @@ func get_identity() -> Dictionary:
 		"faction": faction,
 		"age": (Time.get_ticks_msec() / 1000.0) - birth_time
 	}
+
+func get_true_position() -> Vector2:
+	"""Get true world position for accurate distance calculations"""
+	return true_position

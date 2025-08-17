@@ -1,4 +1,4 @@
-# Scripts/Entities/Weapons/SimpleTorpedo.gd - ENHANCED DEBUG VERSION
+# Scripts/Entities/Weapons/SimpleTorpedo.gd - WITH FLOATING ORIGIN SUPPORT
 # Full PID control with proper phase separation and intercept delay
 extends Area2D
 
@@ -49,13 +49,17 @@ var torpedo_id: String = ""
 var faction: String = "friendly"
 var target_node: Node2D = null
 
+# TRUE POSITION TRACKING (for floating origin)
+var true_position: Vector2 = Vector2.ZERO
+var true_intercept_point: Vector2 = Vector2.ZERO
+
 # Physics
 var velocity_mps: Vector2 = Vector2.ZERO
 var is_alive: bool = true
 var marked_for_death: bool = false
 
 # Trajectory Layer
-var intercept_point: Vector2 = Vector2.ZERO
+var intercept_point: Vector2 = Vector2.ZERO  # Visual intercept point
 var desired_heading: float = 0.0
 var filtered_heading: float = 0.0
 
@@ -132,6 +136,13 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "torpedo")
 	
+	# Connect to floating origin if it exists
+	if FloatingOrigin.instance:
+		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	
+	# Initialize true position
+	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	
 	# Connect signals
 	area_entered.connect(_on_area_entered)
 	
@@ -176,6 +187,18 @@ func _ready():
 		if debug_enabled:
 			print("  Initial aim: %.1f° (error: %.1f°)" % [rad_to_deg(to_target.angle()), rad_to_deg(heading_error)])
 
+func _on_origin_shifted(shift_amount: Vector2):
+	"""Handle floating origin shifts"""
+	# Update our true position to compensate for the visual shift
+	true_position -= shift_amount
+	true_intercept_point -= shift_amount
+	
+	# Intercept point is visual, so it's already shifted by FloatingOrigin
+	# No need to update intercept_point as it's recalculated each frame
+	
+	if debug_enabled:
+		print("[%s] Origin shifted, true pos: %s" % [torpedo_id, true_position])
+
 func setup_trajectory_line():
 	trajectory_line = get_node_or_null("TrajectoryLine")
 	if trajectory_line:
@@ -184,6 +207,7 @@ func setup_trajectory_line():
 		trajectory_line.antialiased = true
 		trajectory_line.z_index = 5
 		trajectory_line.top_level = true
+		trajectory_line.add_to_group("trajectory_lines")  # Add to group for floating origin
 
 # ============================================================================
 # MAIN UPDATE LOOP
@@ -205,7 +229,7 @@ func _physics_process(delta):
 	# Update time
 	time_since_launch += delta
 	
-	# Calculate state
+	# Calculate state (using visual positions for distance)
 	var distance_m = global_position.distance_to(target_node.global_position) * WorldSettings.meters_per_pixel
 	var progress = 1.0 - (distance_m / initial_distance_m)
 	is_close_range = distance_m < close_range_distance_m
@@ -245,9 +269,15 @@ func _physics_process(delta):
 		total_heading_error += abs(heading_error)
 		heading_error_samples += 1
 	
-	# Update position
+	# Update true position based on velocity
 	var velocity_pixels = velocity_mps / WorldSettings.meters_per_pixel
-	global_position += velocity_pixels * delta
+	true_position += velocity_pixels * delta
+	
+	# Convert true position to visual position for rendering
+	if FloatingOrigin.instance:
+		global_position = FloatingOrigin.true_to_visual(true_position)
+	else:
+		global_position = true_position
 	
 	# Visualization
 	update_trajectory_visual()
@@ -255,7 +285,7 @@ func _physics_process(delta):
 	# Debug output (throttled)
 	output_debug(distance_m, progress)
 	
-	# Bounds check
+	# Bounds check (using true position)
 	check_bounds()
 
 # ============================================================================
@@ -533,8 +563,9 @@ func update_trajectory_visual():
 	trajectory_line.add_point(intercept_point)
 
 func check_bounds():
+	# Use true position for bounds check
 	var half_size = WorldSettings.map_size_pixels / 2
-	if abs(global_position.x) > half_size.x or abs(global_position.y) > half_size.y:
+	if abs(true_position.x) > half_size.x or abs(true_position.y) > half_size.y:
 		mark_for_destruction("out_of_bounds")
 
 # ============================================================================
@@ -625,6 +656,10 @@ func set_launcher(launcher: Node2D):
 
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
+
+func get_true_position() -> Vector2:
+	"""Get true world position for accurate distance calculations"""
+	return true_position
 
 # Compatibility stubs
 func set_launch_side(_side: int):

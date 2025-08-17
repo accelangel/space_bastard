@@ -1,4 +1,4 @@
-# Scripts/Entities/Ships/EnemyShip.gd - SIMPLIFIED VERSION
+# Scripts/Entities/Ships/EnemyShip.gd - WITH FLOATING ORIGIN SUPPORT
 extends Area2D
 class_name EnemyShip
 
@@ -11,6 +11,9 @@ class_name EnemyShip
 var acceleration_mps2: float
 var velocity_mps: Vector2 = Vector2.ZERO
 var movement_direction: Vector2 = Vector2(0, 1)  # Default movement direction
+
+# TRUE POSITION TRACKING (for floating origin)
+var true_position: Vector2 = Vector2.ZERO
 
 # Identity
 var entity_id: String = ""
@@ -47,20 +50,42 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "enemy_ship")
 	
+	# Connect to floating origin if it exists
+	if FloatingOrigin.instance:
+		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	
+	# Initialize true position
+	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	
 	# ALWAYS enable movement immediately
 	enable_movement()
 	
 	print("Enemy ship spawned: %s" % entity_id)
 
+func _on_origin_shifted(shift_amount: Vector2):
+	"""Handle floating origin shifts - visual position already shifted by FloatingOrigin"""
+	# Update our true position to compensate for the visual shift
+	true_position -= shift_amount
+	if debug_enabled:
+		print("[EnemyShip] Origin shifted, true pos: %s, visual pos: %s" % [true_position, global_position])
+
 func _physics_process(delta):
 	if marked_for_death or not is_alive:
 		return
 	
-	# Update movement
+	# Update movement in true space
 	var acceleration_vector = movement_direction * acceleration_mps2
 	velocity_mps += acceleration_vector * delta
+	
+	# Update true position
 	var velocity_pixels_per_second = velocity_mps / WorldSettings.meters_per_pixel
-	global_position += velocity_pixels_per_second * delta
+	true_position += velocity_pixels_per_second * delta
+	
+	# Convert true position to visual position for rendering
+	if FloatingOrigin.instance:
+		global_position = FloatingOrigin.true_to_visual(true_position)
+	else:
+		global_position = true_position
 
 func enable_movement():
 	print("[EnemyShip] Movement ENABLED")
@@ -78,7 +103,7 @@ func set_acceleration(gs: float):
 func get_velocity_mps() -> Vector2:
 	return velocity_mps
 
-func mark_for_destruction(reason: String):
+func mark_for_destruction(_reason: String):
 	if marked_for_death:
 		return
 	
@@ -101,3 +126,12 @@ func get_faction() -> String:
 
 func get_entity_id() -> String:
 	return entity_id
+
+func get_true_position() -> Vector2:
+	"""Get true world position for accurate distance calculations"""
+	return true_position
+
+func get_true_distance_to(other_pos: Vector2) -> float:
+	"""Calculate true distance to another position"""
+	# If other_pos is visual, it's already in the same space as our visual position
+	return global_position.distance_to(other_pos)

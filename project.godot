@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.3", "Forward Plus")
 
 WorldSettings="*res://Scripts/Systems/WorldSettings.gd"
 DebugConfig="*res://Scripts/Systems/DebugConfig.gd"
+FloatingOrigin="*res://Scripts/Systems/FloatingOrigin.gd"
 
 [display]
 
