@@ -37,23 +37,11 @@ var relative_pan_start_offset: Vector2 = Vector2.ZERO
 # UI feedback
 var selection_indicator: Node2D = null
 
-# Floating origin reference
-var floating_origin: FloatingOrigin = null
-
 func _ready():
 	# Add to group for identification
 	add_to_group("game_camera")
 	
-	# Find or create floating origin manager
-	floating_origin = FloatingOrigin.instance
-	if not floating_origin:
-		floating_origin = FloatingOrigin.new()
-		floating_origin.name = "FloatingOrigin"
-		get_tree().root.add_child(floating_origin)
-	
-	# Connect to origin shift signal
-	if floating_origin:
-		floating_origin.origin_shifted.connect(_on_origin_shifted)
+	FloatingOrigin.origin_shifted.connect(_on_origin_shifted)
 	
 	zoomTarget = zoom
 	zoom_min = calculate_min_zoom()
@@ -87,8 +75,7 @@ func _process(delta):
 	follow_ship(delta)
 	
 	# Update true position based on visual position
-	if floating_origin:
-		true_position = FloatingOrigin.visual_to_true(global_position)
+	true_position = FloatingOrigin.visual_to_true(global_position)
 
 func get_view_stats() -> String:
 	var viewport_size = get_viewport_rect().size
@@ -193,8 +180,7 @@ func apply_position_limits():
 		map_size.y/2 - view_half_height)
 	
 	# Update visual position from true position
-	if floating_origin:
-		global_position = FloatingOrigin.true_to_visual(true_position)
+	global_position = FloatingOrigin.true_to_visual(true_position)
 
 func handle_click_and_drag():
 	if !isDragging and Input.is_action_just_pressed("camera_pan"):
@@ -326,10 +312,7 @@ func follow_ship(_delta):
 	position = following_ship.global_position + follow_offset + relative_pan_offset
 	
 	# Update true position
-	if floating_origin:
-		true_position = FloatingOrigin.visual_to_true(position)
-	else:
-		true_position = position
+	true_position = FloatingOrigin.visual_to_true(position)
 	
 	if selection_indicator and selection_indicator.visible:
 		selection_indicator.global_position = following_ship.global_position
@@ -383,7 +366,7 @@ func focus_on_player_ship():
 		zoomTarget = zoom
 		
 		position = player_ship.global_position
-		true_position = FloatingOrigin.visual_to_true(position) if floating_origin else position
+		true_position = FloatingOrigin.visual_to_true(position)
 		
 		print("Camera focused on player ship at startup")
 

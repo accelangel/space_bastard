@@ -46,12 +46,10 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "player_ship")
 	
-	# Connect to floating origin if it exists
-	if FloatingOrigin.instance:
-		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	FloatingOrigin.origin_shifted.connect(_on_origin_shifted)
 	
 	# Initialize true position
-	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	true_position = FloatingOrigin.visual_to_true(global_position)
 	
 	# SHIP SCALE DEBUG
 	var sprite = get_node_or_null("Sprite2D")
@@ -101,10 +99,7 @@ func _physics_process(delta):
 	true_position += velocity_pixels_per_second * delta
 	
 	# Convert true position to visual position for rendering
-	if FloatingOrigin.instance:
-		global_position = FloatingOrigin.true_to_visual(true_position)
-	else:
-		global_position = true_position
+	global_position = FloatingOrigin.true_to_visual(true_position)
 
 func enable_movement():
 	print("[PlayerShip] Movement ENABLED")

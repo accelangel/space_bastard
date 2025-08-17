@@ -136,12 +136,10 @@ func _ready():
 	set_meta("faction", faction)
 	set_meta("entity_type", "torpedo")
 	
-	# Connect to floating origin if it exists
-	if FloatingOrigin.instance:
-		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	FloatingOrigin.origin_shifted.connect(_on_origin_shifted)
 	
 	# Initialize true position
-	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	true_position = FloatingOrigin.visual_to_true(global_position)
 	
 	# Connect signals
 	area_entered.connect(_on_area_entered)
@@ -274,10 +272,7 @@ func _physics_process(delta):
 	true_position += velocity_pixels * delta
 	
 	# Convert true position to visual position for rendering
-	if FloatingOrigin.instance:
-		global_position = FloatingOrigin.true_to_visual(true_position)
-	else:
-		global_position = true_position
+	global_position = FloatingOrigin.true_to_visual(true_position)
 	
 	# Visualization
 	update_trajectory_visual()
@@ -563,9 +558,12 @@ func update_trajectory_visual():
 	trajectory_line.add_point(intercept_point)
 
 func check_bounds():
-	# Use true position for bounds check
+	# IMPORTANT: Use VISUAL position for bounds check, not true position!
+	# The map bounds are relative to the visual world after floating origin shifts
 	var half_size = WorldSettings.map_size_pixels / 2
-	if abs(true_position.x) > half_size.x or abs(true_position.y) > half_size.y:
+	# Check against visual position since that's what we see
+	if abs(global_position.x) > half_size.x * 1.5 or abs(global_position.y) > half_size.y * 1.5:
+		# Give some extra margin (1.5x) since floating origin can shift things around
 		mark_for_destruction("out_of_bounds")
 
 # ============================================================================

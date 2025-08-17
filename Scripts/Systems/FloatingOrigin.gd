@@ -1,9 +1,6 @@
-# Scripts/Systems/FloatingOrigin.gd
+# Scripts/Systems/FloatingOrigin.gd - FIXED VERSION
 extends Node
 # Note: No class_name declaration - this is a singleton/autoload
-
-# Singleton pattern
-static var instance
 
 # Origin management
 var origin_offset: Vector2 = Vector2.ZERO  # Total offset applied to world
@@ -22,16 +19,15 @@ var total_offset_applied: Vector2 = Vector2.ZERO
 @export var debug_enabled: bool = true
 @export var show_debug_overlay: bool = false
 
+# SAFETY: Prevent runaway reorigins
+var max_reorigins_per_second: int = 5
+var recent_reorigin_times: Array = []
+
 signal origin_shifted(offset: Vector2)
 
 func _enter_tree():
-	# Singleton setup
-	if instance == null:
-		instance = self
-		# Make persistent
-		set_process_mode(Node.PROCESS_MODE_ALWAYS)
-	else:
-		queue_free()
+	# Make persistent
+	set_process_mode(Node.PROCESS_MODE_ALWAYS)
 
 func _ready():
 	# Find camera
@@ -49,6 +45,18 @@ func setup_camera():
 		push_error("[FloatingOrigin] Could not find game camera!")
 	else:
 		print("[FloatingOrigin] Camera found and linked")
+		# IMPORTANT: Do initial reorigin if camera is far from origin
+		call_deferred("initial_reorigin")
+
+func initial_reorigin():
+	"""Perform immediate reorigin if camera starts far from origin"""
+	if not camera:
+		return
+		
+	var camera_distance = camera.global_position.length()
+	if camera_distance > threshold_distance:
+		print("[FloatingOrigin] Initial position far from origin, performing immediate reorigin")
+		perform_reorigin()
 
 func _physics_process(_delta):
 	if not camera:
@@ -59,9 +67,29 @@ func _physics_process(_delta):
 	
 	if camera_distance > threshold_distance:
 		var current_time = Time.get_ticks_msec() / 1000.0
+		
+		# Check for runaway reorigins
+		if is_reorigining_too_fast(current_time):
+			if debug_enabled and reorigin_count % 10 == 0:  # Only print every 10th to reduce spam
+				print("[FloatingOrigin] WARNING: Reorigin rate limited! Camera stuck at large distance.")
+			return
+		
 		if current_time - last_reorigin_time > min_reorigin_interval:
 			perform_reorigin()
 			last_reorigin_time = current_time
+
+func is_reorigining_too_fast(current_time: float) -> bool:
+	"""Check if we're reorigining too frequently (indicates a problem)"""
+	# Clean old entries
+	recent_reorigin_times = recent_reorigin_times.filter(func(t): return current_time - t < 1.0)
+	
+	# Check if we've hit the limit
+	if recent_reorigin_times.size() >= max_reorigins_per_second:
+		return true
+		
+	# Add current time
+	recent_reorigin_times.append(current_time)
+	return false
 
 func perform_reorigin():
 	"""Shift the entire world to bring camera back near origin"""
@@ -84,12 +112,13 @@ func perform_reorigin():
 	if debug_enabled:
 		var shift_km = shift_offset.length() * WorldSettings.meters_per_pixel / 1000.0
 		print("[FloatingOrigin] Reorigin #%d: Shifting world by %.1f km" % [reorigin_count, shift_km])
-		print("  Camera was at: %s" % camera.global_position)
-		print("  Total offset now: %.0f, %.0f pixels (%.1f, %.1f km)" % [
-			origin_offset.x, origin_offset.y,
-			origin_offset.x * WorldSettings.meters_per_pixel / 1000.0,
-			origin_offset.y * WorldSettings.meters_per_pixel / 1000.0
-		])
+		if debug_enabled and reorigin_count <= 5:  # Only show details for first few
+			print("  Camera was at: %s" % camera.global_position)
+			print("  Total offset now: %.0f, %.0f pixels (%.1f, %.1f km)" % [
+				origin_offset.x, origin_offset.y,
+				origin_offset.x * WorldSettings.meters_per_pixel / 1000.0,
+				origin_offset.y * WorldSettings.meters_per_pixel / 1000.0
+			])
 	
 	# Apply shift to all relevant nodes
 	apply_shift_to_world(shift_offset)
@@ -153,6 +182,7 @@ func reset():
 	total_offset_applied = Vector2.ZERO
 	reorigin_count = 0
 	last_reorigin_time = 0.0
+	recent_reorigin_times.clear()
 	
 	if debug_enabled:
 		print("[FloatingOrigin] System reset")
@@ -174,21 +204,15 @@ func get_debug_info() -> String:
 		reorigin_count
 	]
 
-# Static helper functions for easy access
-static func shift_occurred() -> bool:
-	return instance != null and instance.origin_offset != Vector2.ZERO
+# Helper functions for easy access (non-static for singleton)
+func shift_occurred() -> bool:
+	return origin_offset != Vector2.ZERO
 
-static func get_offset() -> Vector2:
-	if instance:
-		return instance.origin_offset
-	return Vector2.ZERO
+func get_offset() -> Vector2:
+	return origin_offset
 
-static func true_to_visual(true_pos: Vector2) -> Vector2:
-	if instance:
-		return instance.get_visual_position(true_pos)
-	return true_pos
+func true_to_visual(true_pos: Vector2) -> Vector2:
+	return get_visual_position(true_pos)
 
-static func visual_to_true(visual_pos: Vector2) -> Vector2:
-	if instance:
-		return instance.get_true_world_position(visual_pos)
-	return visual_pos
+func visual_to_true(visual_pos: Vector2) -> Vector2:
+	return get_true_world_position(visual_pos)

@@ -41,12 +41,10 @@ func _ready():
 	set_meta("source_ship_id", source_ship_id)
 	set_meta("target_id", target_id)
 	
-	# Connect to floating origin if it exists
-	if FloatingOrigin.instance:
-		FloatingOrigin.instance.origin_shifted.connect(_on_origin_shifted)
+	FloatingOrigin.origin_shifted.connect(_on_origin_shifted)
 	
 	# Initialize true position
-	true_position = FloatingOrigin.visual_to_true(global_position) if FloatingOrigin.instance else global_position
+	true_position = FloatingOrigin.visual_to_true(global_position)
 	
 	# Connect collision signal
 	area_entered.connect(_on_area_entered)
@@ -75,14 +73,11 @@ func _physics_process(delta):
 	true_position += velocity * delta
 	
 	# Convert true position to visual position for rendering
-	if FloatingOrigin.instance:
-		global_position = FloatingOrigin.true_to_visual(true_position)
-	else:
-		global_position = true_position
+	global_position = FloatingOrigin.true_to_visual(true_position)
 	
-	# Check if out of bounds (using true position)
+	# Check if out of bounds (using visual position for consistency)
 	var half_size = WorldSettings.map_size_pixels / 2
-	if abs(true_position.x) > half_size.x or abs(true_position.y) > half_size.y:
+	if abs(global_position.x) > half_size.x * 1.5 or abs(global_position.y) > half_size.y * 1.5:
 		mark_for_destruction("out_of_bounds")
 		return
 
