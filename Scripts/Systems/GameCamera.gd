@@ -4,7 +4,7 @@ extends Camera2D
 # Map configuration
 var map_size = Vector2(4000000, 2250000)
 var zoom_min: Vector2 = Vector2(0.00048, 0.00048)
-var zoom_max: Vector2 = Vector2(5.0, 5.0)
+var zoom_max: Vector2 = Vector2(10.0, 10.0)
 
 # Zoom system variables
 var zoom_start_mouse_pos = Vector2.ZERO
